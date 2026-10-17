@@ -1,0 +1,562 @@
+<svg xmlns="http://www.w3.org/2000/svg" xmlns:inkscape="http://www.inkscape.org/namespaces/inkscape" width="362.8127mm" height="165.694mm" viewBox="-3842.386 -2499.6935 36281.2659 16569.397" role="img" aria-labelledby="title description">
+<title id="title">397 Bridge Street — Floor 5</title>
+<desc id="description">A geometric vector reconstruction with editable text, straight walls, circular door swings, architectural symbols, and shared millimeter coordinates.</desc>
+<metadata>{
+  "method": "Authored geometric reconstruction; no auto-tracing, contour extraction, grayscale reconstruction, or embedded source image.",
+  "floor": 5,
+  "root_units": "mm",
+  "mm_per_measurement_unit": 28.567925867443268,
+  "physical_page_scale": "1:100",
+  "origin_source_landmark": [
+    574.5,
+    122.5
+  ],
+  "viewBox_mm": [
+    -3842.3860291711194,
+    -2499.693513401286,
+    36281.26585165295,
+    16569.397003117094
+  ],
+  "font": "URW Gothic Book; selected by comparison against source title and room labels. Exact source font not proven.",
+  "geometry_units": "Source measurement frame normalized to common building geometry. Root coordinates are real-world millimeters.",
+  "source": "397-Bridge-floor-plans.png",
+  "precision_note": "Approximate geometry interpreted from a raster architectural drawing.",
+  "element_counts": {
+    "line": 212,
+    "rect": 128,
+    "polygon": 29,
+    "polyline": 33,
+    "circle": 21,
+    "text": 46,
+    "path": 20,
+    "g": 7,
+    "ellipse": 4
+  }
+}</metadata>
+<style>@font-face{font-family:"Plan Gothic";src:url(data:font/woff;base64,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) format("woff");font-weight:400;font-style:normal;} text{font-kerning:normal} </style>
+<defs><pattern id="partition-hatch" width="4.5" height="4.5" patternUnits="userSpaceOnUse"><rect width="4.5" height="4.5" fill="white"/><path d="M-1 1 L1 -1 M0 4.5 L4.5 0 M3.5 5.5 L5.5 3.5" fill="none" stroke="#777" stroke-width="0.3"/></pattern><pattern id="masonry-hatch" width="7" height="7" patternUnits="userSpaceOnUse"><rect width="7" height="7" fill="white"/><path d="M1 1L2 2M5 4L6 3M2 6L3 5" fill="none" stroke="#888" stroke-width="0.3"/></pattern></defs>
+<g transform="matrix(28.5679258674 0 0 28.5679258674 -16412.2734108462 -3499.5709187618)" stroke-linecap="butt" stroke-linejoin="miter">
+<g id="layer-0" inkscape:groupmode="layer" inkscape:label="Reference grid"><title>Reference grid</title>
+<line x1="574.5" y1="104" x2="574.5" y2="613" stroke="#aaa" stroke-width="0.45" stroke-dasharray="30 6 7 6"/>
+<line x1="673.5" y1="104" x2="673.5" y2="613" stroke="#aaa" stroke-width="0.45" stroke-dasharray="30 6 7 6"/>
+<line x1="843.5" y1="104" x2="843.5" y2="613" stroke="#aaa" stroke-width="0.45" stroke-dasharray="30 6 7 6"/>
+<line x1="1025" y1="104" x2="1025" y2="613" stroke="#aaa" stroke-width="0.45" stroke-dasharray="30 6 7 6"/>
+<line x1="1206" y1="104" x2="1206" y2="613" stroke="#aaa" stroke-width="0.45" stroke-dasharray="30 6 7 6"/>
+<line x1="1387.5" y1="104" x2="1387.5" y2="613" stroke="#aaa" stroke-width="0.45" stroke-dasharray="30 6 7 6"/>
+<line x1="1569" y1="104" x2="1569" y2="613" stroke="#aaa" stroke-width="0.45" stroke-dasharray="30 6 7 6"/>
+<line x1="456" y1="121.5" x2="1687" y2="121.5" stroke="#aaa" stroke-width="0.45" stroke-dasharray="30 6 7 6"/>
+<line x1="456" y1="330.5" x2="1687" y2="330.5" stroke="#aaa" stroke-width="0.45" stroke-dasharray="30 6 7 6"/>
+<line x1="456" y1="540" x2="1687" y2="540" stroke="#aaa" stroke-width="0.45" stroke-dasharray="30 6 7 6"/>
+</g>
+<g id="layer-1" inkscape:groupmode="layer" inkscape:label="Exterior walls and glazing"><title>Exterior walls and glazing</title>
+<rect x="563.5" y="111.5" width="1016" height="11" fill="white" stroke="#292929" stroke-width="0.9"/>
+<rect x="1279.5" y="111.5" width="35" height="11" fill="url(#masonry-hatch)" stroke="#444" stroke-width="0.7"/>
+<rect x="1444.5" y="111.5" width="35" height="11" fill="url(#masonry-hatch)" stroke="#444" stroke-width="0.7"/>
+<rect x="563.5" y="111.5" width="11" height="28" fill="white" stroke="#292929" stroke-width="0.8"/>
+<rect x="563.5" y="310.5" width="11" height="42" fill="white" stroke="#292929" stroke-width="0.8"/>
+<rect x="563.5" y="520" width="11" height="29.5" fill="white" stroke="#292929" stroke-width="0.8"/>
+<line x1="563.5" y1="139.5" x2="563.5" y2="310.5" stroke="#777" stroke-width="0.35"/>
+<line x1="567.5" y1="139.5" x2="567.5" y2="310.5" stroke="#777" stroke-width="0.5"/>
+<line x1="574.5" y1="139.5" x2="574.5" y2="310.5" stroke="#777" stroke-width="0.55"/>
+<line x1="563.5" y1="352.5" x2="563.5" y2="520" stroke="#777" stroke-width="0.35"/>
+<line x1="567.5" y1="352.5" x2="567.5" y2="520" stroke="#777" stroke-width="0.5"/>
+<line x1="574.5" y1="352.5" x2="574.5" y2="520" stroke="#777" stroke-width="0.55"/>
+<polygon points="563.5,190.5 567.5,186.5 571.5,190.5 567.5,194.5" fill="white" stroke="#777" stroke-width="0.45"/>
+<line x1="562.5" y1="190.5" x2="572.5" y2="190.5" stroke="#555" stroke-width="0.4"/>
+<polygon points="563.5,258.5 567.5,254.5 571.5,258.5 567.5,262.5" fill="white" stroke="#777" stroke-width="0.45"/>
+<line x1="562.5" y1="258.5" x2="572.5" y2="258.5" stroke="#555" stroke-width="0.4"/>
+<polygon points="563.5,399.5 567.5,395.5 571.5,399.5 567.5,403.5" fill="white" stroke="#777" stroke-width="0.45"/>
+<line x1="562.5" y1="399.5" x2="572.5" y2="399.5" stroke="#555" stroke-width="0.4"/>
+<polygon points="563.5,466.5 567.5,462.5 571.5,466.5 567.5,470.5" fill="white" stroke="#777" stroke-width="0.45"/>
+<line x1="562.5" y1="466.5" x2="572.5" y2="466.5" stroke="#555" stroke-width="0.4"/>
+<rect x="563.5" y="538.5" width="40.5" height="11" fill="white" stroke="#292929" stroke-width="0.85"/>
+<rect x="642" y="538.5" width="55" height="11" fill="white" stroke="#292929" stroke-width="0.85"/>
+<rect x="733.5" y="538.5" width="48.5" height="11" fill="white" stroke="#292929" stroke-width="0.85"/>
+<rect x="819" y="538.5" width="54.5" height="11" fill="white" stroke="#292929" stroke-width="0.85"/>
+<rect x="910" y="538.5" width="48.5" height="11" fill="white" stroke="#292929" stroke-width="0.85"/>
+<rect x="995.5" y="538.5" width="55" height="11" fill="white" stroke="#292929" stroke-width="0.85"/>
+<rect x="1087" y="538.5" width="49" height="11" fill="white" stroke="#292929" stroke-width="0.85"/>
+<rect x="1173" y="538.5" width="54.5" height="11" fill="white" stroke="#292929" stroke-width="0.85"/>
+<rect x="1264.5" y="538.5" width="49" height="11" fill="white" stroke="#292929" stroke-width="0.85"/>
+<rect x="1350" y="538.5" width="100" height="11" fill="white" stroke="#292929" stroke-width="0.85"/>
+<rect x="1487" y="538.5" width="92.5" height="11" fill="white" stroke="#292929" stroke-width="0.85"/>
+<line x1="604" y1="538.5" x2="642" y2="538.5" stroke="#888" stroke-width="0.35"/>
+<line x1="604" y1="543" x2="642" y2="543" stroke="#888" stroke-width="0.4"/>
+<line x1="604" y1="546" x2="642" y2="546" stroke="#888" stroke-width="0.45"/>
+<line x1="604" y1="549.5" x2="642" y2="549.5" stroke="#888" stroke-width="0.35"/>
+<line x1="697" y1="538.5" x2="733.5" y2="538.5" stroke="#888" stroke-width="0.35"/>
+<line x1="697" y1="543" x2="733.5" y2="543" stroke="#888" stroke-width="0.4"/>
+<line x1="697" y1="546" x2="733.5" y2="546" stroke="#888" stroke-width="0.45"/>
+<line x1="697" y1="549.5" x2="733.5" y2="549.5" stroke="#888" stroke-width="0.35"/>
+<line x1="782" y1="538.5" x2="819" y2="538.5" stroke="#888" stroke-width="0.35"/>
+<line x1="782" y1="543" x2="819" y2="543" stroke="#888" stroke-width="0.4"/>
+<line x1="782" y1="546" x2="819" y2="546" stroke="#888" stroke-width="0.45"/>
+<line x1="782" y1="549.5" x2="819" y2="549.5" stroke="#888" stroke-width="0.35"/>
+<line x1="873.5" y1="538.5" x2="910" y2="538.5" stroke="#888" stroke-width="0.35"/>
+<line x1="873.5" y1="543" x2="910" y2="543" stroke="#888" stroke-width="0.4"/>
+<line x1="873.5" y1="546" x2="910" y2="546" stroke="#888" stroke-width="0.45"/>
+<line x1="873.5" y1="549.5" x2="910" y2="549.5" stroke="#888" stroke-width="0.35"/>
+<line x1="958.5" y1="538.5" x2="995.5" y2="538.5" stroke="#888" stroke-width="0.35"/>
+<line x1="958.5" y1="543" x2="995.5" y2="543" stroke="#888" stroke-width="0.4"/>
+<line x1="958.5" y1="546" x2="995.5" y2="546" stroke="#888" stroke-width="0.45"/>
+<line x1="958.5" y1="549.5" x2="995.5" y2="549.5" stroke="#888" stroke-width="0.35"/>
+<line x1="1050.5" y1="538.5" x2="1087" y2="538.5" stroke="#888" stroke-width="0.35"/>
+<line x1="1050.5" y1="543" x2="1087" y2="543" stroke="#888" stroke-width="0.4"/>
+<line x1="1050.5" y1="546" x2="1087" y2="546" stroke="#888" stroke-width="0.45"/>
+<line x1="1050.5" y1="549.5" x2="1087" y2="549.5" stroke="#888" stroke-width="0.35"/>
+<line x1="1136" y1="538.5" x2="1173" y2="538.5" stroke="#888" stroke-width="0.35"/>
+<line x1="1136" y1="543" x2="1173" y2="543" stroke="#888" stroke-width="0.4"/>
+<line x1="1136" y1="546" x2="1173" y2="546" stroke="#888" stroke-width="0.45"/>
+<line x1="1136" y1="549.5" x2="1173" y2="549.5" stroke="#888" stroke-width="0.35"/>
+<line x1="1227.5" y1="538.5" x2="1264.5" y2="538.5" stroke="#888" stroke-width="0.35"/>
+<line x1="1227.5" y1="543" x2="1264.5" y2="543" stroke="#888" stroke-width="0.4"/>
+<line x1="1227.5" y1="546" x2="1264.5" y2="546" stroke="#888" stroke-width="0.45"/>
+<line x1="1227.5" y1="549.5" x2="1264.5" y2="549.5" stroke="#888" stroke-width="0.35"/>
+<line x1="1313.5" y1="538.5" x2="1350" y2="538.5" stroke="#888" stroke-width="0.35"/>
+<line x1="1313.5" y1="543" x2="1350" y2="543" stroke="#888" stroke-width="0.4"/>
+<line x1="1313.5" y1="546" x2="1350" y2="546" stroke="#888" stroke-width="0.45"/>
+<line x1="1313.5" y1="549.5" x2="1350" y2="549.5" stroke="#888" stroke-width="0.35"/>
+<line x1="1450" y1="538.5" x2="1487" y2="538.5" stroke="#888" stroke-width="0.35"/>
+<line x1="1450" y1="543" x2="1487" y2="543" stroke="#888" stroke-width="0.4"/>
+<line x1="1450" y1="546" x2="1487" y2="546" stroke="#888" stroke-width="0.45"/>
+<line x1="1450" y1="549.5" x2="1487" y2="549.5" stroke="#888" stroke-width="0.35"/>
+<rect x="1271" y="538.5" width="34" height="11" fill="url(#masonry-hatch)" stroke="#777" stroke-width="0.5"/>
+<rect x="1569" y="111.5" width="10.5" height="23.5" fill="white" stroke="#292929" stroke-width="0.85"/>
+<rect x="1569" y="215.5" width="10.5" height="15" fill="white" stroke="#292929" stroke-width="0.85"/>
+<rect x="1569" y="311.5" width="10.5" height="68" fill="white" stroke="#292929" stroke-width="0.85"/>
+<rect x="1569" y="497.5" width="10.5" height="14.5" fill="white" stroke="#292929" stroke-width="0.85"/>
+<rect x="1569" y="531.5" width="10.5" height="18" fill="white" stroke="#292929" stroke-width="0.85"/>
+<line x1="1569" y1="135" x2="1569" y2="215.5" stroke="#888" stroke-width="0.35"/>
+<line x1="1576.5" y1="135" x2="1576.5" y2="215.5" stroke="#888" stroke-width="0.45"/>
+<line x1="1579.5" y1="135" x2="1579.5" y2="215.5" stroke="#888" stroke-width="0.45"/>
+<line x1="1569" y1="230.5" x2="1569" y2="311.5" stroke="#888" stroke-width="0.35"/>
+<line x1="1576.5" y1="230.5" x2="1576.5" y2="311.5" stroke="#888" stroke-width="0.45"/>
+<line x1="1579.5" y1="230.5" x2="1579.5" y2="311.5" stroke="#888" stroke-width="0.45"/>
+<line x1="1569" y1="379.5" x2="1569" y2="497.5" stroke="#888" stroke-width="0.35"/>
+<line x1="1576.5" y1="379.5" x2="1576.5" y2="497.5" stroke="#888" stroke-width="0.45"/>
+<line x1="1579.5" y1="379.5" x2="1579.5" y2="497.5" stroke="#888" stroke-width="0.45"/>
+<line x1="1569" y1="512" x2="1569" y2="531.5" stroke="#888" stroke-width="0.35"/>
+<line x1="1576.5" y1="512" x2="1576.5" y2="531.5" stroke="#888" stroke-width="0.45"/>
+<line x1="1579.5" y1="512" x2="1579.5" y2="531.5" stroke="#888" stroke-width="0.45"/>
+<rect x="1569" y="437" width="10.5" height="4.2" fill="white" stroke="#292929" stroke-width="0.75"/>
+<line x1="1568" y1="439.1" x2="1581.5" y2="439.1" stroke="#555" stroke-width="0.5"/>
+</g>
+<g id="layer-2" inkscape:groupmode="layer" inkscape:label="Elevators and main stair"><title>Elevators and main stair</title>
+<rect x="670.5" y="122.5" width="5" height="72" fill="white" stroke="#292929" stroke-width="0.6"/>
+<rect x="753.5" y="122.5" width="5" height="72" fill="white" stroke="#292929" stroke-width="0.6"/>
+<rect x="841.5" y="122.5" width="5" height="72" fill="white" stroke="#292929" stroke-width="0.6"/>
+<rect x="670.5" y="189.5" width="24" height="5" fill="white" stroke="#292929" stroke-width="0.55"/>
+<rect x="739" y="189.5" width="47.5" height="5" fill="white" stroke="#292929" stroke-width="0.55"/>
+<rect x="831" y="189.5" width="15.5" height="5" fill="white" stroke="#292929" stroke-width="0.55"/>
+<line x1="694.5" y1="190.5" x2="739" y2="190.5" stroke="#777" stroke-width="0.45"/>
+<line x1="694.5" y1="193" x2="739" y2="193" stroke="#777" stroke-width="0.45"/>
+<line x1="786.5" y1="190.5" x2="831" y2="190.5" stroke="#777" stroke-width="0.45"/>
+<line x1="786.5" y1="193" x2="831" y2="193" stroke="#777" stroke-width="0.45"/>
+<line x1="675.5" y1="122.5" x2="753.5" y2="189.5" stroke="#888" stroke-width="0.6" stroke-dasharray="17 8"/>
+<line x1="753.5" y1="122.5" x2="675.5" y2="189.5" stroke="#888" stroke-width="0.6" stroke-dasharray="17 8"/>
+<line x1="758.5" y1="122.5" x2="841.5" y2="189.5" stroke="#888" stroke-width="0.6" stroke-dasharray="17 8"/>
+<line x1="841.5" y1="122.5" x2="758.5" y2="189.5" stroke="#888" stroke-width="0.6" stroke-dasharray="17 8"/>
+<rect x="846.5" y="122.5" width="7" height="76" fill="white" stroke="#292929" stroke-width="0.6"/>
+<rect x="1016.5" y="122.5" width="6" height="76" fill="white" stroke="#292929" stroke-width="0.6"/>
+<rect x="846.5" y="192.5" width="14" height="6" fill="white" stroke="#292929" stroke-width="0.6"/>
+<rect x="892.5" y="192.5" width="130" height="6" fill="white" stroke="#292929" stroke-width="0.6"/>
+<line x1="899.5" y1="122.5" x2="899.5" y2="157" stroke="#777" stroke-width="0.55"/>
+<line x1="899.5" y1="162" x2="899.5" y2="192.5" stroke="#777" stroke-width="0.55"/>
+<line x1="909.5" y1="122.5" x2="909.5" y2="157" stroke="#777" stroke-width="0.55"/>
+<line x1="909.5" y1="162" x2="909.5" y2="192.5" stroke="#777" stroke-width="0.55"/>
+<line x1="919.5" y1="122.5" x2="919.5" y2="157" stroke="#777" stroke-width="0.55"/>
+<line x1="919.5" y1="162" x2="919.5" y2="192.5" stroke="#777" stroke-width="0.55"/>
+<line x1="929.5" y1="122.5" x2="929.5" y2="157" stroke="#777" stroke-width="0.55"/>
+<line x1="929.5" y1="162" x2="929.5" y2="192.5" stroke="#777" stroke-width="0.55"/>
+<line x1="938.5" y1="122.5" x2="938.5" y2="157" stroke="#777" stroke-width="0.55"/>
+<line x1="938.5" y1="162" x2="938.5" y2="192.5" stroke="#777" stroke-width="0.55"/>
+<line x1="947.5" y1="122.5" x2="947.5" y2="157" stroke="#777" stroke-width="0.55"/>
+<line x1="947.5" y1="162" x2="947.5" y2="192.5" stroke="#777" stroke-width="0.55"/>
+<line x1="956.5" y1="122.5" x2="956.5" y2="157" stroke="#777" stroke-width="0.55"/>
+<line x1="956.5" y1="162" x2="956.5" y2="192.5" stroke="#777" stroke-width="0.55"/>
+<line x1="966.5" y1="122.5" x2="966.5" y2="157" stroke="#777" stroke-width="0.55"/>
+<line x1="966.5" y1="162" x2="966.5" y2="192.5" stroke="#777" stroke-width="0.55"/>
+<line x1="976.5" y1="122.5" x2="976.5" y2="157" stroke="#777" stroke-width="0.55"/>
+<line x1="976.5" y1="162" x2="976.5" y2="192.5" stroke="#777" stroke-width="0.55"/>
+<rect x="898" y="157" width="81" height="5" fill="white" stroke="#999" stroke-width="0.45"/>
+<polyline points="927.5,122.5 933,136 936.5,138.3 930.5,142 934.5,143.2 941,157" fill="none" stroke="white" stroke-width="3.5"/>
+<polyline points="927.5,122.5 933,136 936.5,138.3 930.5,142 934.5,143.2 941,157" fill="none" stroke="#555" stroke-width="0.55"/>
+<polyline points="936,122.5 941.5,136 945,138.3 939,142 943,143.2 949.5,157" fill="none" stroke="white" stroke-width="3.5"/>
+<polyline points="936,122.5 941.5,136 945,138.3 939,142 943,143.2 949.5,157" fill="none" stroke="#555" stroke-width="0.55"/>
+<polyline points="899.5,139 929.5,139" fill="none" stroke="#666" stroke-width="0.55"/>
+<polyline points="946.5,139 993.5,139 993.5,178 899.5,178" fill="none" stroke="#666" stroke-width="0.55"/>
+<polyline points="926.5,136 929.5,139 926.5,142" fill="none" stroke="#555" stroke-width="0.8"/>
+<polyline points="949.5,136 946.5,139 949.5,142" fill="none" stroke="#555" stroke-width="0.8"/>
+<circle cx="899.5" cy="139" r="1.75" fill="none" stroke="#555" stroke-width="0.55"/>
+<text x="892" y="137" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="5.5" text-anchor="end" fill="#303030" stroke="none">UP</text>
+<text x="892" y="144" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="5.3" text-anchor="end" fill="#303030" stroke="none">20R</text>
+<circle cx="899.5" cy="178" r="1.75" fill="none" stroke="#555" stroke-width="0.55"/>
+<text x="892" y="176" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="5.5" text-anchor="end" fill="#303030" stroke="none">DN</text>
+<text x="892" y="183" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="5.3" text-anchor="end" fill="#303030" stroke="none">20R</text>
+<path d="M 892.5,192.5 A 32 32 0 0 0 860.5,160.5" fill="none" stroke="#666" stroke-width="0.5" data-door="Main stair entry"/>
+<polygon points="860.5,192.5 860.5,160.5 861.7,160.5 861.7,192.5" fill="white" stroke="#555" stroke-width="0.5"/>
+<line x1="860.5" y1="192.5" x2="892.5" y2="192.5" stroke="#9b9b9b" stroke-width="0.35" stroke-dasharray="7 4"/>
+<circle cx="866.5" cy="203.5" r="5.1" fill="none" stroke="#777" stroke-width="0.6"/>
+<line x1="863" y1="200" x2="870" y2="207" stroke="#777" stroke-width="0.5"/>
+<line x1="863" y1="207" x2="870" y2="200" stroke="#777" stroke-width="0.5"/>
+</g>
+<g id="layer-3" inkscape:groupmode="layer" inkscape:label="Core partitions"><title>Core partitions</title>
+<rect x="1026.5" y="122.5" width="49" height="21.5" fill="none" stroke="#888" stroke-width="0.55"/>
+<line x1="1026.5" y1="122.5" x2="1075.5" y2="144" stroke="#999" stroke-width="0.45" stroke-dasharray="14 7"/>
+<line x1="1075.5" y1="122.5" x2="1026.5" y2="144" stroke="#999" stroke-width="0.45" stroke-dasharray="14 7"/>
+<rect x="1081.5" y="122.5" width="63" height="22" fill="none" stroke="#555" stroke-width="0.65"/>
+<rect x="1149.5" y="122.5" width="10" height="22" fill="none" stroke="#555" stroke-width="0.65"/>
+<rect x="1164.5" y="122.5" width="39" height="22" fill="none" stroke="#555" stroke-width="0.65"/>
+<rect x="1208.5" y="122.5" width="91" height="22" fill="none" stroke="#555" stroke-width="0.65"/>
+<rect x="1075.5" y="122.5" width="6" height="27" fill="url(#partition-hatch)" stroke="#292929" stroke-width="0.55"/>
+<rect x="1144.5" y="122.5" width="5" height="27" fill="url(#partition-hatch)" stroke="#292929" stroke-width="0.55"/>
+<rect x="1159.5" y="122.5" width="5" height="27" fill="url(#partition-hatch)" stroke="#292929" stroke-width="0.55"/>
+<rect x="1203.5" y="122.5" width="5" height="27" fill="url(#partition-hatch)" stroke="#292929" stroke-width="0.55"/>
+<rect x="1081.5" y="144.5" width="218" height="5" fill="url(#partition-hatch)" stroke="#292929" stroke-width="0.7"/>
+<rect x="1022.5" y="149.5" width="4" height="49" fill="url(#partition-hatch)" stroke="#292929" stroke-width="0.75"/>
+<polygon points="1018.5,198.5 1022.5,198.5 1026.5,194.5 1026.5,213.5 1022.5,213.5 1022.5,272.5 1018.5,272.5" fill="url(#partition-hatch)" stroke="#292929" stroke-width="0.85"/>
+<rect x="1157.5" y="149.5" width="6" height="119" fill="url(#partition-hatch)" stroke="#292929" stroke-width="0.85"/>
+<rect x="1299.5" y="149.5" width="4" height="123" fill="url(#partition-hatch)" stroke="#292929" stroke-width="0.85"/>
+<rect x="1059.5" y="268.5" width="137" height="4" fill="url(#partition-hatch)" stroke="#292929" stroke-width="0.85"/>
+<rect x="1196.5" y="268.5" width="71" height="4" fill="url(#partition-hatch)" stroke="#292929" stroke-width="0.85"/>
+<polygon points="939.5,198.5 975.5,198.5 975.5,235.5 982,235.5 982,239.5 971.5,239.5 971.5,202.5 939.5,202.5" fill="url(#partition-hatch)" stroke="#292929" stroke-width="0.85"/>
+<rect x="1014" y="235.5" width="4.5" height="4" fill="url(#partition-hatch)" stroke="#292929" stroke-width="0.85"/>
+<rect x="1163.5" y="235.5" width="33" height="4.5" fill="url(#partition-hatch)" stroke="#292929" stroke-width="0.85"/>
+<rect x="1192.5" y="264.5" width="4" height="4" fill="url(#partition-hatch)" stroke="#292929" stroke-width="0.85"/>
+</g>
+<g id="layer-4" inkscape:groupmode="layer" inkscape:label="Doors"><title>Doors</title>
+<path d="M 1059.5,268.5 A 33 33 0 0 0 1026.5,235.5" fill="none" stroke="#666" stroke-width="0.5" data-door="Womens room entry"/>
+<polygon points="1026.5,268.5 1026.5,235.5 1027.7,235.5 1027.7,268.5" fill="white" stroke="#555" stroke-width="0.5"/>
+<line x1="1026.5" y1="268.5" x2="1059.5" y2="268.5" stroke="#9b9b9b" stroke-width="0.35" stroke-dasharray="7 4"/>
+<path d="M 1267.5,268.5 A 32 32 0 0 1 1299.5,236.5" fill="none" stroke="#666" stroke-width="0.5" data-door="Mens room entry"/>
+<polygon points="1299.5,268.5 1299.5,236.5 1300.7,236.5 1300.7,268.5" fill="white" stroke="#555" stroke-width="0.5"/>
+<line x1="1299.5" y1="268.5" x2="1267.5" y2="268.5" stroke="#9b9b9b" stroke-width="0.35" stroke-dasharray="7 4"/>
+<path d="M 1014,239.5 A 32 32 0 0 1 982,271.5" fill="none" stroke="#666" stroke-width="0.5" data-door="Electrical closet entry"/>
+<polygon points="982,239.5 982,271.5 980.8,271.5 980.8,239.5" fill="white" stroke="#555" stroke-width="0.5"/>
+<line x1="982" y1="239.5" x2="1014" y2="239.5" stroke="#9b9b9b" stroke-width="0.35" stroke-dasharray="7 4"/>
+<path d="M 1196.5,237.5 A 27 27 0 0 1 1223.5,264.5" fill="none" stroke="#666" stroke-width="0.5" data-door="Janitor closet entry"/>
+<polygon points="1196.5,264.5 1223.5,264.5 1223.5,265.7 1196.5,265.7" fill="white" stroke="#555" stroke-width="0.5"/>
+<line x1="1196.5" y1="264.5" x2="1196.5" y2="237.5" stroke="#9b9b9b" stroke-width="0.35" stroke-dasharray="7 4"/>
+<path d="M 679.5,219.5 A 32 32 0 0 0 647.5,251.5" fill="none" stroke="#666" stroke-width="0.5" data-door="511 Meeting"/>
+<polygon points="679.5,251.5 647.5,251.5 647.5,250.3 679.5,250.3" fill="white" stroke="#555" stroke-width="0.5"/>
+<line x1="679.5" y1="251.5" x2="679.5" y2="219.5" stroke="#9b9b9b" stroke-width="0.35" stroke-dasharray="7 4"/>
+<path d="M 679.5,282.5 A 32 32 0 0 0 647.5,314.5" fill="none" stroke="#666" stroke-width="0.5" data-door="510 Meeting"/>
+<polygon points="679.5,314.5 647.5,314.5 647.5,313.3 679.5,313.3" fill="white" stroke="#555" stroke-width="0.5"/>
+<line x1="679.5" y1="314.5" x2="679.5" y2="282.5" stroke="#9b9b9b" stroke-width="0.35" stroke-dasharray="7 4"/>
+<path d="M 1342.5,215.5 A 32 32 0 0 1 1310.5,247.5" fill="none" stroke="#666" stroke-width="0.5" data-door="503 Closet"/>
+<polygon points="1310.5,215.5 1310.5,247.5 1309.3,247.5 1309.3,215.5" fill="white" stroke="#555" stroke-width="0.5"/>
+<line x1="1310.5" y1="215.5" x2="1342.5" y2="215.5" stroke="#9b9b9b" stroke-width="0.35" stroke-dasharray="7 4"/>
+<path d="M 1395.5,211.5 A 32 32 0 0 0 1363.5,179.5" fill="none" stroke="#666" stroke-width="0.5" data-door="505 Phone"/>
+<polygon points="1363.5,211.5 1363.5,179.5 1364.7,179.5 1364.7,211.5" fill="white" stroke="#555" stroke-width="0.5"/>
+<line x1="1363.5" y1="211.5" x2="1395.5" y2="211.5" stroke="#9b9b9b" stroke-width="0.35" stroke-dasharray="7 4"/>
+<path d="M 1451,211.5 A 32 32 0 0 0 1419,179.5" fill="none" stroke="#666" stroke-width="0.5" data-door="506 Phone"/>
+<polygon points="1419,211.5 1419,179.5 1420.2,179.5 1420.2,211.5" fill="white" stroke="#555" stroke-width="0.5"/>
+<line x1="1419" y1="211.5" x2="1451" y2="211.5" stroke="#9b9b9b" stroke-width="0.35" stroke-dasharray="7 4"/>
+<path d="M 1462.5,230.5 A 32.5 32.5 0 0 1 1495,263" fill="none" stroke="#666" stroke-width="0.5" data-door="507 Meeting"/>
+<polygon points="1462.5,263 1495,263 1495,264.2 1462.5,264.2" fill="white" stroke="#555" stroke-width="0.5"/>
+<line x1="1462.5" y1="263" x2="1462.5" y2="230.5" stroke="#9b9b9b" stroke-width="0.35" stroke-dasharray="7 4"/>
+<path d="M 1462.5,310 A 32.5 32.5 0 0 0 1495,277.5" fill="none" stroke="#666" stroke-width="0.5" data-door="508 Meeting"/>
+<polygon points="1462.5,277.5 1495,277.5 1495,278.7 1462.5,278.7" fill="white" stroke="#555" stroke-width="0.5"/>
+<line x1="1462.5" y1="277.5" x2="1462.5" y2="310" stroke="#9b9b9b" stroke-width="0.35" stroke-dasharray="7 4"/>
+<path d="M 1462.5,405.5 A 32 32 0 0 0 1494.5,373.5" fill="none" stroke="#666" stroke-width="0.5" data-door="509 Meeting"/>
+<polygon points="1462.5,373.5 1494.5,373.5 1494.5,374.7 1462.5,374.7" fill="white" stroke="#555" stroke-width="0.5"/>
+<line x1="1462.5" y1="373.5" x2="1462.5" y2="405.5" stroke="#9b9b9b" stroke-width="0.35" stroke-dasharray="7 4"/>
+</g>
+<g id="layer-5" inkscape:groupmode="layer" inkscape:label="Bathroom fixtures and partitions"><title>Bathroom fixtures and partitions</title>
+<polyline points="1103,185 1103,203.5 1157.5,203.5" fill="none" stroke="#777" stroke-width="0.65"/>
+<polyline points="1103,203.5 1103,209.5" fill="none" stroke="#777" stroke-width="0.65"/>
+<polyline points="1103,231 1103,235.5 1157.5,235.5" fill="none" stroke="#777" stroke-width="0.65"/>
+<line x1="1103" y1="235.5" x2="1103" y2="241.5" stroke="#777" stroke-width="0.65"/>
+<line x1="1103" y1="263" x2="1103" y2="268.5" stroke="#777" stroke-width="0.65"/>
+<path d="M 1103,185 A 32.5 32.5 0 0 1 1070.5,152.5" fill="none" stroke="#666" stroke-width="0.5" data-door="Womens accessible stall"/>
+<polygon points="1103,152.5 1070.5,152.5 1070.5,151.7 1103,151.7" fill="white" stroke="#555" stroke-width="0.5"/>
+<path d="M 1103,209.5 A 21.5 21.5 0 0 1 1118.2028,215.7972" fill="none" stroke="#666" stroke-width="0.5" data-door="Womens middle stall"/>
+<polygon points="1103,231 1118.2028,215.7972 1118.6978,216.2922 1103.495,231.495" fill="white" stroke="#555" stroke-width="0.5"/>
+<path d="M 1103,241.5 A 21.5 21.5 0 0 1 1118.2028,247.7972" fill="none" stroke="#666" stroke-width="0.5" data-door="Womens lower stall"/>
+<polygon points="1103,263 1118.2028,247.7972 1118.6978,248.2922 1103.495,263.495" fill="white" stroke="#555" stroke-width="0.5"/>
+<polyline points="1218,185 1218,203.5 1163.5,203.5" fill="none" stroke="#777" stroke-width="0.65"/>
+<line x1="1218" y1="203.5" x2="1218" y2="209.5" stroke="#777" stroke-width="0.65"/>
+<polyline points="1218,231 1218,235.5 1196.5,235.5" fill="none" stroke="#777" stroke-width="0.65"/>
+<path d="M 1218,185 A 32.5 32.5 0 0 0 1250.5,152.5" fill="none" stroke="#666" stroke-width="0.5" data-door="Mens accessible stall"/>
+<polygon points="1218,152.5 1250.5,152.5 1250.5,153.3 1218,153.3" fill="white" stroke="#555" stroke-width="0.5"/>
+<path d="M 1218,209.5 A 21.5 21.5 0 0 0 1202.7972,215.7972" fill="none" stroke="#666" stroke-width="0.5" data-door="Mens lower stall"/>
+<polygon points="1218,231 1202.7972,215.7972 1203.2922,215.3022 1218.495,230.505" fill="white" stroke="#555" stroke-width="0.5"/>
+<g transform="translate(1157.5 165.5) scale(1 1)"><path d="M-2 -3 L-9 -5 C-14 -9 -25 -8 -27 0 C-25 8 -14 9 -9 5 L-2 3 Z" fill="none" stroke="#777" stroke-width="0.5"/><ellipse cx="-18" cy="0" rx="6.7" ry="4.2" fill="none" stroke="#777" stroke-width="0.45"/><path d="M-2 0H-6M-3 -4V4" fill="none" stroke="#666" stroke-width="0.7"/><circle cx="-15" cy="0" r="1.1" fill="none" stroke="#888" stroke-width="0.4"/></g>
+<g transform="translate(1157.5 219) scale(1 1)"><path d="M-2 -3 L-9 -5 C-14 -9 -25 -8 -27 0 C-25 8 -14 9 -9 5 L-2 3 Z" fill="none" stroke="#777" stroke-width="0.5"/><ellipse cx="-18" cy="0" rx="6.7" ry="4.2" fill="none" stroke="#777" stroke-width="0.45"/><path d="M-2 0H-6M-3 -4V4" fill="none" stroke="#666" stroke-width="0.7"/><circle cx="-15" cy="0" r="1.1" fill="none" stroke="#888" stroke-width="0.4"/></g>
+<g transform="translate(1157.5 251) scale(1 1)"><path d="M-2 -3 L-9 -5 C-14 -9 -25 -8 -27 0 C-25 8 -14 9 -9 5 L-2 3 Z" fill="none" stroke="#777" stroke-width="0.5"/><ellipse cx="-18" cy="0" rx="6.7" ry="4.2" fill="none" stroke="#777" stroke-width="0.45"/><path d="M-2 0H-6M-3 -4V4" fill="none" stroke="#666" stroke-width="0.7"/><circle cx="-15" cy="0" r="1.1" fill="none" stroke="#888" stroke-width="0.4"/></g>
+<g transform="translate(1163.5 165.5) scale(-1 1)"><path d="M-2 -3 L-9 -5 C-14 -9 -25 -8 -27 0 C-25 8 -14 9 -9 5 L-2 3 Z" fill="none" stroke="#777" stroke-width="0.5"/><ellipse cx="-18" cy="0" rx="6.7" ry="4.2" fill="none" stroke="#777" stroke-width="0.45"/><path d="M-2 0H-6M-3 -4V4" fill="none" stroke="#666" stroke-width="0.7"/><circle cx="-15" cy="0" r="1.1" fill="none" stroke="#888" stroke-width="0.4"/></g>
+<g transform="translate(1163.5 219) scale(-1 1)"><path d="M-2 -3 L-9 -5 C-14 -9 -25 -8 -27 0 C-25 8 -14 9 -9 5 L-2 3 Z" fill="none" stroke="#777" stroke-width="0.5"/><ellipse cx="-18" cy="0" rx="6.7" ry="4.2" fill="none" stroke="#777" stroke-width="0.45"/><path d="M-2 0H-6M-3 -4V4" fill="none" stroke="#666" stroke-width="0.7"/><circle cx="-15" cy="0" r="1.1" fill="none" stroke="#888" stroke-width="0.4"/></g>
+<rect x="1028.5" y="153" width="18.5" height="28" fill="none" stroke="#999" stroke-width="0.45"/>
+<rect x="1280.5" y="153" width="18.5" height="28" fill="none" stroke="#999" stroke-width="0.45"/>
+<rect x="1028.5" y="153" width="43" height="28" fill="none" stroke="#aaa" stroke-width="0.4" stroke-dasharray="11 5"/>
+<rect x="1256" y="153" width="43" height="28" fill="none" stroke="#aaa" stroke-width="0.4" stroke-dasharray="11 5"/>
+<rect x="1028.5" y="186" width="18.5" height="28" fill="none" stroke="#999" stroke-width="0.45"/>
+<rect x="1280.5" y="186" width="18.5" height="28" fill="none" stroke="#999" stroke-width="0.45"/>
+<rect x="1028.5" y="186" width="43" height="28" fill="none" stroke="#aaa" stroke-width="0.4" stroke-dasharray="11 5"/>
+<rect x="1256" y="186" width="43" height="28" fill="none" stroke="#aaa" stroke-width="0.4" stroke-dasharray="11 5"/>
+<ellipse cx="1037" cy="166" rx="6.8" ry="8.5" fill="none" stroke="#888" stroke-width="0.5"/>
+<rect x="1025" y="164.6" width="4" height="2.8" fill="none" stroke="#777" stroke-width="0.45"/>
+<line x1="1027" y1="166" x2="1033" y2="166" stroke="#777" stroke-width="0.7"/>
+<ellipse cx="1290.5" cy="166" rx="6.8" ry="8.5" fill="none" stroke="#888" stroke-width="0.5"/>
+<rect x="1298.5" y="164.6" width="4" height="2.8" fill="none" stroke="#777" stroke-width="0.45"/>
+<line x1="1300.5" y1="166" x2="1294.5" y2="166" stroke="#777" stroke-width="0.7"/>
+<ellipse cx="1037" cy="199" rx="6.8" ry="8.5" fill="none" stroke="#888" stroke-width="0.5"/>
+<rect x="1025" y="197.6" width="4" height="2.8" fill="none" stroke="#777" stroke-width="0.45"/>
+<line x1="1027" y1="199" x2="1033" y2="199" stroke="#777" stroke-width="0.7"/>
+<ellipse cx="1290.5" cy="199" rx="6.8" ry="8.5" fill="none" stroke="#888" stroke-width="0.5"/>
+<rect x="1298.5" y="197.6" width="4" height="2.8" fill="none" stroke="#777" stroke-width="0.45"/>
+<line x1="1300.5" y1="199" x2="1294.5" y2="199" stroke="#777" stroke-width="0.7"/>
+<circle cx="1077.5" cy="206.5" r="27.5" fill="none" stroke="#aaa" stroke-width="0.45" stroke-dasharray="9 5"/>
+<g transform="translate(1077.5 206.5)"><circle cx="2.8" cy="-10" r="3" fill="none" stroke="#999" stroke-width="0.6"/><path d="M2 -7L0 1H-6L-12 10H-15 M0 -1H7L11 8 M-2 3H5M-6 3A9 9 0 1 0 10 8" fill="none" stroke="#999" stroke-width="0.8"/></g>
+<circle cx="1246.5" cy="206.5" r="27.5" fill="none" stroke="#aaa" stroke-width="0.45" stroke-dasharray="9 5"/>
+<g transform="translate(1246.5 206.5)"><circle cx="2.8" cy="-10" r="3" fill="none" stroke="#999" stroke-width="0.6"/><path d="M2 -7L0 1H-6L-12 10H-15 M0 -1H7L11 8 M-2 3H5M-6 3A9 9 0 1 0 10 8" fill="none" stroke="#999" stroke-width="0.8"/></g>
+<rect x="1165.5" y="243" width="17" height="22" fill="none" stroke="#888" stroke-width="0.5"/>
+<line x1="1165.5" y1="243" x2="1182.5" y2="265" stroke="#888" stroke-width="0.5"/>
+<line x1="1182.5" y1="243" x2="1165.5" y2="265" stroke="#888" stroke-width="0.5"/>
+<rect x="941.5" y="203" width="27" height="43.5" fill="none" stroke="#aaa" stroke-width="0.4" stroke-dasharray="11 5"/>
+<path d="M950 202.5 V212 C950 220 961 220 961 212 V202.5" fill="none" stroke="#777" stroke-width="0.6"/>
+<circle cx="956" cy="213" r="1.2" fill="#777" stroke="none" stroke-width="0"/>
+</g>
+<g id="layer-6" inkscape:groupmode="layer" inkscape:label="Office partitions"><title>Office partitions</title>
+<polygon points="670.5,194.5 683.5,194.5 683.5,219.5 679.5,219.5 679.5,203.5" fill="url(#partition-hatch)" stroke="#292929" stroke-width="0.85"/>
+<rect x="679.5" y="251.5" width="4" height="31" fill="url(#partition-hatch)" stroke="#292929" stroke-width="0.85"/>
+<rect x="574.5" y="256.5" width="105" height="4" fill="url(#partition-hatch)" stroke="#292929" stroke-width="0.85"/>
+<rect x="679.5" y="314.5" width="4" height="27" fill="url(#partition-hatch)" stroke="#292929" stroke-width="0.85"/>
+<rect x="583" y="337.5" width="79.5" height="4" fill="url(#partition-hatch)" stroke="#292929" stroke-width="0.85"/>
+<rect x="1303.5" y="122.5" width="43" height="4" fill="url(#partition-hatch)" stroke="#292929" stroke-width="0.85"/>
+<rect x="1346.5" y="126.5" width="4" height="85" fill="url(#partition-hatch)" stroke="#292929" stroke-width="0.85"/>
+<rect x="1350.5" y="126.5" width="27" height="4" fill="url(#partition-hatch)" stroke="#292929" stroke-width="0.85"/>
+<rect x="1398.5" y="126.5" width="4" height="4" fill="url(#partition-hatch)" stroke="#292929" stroke-width="0.85"/>
+<rect x="1402.5" y="122.5" width="4" height="89" fill="url(#partition-hatch)" stroke="#292929" stroke-width="0.85"/>
+<rect x="1406.5" y="122.5" width="52" height="4" fill="url(#partition-hatch)" stroke="#292929" stroke-width="0.85"/>
+<rect x="1458.5" y="126.5" width="4" height="104" fill="url(#partition-hatch)" stroke="#292929" stroke-width="0.85"/>
+<rect x="1462.5" y="122.5" width="106.5" height="4" fill="url(#partition-hatch)" stroke="#292929" stroke-width="0.85"/>
+<rect x="1303.5" y="211.5" width="7" height="4" fill="url(#partition-hatch)" stroke="#292929" stroke-width="0.85"/>
+<rect x="1342.5" y="211.5" width="21" height="4" fill="url(#partition-hatch)" stroke="#292929" stroke-width="0.85"/>
+<rect x="1395.5" y="211.5" width="23.5" height="4" fill="url(#partition-hatch)" stroke="#292929" stroke-width="0.85"/>
+<rect x="1451" y="211.5" width="7.5" height="4" fill="url(#partition-hatch)" stroke="#292929" stroke-width="0.85"/>
+<rect x="1458.5" y="263" width="4" height="14.5" fill="url(#partition-hatch)" stroke="#292929" stroke-width="0.85"/>
+<rect x="1462.5" y="268.5" width="106.5" height="4" fill="url(#partition-hatch)" stroke="#292929" stroke-width="0.85"/>
+<rect x="1458.5" y="310" width="4" height="63.5" fill="url(#partition-hatch)" stroke="#292929" stroke-width="0.85"/>
+<rect x="1462.5" y="363.5" width="106.5" height="4" fill="url(#partition-hatch)" stroke="#292929" stroke-width="0.85"/>
+<polygon points="1458.5,405.5 1462.5,405.5 1462.5,458.5 1524.5,458.5 1563.5,497.5 1557.8,497.5 1522.8,462.5 1458.5,462.5" fill="url(#partition-hatch)" stroke="#292929" stroke-width="0.85"/>
+</g>
+<g id="layer-7" inkscape:groupmode="layer" inkscape:label="Exit stair and landing"><title>Exit stair and landing</title>
+<rect x="1551" y="497.5" width="18" height="4.5" fill="white" stroke="#292929" stroke-width="0.65"/>
+<polygon points="1529,538.5 1534,538.5 1534,518 1531.5,515.5 1529,518" fill="white" stroke="#292929" stroke-width="0.65"/>
+<polygon points="1547.5,497.5 1551,501 1554.5,497.5 1557.8,497.5 1551,490.7" fill="url(#partition-hatch)" stroke="#292929" stroke-width="0.65"/>
+<path d="M 1550.4756,501.5244 A 23.3 23.3 0 0 1 1550.4756,534.4756" fill="none" stroke="#666" stroke-width="0.5" data-door="Exit stair entry"/>
+<polygon points="1534,518 1550.4756,534.4756 1549.6271,535.3241 1533.1515,518.8485" fill="white" stroke="#555" stroke-width="0.5"/>
+<line x1="1534" y1="518" x2="1550.4756" y2="501.5244" stroke="#9b9b9b" stroke-width="0.35" stroke-dasharray="7 4"/>
+<polyline points="1547.5,497.5 1513,463 1488,488 1529,529" fill="none" stroke="#aaa" stroke-width="0.4" stroke-dasharray="14 7"/>
+<circle cx="1534.5" cy="505" r="5.7" fill="none" stroke="#777" stroke-width="0.65"/>
+<line x1="1529" y1="505" x2="1540" y2="505" stroke="#777" stroke-width="0.5"/>
+<line x1="1534.5" y1="499.3" x2="1534.5" y2="510.7" stroke="#777" stroke-width="0.5"/>
+<rect x="1579.5" y="438.5" width="57" height="111" fill="none" stroke="#666" stroke-width="0.9" stroke-dasharray="1.5 1.3"/>
+<rect x="1578.3" y="437.3" width="2.4" height="2.4" fill="#333" stroke="none" stroke-width="0"/>
+<rect x="1635.3" y="437.3" width="2.4" height="2.4" fill="#333" stroke="none" stroke-width="0"/>
+<rect x="1578.3" y="548.3" width="2.4" height="2.4" fill="#333" stroke="none" stroke-width="0"/>
+<rect x="1635.3" y="548.3" width="2.4" height="2.4" fill="#333" stroke="none" stroke-width="0"/>
+<line x1="1579.5" y1="459" x2="1636.5" y2="459" stroke="#888" stroke-width="0.5"/>
+<line x1="1579.5" y1="466" x2="1636.5" y2="466" stroke="#888" stroke-width="0.5"/>
+<line x1="1579.5" y1="473" x2="1636.5" y2="473" stroke="#888" stroke-width="0.5"/>
+<line x1="1579.5" y1="480" x2="1636.5" y2="480" stroke="#888" stroke-width="0.5"/>
+<line x1="1579.5" y1="487" x2="1636.5" y2="487" stroke="#888" stroke-width="0.5"/>
+<line x1="1579.5" y1="494" x2="1636.5" y2="494" stroke="#888" stroke-width="0.5"/>
+<line x1="1579.5" y1="501" x2="1636.5" y2="501" stroke="#888" stroke-width="0.5"/>
+<line x1="1579.5" y1="508" x2="1636.5" y2="508" stroke="#888" stroke-width="0.5"/>
+<line x1="1579.5" y1="515" x2="1636.5" y2="515" stroke="#888" stroke-width="0.5"/>
+<line x1="1579.5" y1="522" x2="1636.5" y2="522" stroke="#888" stroke-width="0.5"/>
+<line x1="1579.5" y1="525" x2="1636.5" y2="525" stroke="#888" stroke-width="0.5"/>
+<polyline points="1593.5,510 1593.5,454 1614.5,454 1614.5,525" fill="none" stroke="#777" stroke-width="0.6"/>
+<rect x="1606" y="460" width="1.7" height="65" fill="white" stroke="#888" stroke-width="0.4"/>
+<polyline points="1579.5,478 1589,475 1591,477 1593.5,474 1596,477 1606,474" fill="none" stroke="white" stroke-width="3"/>
+<polyline points="1579.5,478 1589,475 1591,477 1593.5,474 1596,477 1606,474" fill="none" stroke="#777" stroke-width="0.5"/>
+<polyline points="1579.5,486 1589,483 1591,485 1593.5,482 1596,485 1606,482" fill="none" stroke="white" stroke-width="3"/>
+<polyline points="1579.5,486 1589,483 1591,485 1593.5,482 1596,485 1606,482" fill="none" stroke="#777" stroke-width="0.5"/>
+<polyline points="1590,465 1593.5,469 1597,465" fill="none" stroke="#555" stroke-width="0.9"/>
+<polyline points="1590,490 1593.5,486 1597,490" fill="none" stroke="#555" stroke-width="0.9"/>
+<circle cx="1593.5" cy="510" r="1.6" fill="none" stroke="#777" stroke-width="0.5"/>
+<circle cx="1614.5" cy="525" r="1.6" fill="none" stroke="#777" stroke-width="0.5"/>
+<text x="1594" y="518" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="5.1" text-anchor="middle" fill="#303030" stroke="none" transform="rotate(90 1594 518)">UP</text>
+<text x="1588" y="518" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="5.1" text-anchor="middle" fill="#303030" stroke="none" transform="rotate(90 1588 518)">17R</text>
+<text x="1618" y="531" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="5.1" text-anchor="middle" fill="#303030" stroke="none" transform="rotate(90 1618 531)">DN</text>
+<text x="1623.5" y="531" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="5.1" text-anchor="middle" fill="#303030" stroke="none" transform="rotate(90 1623.5 531)">20R</text>
+</g>
+<g id="layer-8" inkscape:groupmode="layer" inkscape:label="Structural columns"><title>Structural columns</title>
+<rect x="563.5" y="111.5" width="22" height="18.5" fill="white" stroke="#292929" stroke-width="0.8"/>
+<rect x="563.5" y="531.5" width="22" height="18" fill="white" stroke="#292929" stroke-width="0.8"/>
+<rect x="662.5" y="111.5" width="21" height="18.5" fill="white" stroke="#292929" stroke-width="0.8"/>
+<rect x="662.5" y="531.5" width="21" height="18" fill="white" stroke="#292929" stroke-width="0.8"/>
+<rect x="833.5" y="111.5" width="21" height="18.5" fill="white" stroke="#292929" stroke-width="0.8"/>
+<rect x="833.5" y="531.5" width="21" height="18" fill="white" stroke="#292929" stroke-width="0.8"/>
+<rect x="1014.5" y="111.5" width="21" height="18.5" fill="white" stroke="#292929" stroke-width="0.8"/>
+<rect x="1014.5" y="531.5" width="21" height="18" fill="white" stroke="#292929" stroke-width="0.8"/>
+<rect x="1195.5" y="111.5" width="22" height="18.5" fill="white" stroke="#292929" stroke-width="0.8"/>
+<rect x="1195.5" y="531.5" width="22" height="18" fill="white" stroke="#292929" stroke-width="0.8"/>
+<rect x="1377.5" y="111.5" width="21" height="18.5" fill="white" stroke="#292929" stroke-width="0.8"/>
+<rect x="1377.5" y="531.5" width="21" height="18" fill="white" stroke="#292929" stroke-width="0.8"/>
+<rect x="1558.5" y="111.5" width="21" height="18.5" fill="white" stroke="#292929" stroke-width="0.8"/>
+<rect x="1558.5" y="531.5" width="21" height="18" fill="white" stroke="#292929" stroke-width="0.8"/>
+<rect x="662.5" y="319.5" width="21" height="22" fill="white" stroke="#292929" stroke-width="0.8"/>
+<rect x="833.5" y="319.5" width="21" height="22" fill="white" stroke="#292929" stroke-width="0.8"/>
+<rect x="1014.5" y="319.5" width="21" height="22" fill="white" stroke="#292929" stroke-width="0.8"/>
+<rect x="1195.5" y="319.5" width="22" height="22" fill="white" stroke="#292929" stroke-width="0.8"/>
+<rect x="1377.5" y="319.5" width="21" height="22" fill="white" stroke="#292929" stroke-width="0.8"/>
+<rect x="563.5" y="319.5" width="19.5" height="22" fill="white" stroke="#292929" stroke-width="0.8"/>
+<rect x="1558.5" y="319.5" width="21" height="22" fill="white" stroke="#292929" stroke-width="0.8"/>
+</g>
+<g id="layer-9" inkscape:groupmode="layer" inkscape:label="Room names and leaders"><title>Room names and leaders</title>
+<rect x="479.5" y="69.8" width="80.7" height="13.4" fill="white" stroke="#777" stroke-width="0.45"/>
+<line x1="499.9" y1="69.8" x2="499.9" y2="83.2" stroke="#777" stroke-width="0.45"/>
+<text x="489.7" y="78.8" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="6.7" text-anchor="middle" fill="#303030" stroke="none">511</text>
+<text x="530.05" y="78.8" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="7" text-anchor="middle" fill="#303030" stroke="none">MEETING</text>
+<polyline points="560.2,76.5 595.5,76.5 595.5,147.5" fill="none" stroke="#777" stroke-width="0.5"/>
+<circle cx="595.5" cy="147.5" r="1.8" fill="#252525" stroke="none" stroke-width="0"/>
+<rect x="694" y="265" width="80.7" height="13.4" fill="white" stroke="#777" stroke-width="0.45"/>
+<line x1="714.4" y1="265" x2="714.4" y2="278.4" stroke="#777" stroke-width="0.45"/>
+<text x="704.2" y="274" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="6.7" text-anchor="middle" fill="#303030" stroke="none">510</text>
+<text x="744.55" y="274" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="7" text-anchor="middle" fill="#303030" stroke="none">MEETING</text>
+<polyline points="694,271.7 631.5,271.7" fill="none" stroke="#777" stroke-width="0.5"/>
+<circle cx="631.5" cy="271.7" r="1.8" fill="#252525" stroke="none" stroke-width="0"/>
+<rect x="860.5" y="69.8" width="80.7" height="13.4" fill="white" stroke="#777" stroke-width="0.45"/>
+<line x1="880.9" y1="69.8" x2="880.9" y2="83.2" stroke="#777" stroke-width="0.45"/>
+<text x="870.7" y="78.8" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="6.7" text-anchor="middle" fill="#303030" stroke="none">505</text>
+<text x="911.05" y="78.8" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="7" text-anchor="middle" fill="#303030" stroke="none">ELEC. CLOSET</text>
+<polyline points="941.2,76.5 1004.5,76.5 1004.5,217.5" fill="none" stroke="#777" stroke-width="0.5"/>
+<circle cx="1004.5" cy="217.5" r="1.8" fill="#252525" stroke="none" stroke-width="0"/>
+<rect x="1081" y="50.5" width="80.7" height="13.4" fill="white" stroke="#777" stroke-width="0.45"/>
+<line x1="1101.4" y1="50.5" x2="1101.4" y2="63.9" stroke="#777" stroke-width="0.45"/>
+<text x="1091.2" y="59.5" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="6.7" text-anchor="middle" fill="#303030" stroke="none">502</text>
+<text x="1131.55" y="59.5" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="7" text-anchor="middle" fill="#303030" stroke="none">JANITOR’S CL.</text>
+<polyline points="1161.7,57.2 1199,57.2 1199,199 1190,230 1190,244" fill="none" stroke="#777" stroke-width="0.5"/>
+<circle cx="1190" cy="244" r="1.8" fill="#252525" stroke="none" stroke-width="0"/>
+<rect x="1081" y="69.8" width="80.7" height="13.4" fill="white" stroke="#777" stroke-width="0.45"/>
+<line x1="1101.4" y1="69.8" x2="1101.4" y2="83.2" stroke="#777" stroke-width="0.45"/>
+<text x="1091.2" y="78.8" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="6.7" text-anchor="middle" fill="#303030" stroke="none">501</text>
+<text x="1131.55" y="78.8" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="7" text-anchor="middle" fill="#303030" stroke="none">WOMEN’S RM.</text>
+<polyline points="1081,76.5 1053.5,76.5 1053.5,164.5" fill="none" stroke="#777" stroke-width="0.5"/>
+<circle cx="1053.5" cy="164.5" r="1.8" fill="#252525" stroke="none" stroke-width="0"/>
+<rect x="1264" y="50.5" width="80.7" height="13.4" fill="white" stroke="#777" stroke-width="0.45"/>
+<line x1="1284.4" y1="50.5" x2="1284.4" y2="63.9" stroke="#777" stroke-width="0.45"/>
+<text x="1274.2" y="59.5" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="6.7" text-anchor="middle" fill="#303030" stroke="none">505</text>
+<text x="1314.55" y="59.5" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="7" text-anchor="middle" fill="#303030" stroke="none">PHONE</text>
+<polyline points="1344.7,57.2 1363.5,57.2 1363.5,137.5" fill="none" stroke="#777" stroke-width="0.5"/>
+<circle cx="1363.5" cy="137.5" r="1.8" fill="#252525" stroke="none" stroke-width="0"/>
+<rect x="1264" y="69.8" width="80.7" height="13.4" fill="white" stroke="#777" stroke-width="0.45"/>
+<line x1="1284.4" y1="69.8" x2="1284.4" y2="83.2" stroke="#777" stroke-width="0.45"/>
+<text x="1274.2" y="78.8" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="6.7" text-anchor="middle" fill="#303030" stroke="none">504</text>
+<text x="1314.55" y="78.8" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="7" text-anchor="middle" fill="#303030" stroke="none">MEN’S RM.</text>
+<polyline points="1264,76.5 1231.5,76.5 1231.5,164.5" fill="none" stroke="#777" stroke-width="0.5"/>
+<circle cx="1231.5" cy="164.5" r="1.8" fill="#252525" stroke="none" stroke-width="0"/>
+<rect x="1589.5" y="50.5" width="80.7" height="13.4" fill="white" stroke="#777" stroke-width="0.45"/>
+<line x1="1609.9" y1="50.5" x2="1609.9" y2="63.9" stroke="#777" stroke-width="0.45"/>
+<text x="1599.7" y="59.5" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="6.7" text-anchor="middle" fill="#303030" stroke="none">506</text>
+<text x="1640.05" y="59.5" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="7" text-anchor="middle" fill="#303030" stroke="none">PHONE</text>
+<polyline points="1589.5,57.2 1448.5,57.2 1448.5,137.5" fill="none" stroke="#777" stroke-width="0.5"/>
+<circle cx="1448.5" cy="137.5" r="1.8" fill="#252525" stroke="none" stroke-width="0"/>
+<rect x="1589.5" y="69.8" width="80.7" height="13.4" fill="white" stroke="#777" stroke-width="0.45"/>
+<line x1="1609.9" y1="69.8" x2="1609.9" y2="83.2" stroke="#777" stroke-width="0.45"/>
+<text x="1599.7" y="78.8" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="6.7" text-anchor="middle" fill="#303030" stroke="none">507</text>
+<text x="1640.05" y="78.8" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="7" text-anchor="middle" fill="#303030" stroke="none">MEETING</text>
+<polyline points="1589.5,76.5 1544.5,76.5 1544.5,137.5" fill="none" stroke="#777" stroke-width="0.5"/>
+<circle cx="1544.5" cy="137.5" r="1.8" fill="#252525" stroke="none" stroke-width="0"/>
+<rect x="1264" y="291.8" width="80.7" height="13.4" fill="white" stroke="#777" stroke-width="0.45"/>
+<line x1="1284.4" y1="291.8" x2="1284.4" y2="305.2" stroke="#777" stroke-width="0.45"/>
+<text x="1274.2" y="300.8" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="6.7" text-anchor="middle" fill="#303030" stroke="none">503</text>
+<text x="1314.55" y="300.8" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="7" text-anchor="middle" fill="#303030" stroke="none">CLOSET</text>
+<polyline points="1344.7,298.5 1363.5,298.5 1363.5,247 1334,183.5" fill="none" stroke="#777" stroke-width="0.5"/>
+<circle cx="1334" cy="183.5" r="1.8" fill="#252525" stroke="none" stroke-width="0"/>
+<rect x="1589.5" y="291.8" width="80.7" height="13.4" fill="white" stroke="#777" stroke-width="0.45"/>
+<line x1="1609.9" y1="291.8" x2="1609.9" y2="305.2" stroke="#777" stroke-width="0.45"/>
+<text x="1599.7" y="300.8" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="6.7" text-anchor="middle" fill="#303030" stroke="none">508</text>
+<text x="1640.05" y="300.8" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="7" text-anchor="middle" fill="#303030" stroke="none">MEETING</text>
+<polyline points="1589.5,298.5 1553,298.5" fill="none" stroke="#777" stroke-width="0.5"/>
+<circle cx="1553" cy="298.5" r="1.8" fill="#252525" stroke="none" stroke-width="0"/>
+<rect x="1589.5" y="387.1" width="80.7" height="13.4" fill="white" stroke="#777" stroke-width="0.45"/>
+<line x1="1609.9" y1="387.1" x2="1609.9" y2="400.5" stroke="#777" stroke-width="0.45"/>
+<text x="1599.7" y="396.1" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="6.7" text-anchor="middle" fill="#303030" stroke="none">509</text>
+<text x="1640.05" y="396.1" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="7" text-anchor="middle" fill="#303030" stroke="none">MEETING</text>
+<polyline points="1589.5,393.8 1553,393.8" fill="none" stroke="#777" stroke-width="0.5"/>
+<circle cx="1553" cy="393.8" r="1.8" fill="#252525" stroke="none" stroke-width="0"/>
+<rect x="1081" y="368.8" width="80.7" height="13.4" fill="white" stroke="#777" stroke-width="0.45"/>
+<line x1="1101.4" y1="368.8" x2="1101.4" y2="382.2" stroke="#777" stroke-width="0.45"/>
+<text x="1091.2" y="377.8" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="6.7" text-anchor="middle" fill="#303030" stroke="none">500</text>
+<text x="1131.55" y="377.8" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="7" text-anchor="middle" fill="#303030" stroke="none">OFFICE</text>
+</g>
+<g id="layer-10" inkscape:groupmode="layer" inkscape:label="Dimensions"><title>Dimensions</title>
+<line x1="574.5" y1="109.5" x2="574.5" y2="98" stroke="#888" stroke-width="0.35"/>
+<line x1="572.2" y1="104.3" x2="576.8" y2="99.7" stroke="#555" stroke-width="0.75"/>
+<line x1="679.5" y1="109.5" x2="679.5" y2="98" stroke="#888" stroke-width="0.35"/>
+<line x1="677.2" y1="104.3" x2="681.8" y2="99.7" stroke="#555" stroke-width="0.75"/>
+<line x1="570.5" y1="102" x2="683.5" y2="102" stroke="#777" stroke-width="0.4"/>
+<text x="627" y="98" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="7" text-anchor="middle" fill="#303030" stroke="none">9′-10 1/4″</text>
+<line x1="574.5" y1="343.5" x2="574.5" y2="385.5" stroke="#888" stroke-width="0.35"/>
+<line x1="572.2" y1="383.8" x2="576.8" y2="379.2" stroke="#555" stroke-width="0.75"/>
+<line x1="679.5" y1="343.5" x2="679.5" y2="385.5" stroke="#888" stroke-width="0.35"/>
+<line x1="677.2" y1="383.8" x2="681.8" y2="379.2" stroke="#555" stroke-width="0.75"/>
+<line x1="570.5" y1="381.5" x2="683.5" y2="381.5" stroke="#777" stroke-width="0.4"/>
+<text x="627" y="377.5" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="7" text-anchor="middle" fill="#303030" stroke="none">9′-10 1/4″</text>
+<line x1="561.5" y1="122.5" x2="517.5" y2="122.5" stroke="#888" stroke-width="0.35"/>
+<line x1="519.2" y1="124.8" x2="523.8" y2="120.2" stroke="#555" stroke-width="0.75"/>
+<line x1="561.5" y1="256.5" x2="517.5" y2="256.5" stroke="#888" stroke-width="0.35"/>
+<line x1="519.2" y1="258.8" x2="523.8" y2="254.2" stroke="#555" stroke-width="0.75"/>
+<line x1="521.5" y1="118.5" x2="521.5" y2="260.5" stroke="#777" stroke-width="0.4"/>
+<text x="517.5" y="189.5" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="7" text-anchor="middle" fill="#303030" stroke="none" transform="rotate(-90 517.5 189.5)">12′-6 3/4″</text>
+<line x1="561.5" y1="260.5" x2="517.5" y2="260.5" stroke="#888" stroke-width="0.35"/>
+<line x1="519.2" y1="262.8" x2="523.8" y2="258.2" stroke="#555" stroke-width="0.75"/>
+<line x1="561.5" y1="337.5" x2="517.5" y2="337.5" stroke="#888" stroke-width="0.35"/>
+<line x1="519.2" y1="339.8" x2="523.8" y2="335.2" stroke="#555" stroke-width="0.75"/>
+<line x1="521.5" y1="256.5" x2="521.5" y2="341.5" stroke="#777" stroke-width="0.4"/>
+<text x="517.5" y="299" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="7" text-anchor="middle" fill="#303030" stroke="none" transform="rotate(-90 517.5 299)">7′-1 1/2″</text>
+<line x1="1303.5" y1="120.5" x2="1303.5" y2="99" stroke="#888" stroke-width="0.35"/>
+<line x1="1301.2" y1="105.3" x2="1305.8" y2="100.7" stroke="#555" stroke-width="0.75"/>
+<line x1="1346.5" y1="120.5" x2="1346.5" y2="99" stroke="#888" stroke-width="0.35"/>
+<line x1="1344.2" y1="105.3" x2="1348.8" y2="100.7" stroke="#555" stroke-width="0.75"/>
+<line x1="1299.5" y1="103" x2="1350.5" y2="103" stroke="#777" stroke-width="0.4"/>
+<text x="1325" y="99" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="7" text-anchor="middle" fill="#303030" stroke="none">4′-0″</text>
+<line x1="1350.5" y1="120.5" x2="1350.5" y2="99" stroke="#888" stroke-width="0.35"/>
+<line x1="1348.2" y1="105.3" x2="1352.8" y2="100.7" stroke="#555" stroke-width="0.75"/>
+<line x1="1402.5" y1="120.5" x2="1402.5" y2="99" stroke="#888" stroke-width="0.35"/>
+<line x1="1400.2" y1="105.3" x2="1404.8" y2="100.7" stroke="#555" stroke-width="0.75"/>
+<line x1="1346.5" y1="103" x2="1406.5" y2="103" stroke="#777" stroke-width="0.4"/>
+<text x="1376.5" y="99" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="7" text-anchor="middle" fill="#303030" stroke="none">4′-10″</text>
+<line x1="1406.5" y1="120.5" x2="1406.5" y2="99" stroke="#888" stroke-width="0.35"/>
+<line x1="1404.2" y1="105.3" x2="1408.8" y2="100.7" stroke="#555" stroke-width="0.75"/>
+<line x1="1458.5" y1="120.5" x2="1458.5" y2="99" stroke="#888" stroke-width="0.35"/>
+<line x1="1456.2" y1="105.3" x2="1460.8" y2="100.7" stroke="#555" stroke-width="0.75"/>
+<line x1="1402.5" y1="103" x2="1462.5" y2="103" stroke="#777" stroke-width="0.4"/>
+<text x="1432.5" y="99" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="7" text-anchor="middle" fill="#303030" stroke="none">4′-10″</text>
+<line x1="1462.5" y1="120.5" x2="1462.5" y2="99" stroke="#888" stroke-width="0.35"/>
+<line x1="1460.2" y1="105.3" x2="1464.8" y2="100.7" stroke="#555" stroke-width="0.75"/>
+<line x1="1569" y1="120.5" x2="1569" y2="99" stroke="#888" stroke-width="0.35"/>
+<line x1="1566.7" y1="105.3" x2="1571.3" y2="100.7" stroke="#555" stroke-width="0.75"/>
+<line x1="1458.5" y1="103" x2="1573" y2="103" stroke="#777" stroke-width="0.4"/>
+<text x="1515.75" y="99" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="7" text-anchor="middle" fill="#303030" stroke="none">10′-0″</text>
+<line x1="1581.5" y1="126.5" x2="1686.5" y2="126.5" stroke="#888" stroke-width="0.35"/>
+<line x1="1680.2" y1="128.8" x2="1684.8" y2="124.2" stroke="#555" stroke-width="0.75"/>
+<line x1="1581.5" y1="268.5" x2="1686.5" y2="268.5" stroke="#888" stroke-width="0.35"/>
+<line x1="1680.2" y1="270.8" x2="1684.8" y2="266.2" stroke="#555" stroke-width="0.75"/>
+<line x1="1682.5" y1="122.5" x2="1682.5" y2="272.5" stroke="#777" stroke-width="0.4"/>
+<text x="1678.5" y="197.5" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="7" text-anchor="middle" fill="#303030" stroke="none" transform="rotate(-90 1678.5 197.5)">13′-3 3/4″</text>
+<line x1="1581.5" y1="272.5" x2="1686.5" y2="272.5" stroke="#888" stroke-width="0.35"/>
+<line x1="1680.2" y1="274.8" x2="1684.8" y2="270.2" stroke="#555" stroke-width="0.75"/>
+<line x1="1581.5" y1="363.5" x2="1686.5" y2="363.5" stroke="#888" stroke-width="0.35"/>
+<line x1="1680.2" y1="365.8" x2="1684.8" y2="361.2" stroke="#555" stroke-width="0.75"/>
+<line x1="1682.5" y1="268.5" x2="1682.5" y2="367.5" stroke="#777" stroke-width="0.4"/>
+<text x="1678.5" y="318" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="7" text-anchor="middle" fill="#303030" stroke="none" transform="rotate(-90 1678.5 318)">8′-6″</text>
+<line x1="1581.5" y1="367.5" x2="1686.5" y2="367.5" stroke="#888" stroke-width="0.35"/>
+<line x1="1680.2" y1="369.8" x2="1684.8" y2="365.2" stroke="#555" stroke-width="0.75"/>
+<line x1="1581.5" y1="458.5" x2="1686.5" y2="458.5" stroke="#888" stroke-width="0.35"/>
+<line x1="1680.2" y1="460.8" x2="1684.8" y2="456.2" stroke="#555" stroke-width="0.75"/>
+<line x1="1682.5" y1="363.5" x2="1682.5" y2="462.5" stroke="#777" stroke-width="0.4"/>
+<text x="1678.5" y="413" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="7" text-anchor="middle" fill="#303030" stroke="none" transform="rotate(-90 1678.5 413)">8′-6″</text>
+<line x1="1581.5" y1="367.5" x2="1702.5" y2="367.5" stroke="#888" stroke-width="0.35"/>
+<line x1="1696.2" y1="369.8" x2="1700.8" y2="365.2" stroke="#555" stroke-width="0.75"/>
+<line x1="1581.5" y1="497.5" x2="1702.5" y2="497.5" stroke="#888" stroke-width="0.35"/>
+<line x1="1696.2" y1="499.8" x2="1700.8" y2="495.2" stroke="#555" stroke-width="0.75"/>
+<line x1="1698.5" y1="363.5" x2="1698.5" y2="501.5" stroke="#777" stroke-width="0.4"/>
+<text x="1694.5" y="432.5" font-family="Plan Gothic, URW Gothic, Century Gothic, sans-serif" font-size="7" text-anchor="middle" fill="#303030" stroke="none" transform="rotate(-90 1694.5 432.5)">12′-2 3/4″</text>
+</g>
+</g>
+</svg>

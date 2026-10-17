@@ -1,0 +1,244 @@
+// The preview: what the room would do with your pending edits, run in the
+// browser. Room tone from the draft's template, then each unmuted shader in
+// stack order, bottom first, each in its own worker (sim.worker.ts), merged
+// as arclamp merges: a shader's channels override the layer below, anything
+// it leaves out stays as it was, and values that aren't finite numbers are
+// dropped.
+//
+// It differs from arclamp in running ~30 times a second rather than 100, on
+// the browser's JS engine, with browser rules for fetch (CORS), and without
+// udp.
+
+import { useEffect, useRef, useSyncExternalStore } from "react";
+import type { Channels, LightInfo } from "../shared/arclamp.ts";
+import type { Layer, LayerKey } from "./draft.ts";
+import { pushSimFrame, setSimulated } from "./live.ts";
+import type { FromWorker } from "./sim.worker.ts";
+
+const TICK_MS = 33;
+// A shader that hasn't answered by then is stuck; arclamp would kill it too.
+const UPDATE_DEADLINE_MS = 250;
+
+export type RoomState = Map<number, Channels>;
+
+/** Room tone's state: every light, every channel, from the template (0 where it says nothing). */
+export function baseState(lights: LightInfo[], template: Record<string, Channels>): RoomState {
+  const state: RoomState = new Map();
+  for (const l of lights) {
+    const t = template[String(l.id)] ?? {};
+    state.set(l.id, Object.fromEntries(l.channels.map((name) => [name, t[name] ?? 0])));
+  }
+  return state;
+}
+
+/** What a shader sees: the state below it, with each light's static metadata. */
+export function prevOf(state: RoomState, lights: LightInfo[], initial: number) {
+  return {
+    initial_time: initial,
+    lights: lights.map((l) => ({ id: l.id, channels: { ...state.get(l.id) }, tags: l.tags ?? [], coords: l.coords, rail: l.rail })),
+  };
+}
+
+/** A shader's output over the state below it, channel by channel. */
+export function mergeOutput(state: RoomState, lights: LightInfo[], out: unknown): RoomState {
+  const list = (out as { lights?: unknown } | null)?.lights;
+  if (!Array.isArray(list)) return state;
+  const known = new Map(lights.map((l) => [l.id, l.channels]));
+  const next = new Map(state);
+  for (const item of list as { id?: unknown; channels?: unknown }[]) {
+    const names = typeof item?.id === "number" ? known.get(item.id) : undefined;
+    if (!names || !item.channels || typeof item.channels !== "object") continue;
+    const given = item.channels as Record<string, unknown>;
+    const ch = { ...next.get(item.id as number) };
+    for (const name of names) {
+      const v = given[name];
+      if (typeof v === "number" && Number.isFinite(v)) ch[name] = v;
+    }
+    next.set(item.id as number, ch);
+  }
+  return next;
+}
+
+// ---- workers ----------------------------------------------------------------
+
+class ShaderWorker {
+  private worker: Worker;
+  private seq = 0;
+  private waiting = new Map<number, (out: unknown) => void>();
+  error: string | null = null;
+  /** The script couldn't load, or got stuck: nothing more to ask it. */
+  stopped = false;
+
+  readonly script: string;
+  private onError: (message: string | null) => void;
+
+  constructor(script: string, onError: (message: string | null) => void) {
+    this.script = script;
+    this.onError = onError;
+    this.worker = new Worker(new URL("./sim.worker.ts", import.meta.url), { type: "module" });
+    this.worker.onmessage = (e: MessageEvent<FromWorker>) => {
+      const m = e.data;
+      if (m.type === "loaded") return;
+      if (m.type === "error" && m.seq === undefined) {
+        // The script itself failed to load.
+        this.fail(m.message);
+        this.stop();
+        return;
+      }
+      // A tick: an error shows until update() works again.
+      if (m.type === "error") this.fail(m.message);
+      else if (this.error) this.ok();
+      const done = this.waiting.get(m.seq!);
+      this.waiting.delete(m.seq!);
+      done?.(m.type === "out" ? m.out : null);
+    };
+    this.worker.onerror = (e) => {
+      this.fail(e.message || "the preview couldn't run this shader");
+      this.stop();
+    };
+    this.worker.postMessage({ type: "load", script });
+  }
+
+  private fail(message: string) {
+    this.error = message;
+    this.onError(message);
+  }
+
+  private ok() {
+    this.error = null;
+    this.onError(null);
+  }
+
+  /** update()'s output, or null if it failed or took too long. */
+  call(prev: unknown, now: number, initial: number): Promise<unknown> {
+    const seq = ++this.seq;
+    return new Promise((resolve) => {
+      const timer = window.setTimeout(() => {
+        if (!this.waiting.delete(seq)) return;
+        this.fail(`update() didn't return within ${UPDATE_DEADLINE_MS} ms`);
+        this.stop();
+        resolve(null);
+      }, UPDATE_DEADLINE_MS);
+      this.waiting.set(seq, (out) => {
+        window.clearTimeout(timer);
+        resolve(out);
+      });
+      this.worker.postMessage({ type: "tick", seq, prev, now, initial });
+    });
+  }
+
+  stop() {
+    this.stopped = true;
+    this.worker.terminate();
+    for (const done of this.waiting.values()) done(null);
+    this.waiting.clear();
+  }
+}
+
+// ---- preview errors, by layer --------------------------------------------------
+
+let errors: Record<LayerKey, string> = {};
+const errorListeners = new Set<() => void>();
+
+function setError(key: LayerKey, message: string | null) {
+  if ((errors[key] ?? null) === message) return;
+  const next = { ...errors };
+  if (message === null) delete next[key];
+  else next[key] = message;
+  errors = next;
+  for (const l of errorListeners) l();
+}
+
+/** Why each shader isn't running in the preview, by layer. */
+export function usePreviewErrors(): Record<LayerKey, string> {
+  return useSyncExternalStore(
+    (l) => {
+      errorListeners.add(l);
+      return () => errorListeners.delete(l);
+    },
+    () => errors,
+  );
+}
+
+// ---- the engine ---------------------------------------------------------------
+
+interface Inputs {
+  lights: LightInfo[];
+  layers: Layer[];
+  template: Record<string, Channels>;
+}
+
+class Simulation {
+  private inputs: Inputs = { lights: [], layers: [], template: {} };
+  private workers = new Map<LayerKey, ShaderWorker>();
+  private timer: number | undefined;
+  private running = false;
+
+  set(inputs: Inputs) {
+    this.inputs = inputs;
+    // Workers follow the layers: a new script gets a fresh worker; a layer
+    // that's gone, muted or deleted gets none.
+    const wanted = new Map(inputs.layers.filter((l) => !l.muted && l.status !== "deleted").map((l) => [l.key, l]));
+    for (const [key, w] of this.workers) {
+      const layer = wanted.get(key);
+      if (!layer || layer.script !== w.script) {
+        w.stop();
+        this.workers.delete(key);
+        setError(key, null);
+      }
+    }
+    for (const [key, layer] of wanted) {
+      if (!this.workers.has(key)) this.workers.set(key, new ShaderWorker(layer.script, (m) => setError(key, m)));
+    }
+  }
+
+  start() {
+    if (this.running) return;
+    this.running = true;
+    setSimulated(true);
+    void this.tick();
+  }
+
+  stop() {
+    this.running = false;
+    window.clearTimeout(this.timer);
+    for (const [key, w] of this.workers) {
+      w.stop();
+      setError(key, null);
+    }
+    this.workers.clear();
+    setSimulated(false);
+  }
+
+  private async tick() {
+    if (!this.running) return;
+    const started = performance.now();
+    const now = Date.now();
+    const { lights, layers, template } = this.inputs;
+    let state = baseState(lights, template);
+    // The stack lists the top first; the room is built from the bottom up.
+    for (const layer of [...layers].reverse()) {
+      const w = this.workers.get(layer.key);
+      if (!w || w.stopped) continue;
+      const out = await w.call(prevOf(state, lights, now), now, now);
+      if (!this.running) return;
+      if (out) state = mergeOutput(state, lights, out);
+    }
+    pushSimFrame({ initialTime: now, lights: state });
+    this.timer = window.setTimeout(() => void this.tick(), Math.max(0, TICK_MS - (performance.now() - started)));
+  }
+}
+
+/** Run the preview while `active`, from these inputs. */
+export function useSimulation(active: boolean, inputs: Inputs) {
+  const sim = useRef<Simulation | null>(null);
+  sim.current ??= new Simulation();
+  useEffect(() => {
+    if (active) sim.current!.set(inputs);
+  }, [active, inputs]);
+  useEffect(() => {
+    if (!active) return;
+    sim.current!.start();
+    return () => sim.current!.stop();
+  }, [active]);
+}
