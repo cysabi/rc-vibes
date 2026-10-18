@@ -19,10 +19,13 @@ const shape = (fx: number, fy: number, tx: number, ty: number, floor = 5): RailS
   from: { mm_x: fx, mm_y: fy },
   to: { mm_x: tx, mm_y: ty },
 });
-const edits = (e: Partial<{ rails: [string, RailShape | null][]; placements: [number, Spot | null][]; types: [number, string][] }> = {}): Edits => ({
+const edits = (
+  e: Partial<{ rails: [string, RailShape | null][]; placements: [number, Spot | null][]; types: [number, string][]; tags: [number, string[]][] }> = {},
+): Edits => ({
   rails: new Map(e.rails ?? []),
   placements: new Map(e.placements ?? []),
   types: new Map(e.types ?? []),
+  tags: new Map(e.tags ?? []),
 });
 
 // arclamp's own map: one rail with light 1 on it (coords as arclamp derived
@@ -83,6 +86,21 @@ describe("applyEdits", () => {
   it("never hangs a panel on a rail", () => {
     const out = applyEdits(arclamp, edits({ placements: [[4, { rail: { id: "a", mm_along: 10 } }]] }));
     expect(at(out.lights, 4)).toMatchObject({ rail: null, coords: { mm_x: 7000, mm_y: 2000, floor: 5 } });
+    expect(out.changed).toBe(0);
+  });
+
+  it("gives lights the tags set in vibes, and counts them as changes", () => {
+    const out = applyEdits(arclamp, edits({ tags: [[2, ["kitchen", "east"]], [3, []]] }));
+    expect(at(out.lights, 2).tags).toEqual(["kitchen", "east"]);
+    expect(at(out.lights, 3).tags).toEqual([]);
+    expect(out.changed).toBe(1);
+    expect(lightsFile(out).lights.find((l) => l.id === 2)?.tags).toEqual(["kitchen", "east"]);
+  });
+
+  it("keeps arclamp's order when the tags are the same, so the export doesn't change", () => {
+    const tagged = { ...arclamp, lights: [light(2, { tags: ["b", "a"], coords: { mm_x: 1, mm_y: 1, floor: 4 } })] };
+    const out = applyEdits(tagged, edits({ tags: [[2, ["a", "b"]]] }));
+    expect(at(out.lights, 2).tags).toEqual(["b", "a"]);
     expect(out.changed).toBe(0);
   });
 

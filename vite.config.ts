@@ -10,6 +10,7 @@ export default defineConfig({
   server: {
     port: 5173,
     strictPort: true,
+    allowedHosts: ["roses-macbook-pro"],
     // Trailing slashes matter: "/api" alone would also catch src/web/api.ts.
     proxy: {
       "/api/": { target: server, ws: true },

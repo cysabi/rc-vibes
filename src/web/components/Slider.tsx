@@ -12,8 +12,8 @@ interface Props {
   display: string;
   onChange: (v: number) => void;
   onCommit: (v: number) => void;
-  /** Positions (in value units) marked on the track. */
-  marks?: { at: number; title: string }[];
+  /** Positions (in value units) marked on the track, in a color if given. */
+  marks?: { at: number; title: string; color?: string }[];
   ends?: [ReactNode, ReactNode];
   dim?: boolean;
 }
@@ -58,8 +58,8 @@ export function Slider({ label, value, min, max, step, track, display, onChange,
 
   return (
     <div className={dim ? "slider dim" : "slider"}>
-      <div className="slider-head">
-        <span>{label}</span>
+      <div className="field-head">
+        <span className="label">{label}</span>
         <span className="mono">{display}</span>
       </div>
       <div
@@ -79,12 +79,12 @@ export function Slider({ label, value, min, max, step, track, display, onChange,
         onPointerCancel={up}
         onKeyDown={key}
       >
-        {marks?.map((m) => (
+        {marks?.map((m, i) => (
           <span
-            key={m.title}
-            className="slider-mark"
+            key={`${i}:${m.title}`}
+            className={m.color ? "slider-mark colored" : "slider-mark"}
             title={m.title}
-            style={{ left: `${((m.at - min) / (max - min)) * 100}%` }}
+            style={{ left: `${((m.at - min) / (max - min)) * 100}%`, background: m.color }}
           />
         ))}
         <span className="slider-thumb" style={{ left: `${fraction * 100}%` }} />

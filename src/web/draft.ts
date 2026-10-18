@@ -4,29 +4,21 @@
 // them away. Each browser has its own; others keep seeing the live room.
 //
 // A draft records only what you changed, on top of whatever is live, so
-// changes others make meanwhile still show through.
+// changes others make meanwhile still show through: room tone, and each
+// shader's mute, mask and place in the stack.
 
 import { useSyncExternalStore } from "react";
 import type { Channels } from "../shared/arclamp.ts";
 import type { SceneNode } from "../shared/vibes.ts";
 import { invalidateScene, request } from "./api.ts";
 
-/** A shader in the stack: "#12" for arclamp's shader 12, "new-…" for one not applied yet. */
+/** A shader in the stack: "#12" for arclamp's shader 12. */
 export type LayerKey = string;
 
 export interface ShaderPatch {
-  name?: string;
-  script?: string;
   muted?: boolean;
-}
-
-export interface NewShader {
-  key: LayerKey;
-  name: string;
-  script: string;
-  muted: boolean;
-  /** Who wrote it, for the stack row. */
-  by: string;
+  /** The lights it may not change: its whole mask. */
+  mask?: number[];
 }
 
 export interface Draft {
@@ -35,30 +27,36 @@ export interface Draft {
   /** The last room tone choice's code, for the history. */
   roomtoneCode: string | null;
   edits: Record<LayerKey, ShaderPatch>;
-  created: NewShader[];
-  deleted: LayerKey[];
   /** The stack's order, top first, once you've reordered it. */
   order: LayerKey[] | null;
 }
 
-export const EMPTY: Draft = { roomtone: {}, roomtoneCode: null, edits: {}, created: [], deleted: [], order: null };
+export const EMPTY: Draft = { roomtone: {}, roomtoneCode: null, edits: {}, order: null };
 
 export const keyOf = (id: number): LayerKey => `#${id}`;
-export const idOf = (key: LayerKey): number | null => (key.startsWith("#") ? Number(key.slice(1)) : null);
+export const idOf = (key: LayerKey): number => Number(key.slice(1));
 
-/** A shader as the stack shows it: live, or changed by the draft. */
+/** A shader as the stack shows it: live, with the draft's edits. */
 export interface Layer {
   key: LayerKey;
-  /** arclamp's id; null until a new shader is applied. */
-  id: number | null;
-  /** The live shader, for its author, state and errors; null for a new one. */
-  node: SceneNode | null;
+  /** arclamp's id. */
+  id: number;
+  /** The live shader, for its state and errors. */
+  node: SceneNode;
   name: string;
   script: string;
   muted: boolean;
-  status: "live" | "new" | "edited" | "deleted";
-  /** Who wrote it. */
+  /** The lights it may not change (there its output is its input), sorted. */
+  mask: number[];
+  /** Who made it, as arclamp has it (the name of the key it was made with). */
   by: string;
+}
+
+/** Whether two masks name the same lights. */
+export function sameMask(a: readonly number[], b: readonly number[]): boolean {
+  if (a.length !== b.length) return false;
+  const ids = new Set(a);
+  return b.every((id) => ids.has(id));
 }
 
 const liveShaders = (live: SceneNode[]) => live.filter((n) => n.type === "js").sort((a, b) => b.position - a.position);
@@ -71,37 +69,39 @@ export function templateOf(live: SceneNode[], d: Draft): Record<string, Channels
   return out;
 }
 
-/** The stack with the draft applied, top first. Deleted shaders stay in place, marked. */
+/** The stack with the draft applied, top first. */
 export function layersOf(live: SceneNode[], d: Draft): Layer[] {
   const layers = new Map<LayerKey, Layer>();
   for (const node of liveShaders(live)) {
     const key = keyOf(node.id);
     const patch = d.edits[key] ?? {};
-    const name = patch.name ?? node.meta?.name ?? `Shader #${node.id}`;
-    const script = patch.script ?? node.script ?? "";
-    const changed = (patch.name !== undefined && patch.name !== (node.meta?.name ?? `Shader #${node.id}`)) ||
-      (patch.script !== undefined && patch.script !== node.script);
     layers.set(key, {
       key,
       id: node.id,
       node,
-      name,
-      script,
+      name: `Shader #${node.id}`,
+      script: node.script ?? "",
       muted: patch.muted ?? node.muted,
-      status: d.deleted.includes(key) ? "deleted" : changed ? "edited" : "live",
-      by: node.meta?.createdBy.name ?? node.created_by,
+      mask: patch.mask ?? node.mask ?? [],
+      by: node.created_by,
     });
   }
-  for (const s of d.created) {
-    layers.set(s.key, { key: s.key, id: null, node: null, name: s.name, script: s.script, muted: s.muted, status: "new", by: s.by });
-  }
-  // Your order where you set one; new shaders on top otherwise; anything that
-  // turned up live since keeps its live place relative to the top.
-  const live0 = liveShaders(live).map((n) => keyOf(n.id));
-  const base = d.order ?? [...d.created.map((s) => s.key).reverse(), ...live0];
-  const ordered = base.filter((k) => layers.has(k));
-  const missing = [...layers.keys()].filter((k) => !ordered.includes(k));
+  // Your order where you set one; anything that turned up live since keeps
+  // its live place relative to the top.
+  const live0 = [...layers.keys()];
+  const ordered = (d.order ?? live0).filter((k) => layers.has(k));
+  const missing = live0.filter((k) => !ordered.includes(k));
   return [...missing, ...ordered].map((k) => layers.get(k)!);
+}
+
+/**
+ * The whole stack's order (top first) with just `some` of its shaders
+ * rearranged, into the places those shaders already hold; the rest stay put.
+ */
+export function reorderWithin(all: LayerKey[], some: LayerKey[]): LayerKey[] {
+  const moving = new Set(some);
+  const next = [...some];
+  return all.map((key) => (moving.has(key) ? next.shift()! : key));
 }
 
 /** How many separate changes the draft makes to what's live. */
@@ -109,12 +109,10 @@ export function pendingCount(live: SceneNode[], d: Draft): number {
   const layers = layersOf(live, d);
   let n = Object.keys(roomtoneChanges(live, d)).length > 0 ? 1 : 0;
   for (const l of layers) {
-    if (l.status !== "live") n++;
-    else if (l.node && l.muted !== l.node.muted) n++;
+    if (l.muted !== l.node.muted || !sameMask(l.mask, l.node.mask ?? [])) n++;
   }
   const liveOrder = liveShaders(live).map((n) => keyOf(n.id));
-  const shown = layers.filter((l) => l.status !== "deleted" && l.status !== "new").map((l) => l.key);
-  if (shown.join() !== liveOrder.filter((k) => shown.includes(k)).join()) n++;
+  if (layers.map((l) => l.key).join() !== liveOrder.join()) n++;
   return n;
 }
 
@@ -170,44 +168,18 @@ export function useDraft(): Draft {
 
 export const currentDraft = () => draft;
 
-let nextNew = 0;
-
 export const drafts = {
   setRoomtone(lights: Record<string, Channels>, code: string | null) {
     const roomtone = { ...draft.roomtone };
     for (const [id, ch] of Object.entries(lights)) roomtone[id] = { ...roomtone[id], ...ch };
     set({ ...draft, roomtone, roomtoneCode: code });
   },
-  /** Change a shader's name, script or mute; new shaders change in place. */
+  /** Change a shader's mute or mask. */
   patchShader(key: LayerKey, patch: ShaderPatch) {
-    if (draft.created.some((s) => s.key === key)) {
-      set({ ...draft, created: draft.created.map((s) => (s.key === key ? { ...s, ...patch } : s)) });
-    } else {
-      set({ ...draft, edits: { ...draft.edits, [key]: { ...draft.edits[key], ...patch } } });
-    }
-  },
-  createShader(name: string, script: string, by: string): LayerKey {
-    const key = `new-${Date.now().toString(36)}-${nextNew++}`;
-    set({ ...draft, created: [...draft.created, { key, name, script, muted: false, by }], order: draft.order && [key, ...draft.order] });
-    return key;
-  },
-  deleteShader(key: LayerKey) {
-    if (draft.created.some((s) => s.key === key)) {
-      set({ ...draft, created: draft.created.filter((s) => s.key !== key), order: draft.order && draft.order.filter((k) => k !== key) });
-    } else if (!draft.deleted.includes(key)) {
-      set({ ...draft, deleted: [...draft.deleted, key] });
-    }
-  },
-  restoreShader(key: LayerKey) {
-    set({ ...draft, deleted: draft.deleted.filter((k) => k !== key) });
+    set({ ...draft, edits: { ...draft.edits, [key]: { ...draft.edits[key], ...patch } } });
   },
   reorder(keysTopFirst: LayerKey[]) {
     set({ ...draft, order: keysTopFirst });
-  },
-  /** Delete every shader (admin's "clear all"). */
-  clearAll(live: SceneNode[]) {
-    const keys = liveShaders(live).map((n) => keyOf(n.id));
-    set({ ...draft, created: [], deleted: [...new Set([...draft.deleted, ...keys])], order: null });
   },
   discard() {
     set(EMPTY);
@@ -232,11 +204,12 @@ const ignoreMissing = async (p: Promise<unknown>) => {
 };
 
 /**
- * Make the room match the draft: room tone, then deletions, edits, new
- * shaders and the stack's order. A failure part way leaves just the rest
+ * Make the room match the draft: room tone, then each shader's mute and
+ * mask, then the stack's order. A failure part way leaves just the rest
  * pending, and is thrown.
  */
 export async function applyDraft(live: SceneNode[]): Promise<void> {
+  const start = draft;
   let d = draft;
   // What's left, kept here until the end: the preview holds steady meanwhile.
   const step = (next: Draft) => {
@@ -246,9 +219,10 @@ export async function applyDraft(live: SceneNode[]): Promise<void> {
     await sendDraft(live, d, step);
   } finally {
     // Catch the scene up first, so the preview never drops a change before
-    // the live room shows it.
+    // the live room shows it. Edits made while the draft was being sent are
+    // kept: they only count where they still differ from the room.
     await invalidateScene().catch(() => {});
-    set(d);
+    set(draft === start ? d : draft);
   }
 }
 
@@ -264,40 +238,28 @@ async function sendDraft(live: SceneNode[], d: Draft, onStep: (next: Draft) => v
   }
   step({ ...d, roomtone: {}, roomtoneCode: null });
 
-  // Fix the order now, so new shaders keep their place once they get ids.
-  const order = layersOf(live, d)
-    .filter((l) => l.status !== "deleted")
-    .map((l) => l.key);
-
-  for (const key of d.deleted) {
-    await ignoreMissing(request("DELETE", `/api/shaders/${idOf(key)}`));
-    step({ ...d, deleted: d.deleted.filter((k) => k !== key), edits: omit(d.edits, key) });
-  }
+  const order = layersOf(live, d).map((l) => l.key);
 
   for (const [key, patch] of Object.entries(d.edits)) {
-    const node = live.find((n) => n.id === idOf(key));
-    const id = idOf(key)!;
-    const body: { name?: string; script?: string } = {};
-    if (patch.name !== undefined && patch.name !== (node?.meta?.name ?? `Shader #${id}`)) body.name = patch.name;
-    if (patch.script !== undefined && patch.script !== node?.script) body.script = patch.script;
-    if (Object.keys(body).length > 0) await ignoreMissing(request("PUT", `/api/shaders/${id}`, body));
-    if (patch.muted !== undefined && patch.muted !== node?.muted) {
-      await ignoreMissing(request("POST", `/api/shaders/${id}/muted`, { muted: patch.muted }));
-    }
+    const id = idOf(key);
+    const node = live.find((n) => n.id === id);
+    const mute =
+      patch.muted !== undefined && patch.muted !== node?.muted
+        ? () => ignoreMissing(request("POST", `/api/shaders/${id}/muted`, { muted: patch.muted }))
+        : null;
+    const mask =
+      patch.mask !== undefined && !sameMask(patch.mask, node?.mask ?? [])
+        ? () => ignoreMissing(request("POST", `/api/shaders/${id}/mask`, { mask: patch.mask }))
+        : null;
+    // Unmuting, the mask goes first, so the shader never runs on lights it's
+    // meant to stay off; muting, the mute does.
+    for (const send of patch.muted === false ? [mask, mute] : [mute, mask]) if (send) await send();
     step({ ...d, edits: omit(d.edits, key) });
-  }
-
-  const ids = new Map<LayerKey, number>();
-  for (const s of d.created) {
-    const node = await request<SceneNode>("POST", "/api/shaders", { name: s.name, script: s.script });
-    if (s.muted) await request("POST", `/api/shaders/${node.id}/muted`, { muted: true });
-    ids.set(s.key, node.id);
-    step({ ...d, created: d.created.filter((c) => c.key !== s.key) });
   }
 
   // Positions count up from the bottom (the room tone is 0); placing them
   // bottom first leaves each one where it belongs.
-  const want = order.map((k) => ids.get(k) ?? idOf(k)).filter((id): id is number => id !== null);
+  const want = order.map(idOf);
   const now = (await request<SceneNode[]>("GET", "/api/scene")).filter((n) => n.type === "js");
   const exists = new Set(now.map((n) => n.id));
   const final = want.filter((id) => exists.has(id));

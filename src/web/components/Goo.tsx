@@ -1,0 +1,374 @@
+// The color preview's dots as metaballs: each mark is a ball of goo, a
+// black-rimmed blob in its lights' color. Balls that come near each other
+// reach out and run together before they touch, as metaballs do, their colors
+// running together where they meet (the bigger ball's winning, as if on top);
+// counts are stiffer than single lights, keeping their shape more. Counts
+// that joined (see dotsOf) show one number, in the middle of their blob. They
+// glide, grow in and shrink away as the marks change, a frame at a time until
+// they settle. Counts and hovers ride over the goo as plain elements.
+
+import { useEffect, useLayoutEffect, useRef } from "react";
+import { swatch, type Gamut, type Vec3 } from "../../shared/lemtone.ts";
+import { sizeOf, titleOf, totalOf, type Group } from "../marks.ts";
+
+// How far a ball's field reaches, in its radii: a single light's a little past
+// its rim, so it reaches for its neighbors just before they touch; a count's
+// barely past, so it keeps its shape. Each ball's field is scaled to be EDGE
+// at its rim, so the further it reaches, the gentler it is there, and the
+// more its neighbors can pull it about.
+const REACH_ONE = 1.6;
+const REACH_COUNT = 1.15;
+const reachOf = (r: number) => {
+  const [one, count] = [sizeOf(1) / 2, sizeOf(2) / 2];
+  return REACH_ONE + (REACH_COUNT - REACH_ONE) * clamp((r - one) / (count - one));
+};
+// The goo's edge is wherever the field is this.
+const EDGE = 1;
+// The black rim (px).
+const RIM = 2.5;
+// Room around the area for balls at its edge (px).
+const PAD = 24;
+// How quickly a ball closes the gap to where it should be (ms, to close most of it).
+const EASE_MS = 70;
+// Half a number's width per digit, and the space kept between numbers (px).
+const LABEL_HALF_PX = 3.5;
+const LABEL_GAP_PX = 3;
+
+interface Look {
+  x: number;
+  y: number;
+  r: number;
+  rgb: Vec3;
+  alpha: number;
+  /** How many lights its own dot holds. */
+  n: number;
+  /** For a count, the key of the count it's counted with: its own, or the one it joined. */
+  cluster: string;
+}
+
+interface Ball extends Look {
+  to: Look;
+}
+
+interface Box {
+  x0: number;
+  y0: number;
+  x1: number;
+  y1: number;
+}
+
+interface Props {
+  /** The dots, bottom to top, `x` and `y` in px within the area. */
+  marks: Group[];
+  width: number;
+  height: number;
+  gamut: Gamut;
+}
+
+export function Goo({ marks, width, height, gamut }: Props) {
+  const canvas = useRef<HTMLCanvasElement>(null);
+  const balls = useRef(new Map<string, Ball>());
+  const labels = useRef(new Map<string, HTMLSpanElement>());
+  const kick = useRef(() => {});
+
+  // The goo, redrawn each frame while anything moves.
+  useLayoutEffect(() => {
+    const c = canvas.current!;
+    const dpr = Math.min(2, window.devicePixelRatio || 1);
+    const w = Math.round((width + 2 * PAD) * dpr);
+    const h = Math.round((height + 2 * PAD) * dpr);
+    c.width = w;
+    c.height = h;
+    const ctx = c.getContext("2d", { colorSpace: gamut })!;
+    const img = ctx.createImageData(w, h, { colorSpace: gamut });
+    const data = img.data;
+    // Per pixel (at its center): the field, the colors weighed into it, and
+    // how far it is from the goo's edge, where that's near.
+    const field = new Float32Array(w * h);
+    const sum = [0, 1, 2, 3, 4].map(() => new Float32Array(w * h)); // r, g, b, alpha, weight
+    const dist = new Float32Array(w * h);
+    const rim = RIM * dpr;
+    // As far from the edge as the rim (and its softening) reaches.
+    const band = rim + 1.5;
+
+    const rows = (box: Box, each: (start: number, end: number) => void) => {
+      for (let y = box.y0; y <= box.y1; y++) each(y * w + box.x0, y * w + box.x1 + 1);
+    };
+
+    /** Every pixel within the band of the edge piece (x0, y0)–(x1, y1) learns how near it is (squared, in `dist`). */
+    const near = (x0: number, y0: number, x1: number, y1: number) => {
+      const ex = x1 - x0;
+      const ey = y1 - y0;
+      const len2 = ex * ex + ey * ey || 1e-12;
+      const qx0 = Math.max(0, Math.floor(Math.min(x0, x1) - band));
+      const qx1 = Math.min(w - 1, Math.ceil(Math.max(x0, x1) + band));
+      const qy0 = Math.max(0, Math.floor(Math.min(y0, y1) - band));
+      const qy1 = Math.min(h - 1, Math.ceil(Math.max(y0, y1) + band));
+      for (let qy = qy0; qy <= qy1; qy++) {
+        for (let qx = qx0; qx <= qx1; qx++) {
+          const t = clamp(((qx - x0) * ex + (qy - y0) * ey) / len2);
+          const dx = qx - x0 - t * ex;
+          const dy = qy - y0 - t * ey;
+          const d2 = dx * dx + dy * dy;
+          const i = qy * w + qx;
+          if (d2 < dist[i]!) dist[i] = d2;
+        }
+      }
+    };
+
+    // The area the last frame drew in, to clear.
+    let was: Box = { x0: w, y0: h, x1: -1, y1: -1 };
+
+    const draw = () => {
+      // Where the goo can be this frame: around each ball, as far as its field and the edge's band reach.
+      const box = { x0: w, y0: h, x1: -1, y1: -1 };
+      for (const b of balls.current.values()) {
+        if (b.r < 0.05) continue;
+        const far = b.r * dpr * reachOf(b.r) + band + 1;
+        box.x0 = Math.min(box.x0, Math.max(0, Math.floor(b.x * dpr - far)));
+        box.x1 = Math.max(box.x1, Math.min(w - 1, Math.ceil(b.x * dpr + far)));
+        box.y0 = Math.min(box.y0, Math.max(0, Math.floor(b.y * dpr - far)));
+        box.y1 = Math.max(box.y1, Math.min(h - 1, Math.ceil(b.y * dpr + far)));
+      }
+      const all = { x0: Math.min(box.x0, was.x0), y0: Math.min(box.y0, was.y0), x1: Math.max(box.x1, was.x1), y1: Math.max(box.y1, was.y1) };
+      was = box;
+      rows(all, (s, e) => {
+        field.fill(0, s, e);
+        for (const a of sum) a.fill(0, s, e);
+        dist.fill(Infinity, s, e);
+        data.fill(0, s * 4, e * 4);
+      });
+
+      for (const b of balls.current.values()) {
+        if (b.r < 0.05) continue;
+        const cx = b.x * dpr;
+        const cy = b.y * dpr;
+        const reach = reachOf(b.r);
+        const far = b.r * dpr * reach;
+        // (distance / reach)², for each pixel; and the scale that puts a lone ball's edge on its rim.
+        const inv = 1 / (far * far);
+        const scale = 1 / (1 - 1 / (reach * reach)) ** 3;
+        const big = b.r ** 4;
+        const x0 = Math.max(0, Math.floor(cx - far));
+        const x1 = Math.min(w - 1, Math.ceil(cx + far));
+        const y0 = Math.max(0, Math.floor(cy - far));
+        const y1 = Math.min(h - 1, Math.ceil(cy + far));
+        for (let py = y0; py <= y1; py++) {
+          const dy = py + 0.5 - cy;
+          for (let px = x0; px <= x1; px++) {
+            const dx = px + 0.5 - cx;
+            const q = (dx * dx + dy * dy) * inv;
+            if (q >= 1) continue;
+            const k = 1 - q;
+            const g = k * k * k;
+            const i = py * w + px;
+            field[i]! += g * scale;
+            const weight = g * g * g * g * big;
+            sum[0]![i]! += weight * b.rgb[0];
+            sum[1]![i]! += weight * b.rgb[1];
+            sum[2]![i]! += weight * b.rgb[2];
+            sum[3]![i]! += weight * b.alpha;
+            sum[4]![i]! += weight;
+          }
+        }
+      }
+
+      // The edge, traced between pixel centers (marching squares), so every
+      // pixel near it knows its true distance: the rim is as wide all round,
+      // however the balls overlap.
+      for (let py = box.y0; py < Math.min(box.y1, h - 1); py++) {
+        for (let px = box.x0; px < Math.min(box.x1, w - 1); px++) {
+          const i = py * w + px;
+          const a = field[i]! - EDGE; // top left, then clockwise
+          const b = field[i + 1]! - EDGE;
+          const c = field[i + w + 1]! - EDGE;
+          const d = field[i + w]! - EDGE;
+          const inside = (a >= 0 ? 1 : 0) | (b >= 0 ? 2 : 0) | (c >= 0 ? 4 : 0) | (d >= 0 ? 8 : 0);
+          if (inside === 0 || inside === 15) continue;
+          // Where the edge crosses each side of the cell: top, right, bottom, left.
+          const tx = px + a / (a - b);
+          const ry = py + b / (b - c);
+          const bx = px + d / (d - c);
+          const ly = py + a / (a - d);
+          if (inside === 5 || inside === 10) {
+            // A saddle: the cell's middle says which corners join.
+            if (a + b + c + d >= 0 === (inside === 5)) {
+              near(tx, py, px + 1, ry);
+              near(bx, py + 1, px, ly);
+            } else {
+              near(tx, py, px, ly);
+              near(px + 1, ry, bx, py + 1);
+            }
+            continue;
+          }
+          // Otherwise the edge crosses just two sides.
+          let [x0, y0] = [0, 0];
+          let first = true;
+          const cross = (x: number, y: number) => {
+            if (first) [x0, y0, first] = [x, y, false];
+            else near(x0, y0, x, y);
+          };
+          if (a >= 0 !== b >= 0) cross(tx, py);
+          if (b >= 0 !== c >= 0) cross(px + 1, ry);
+          if (d >= 0 !== c >= 0) cross(bx, py + 1);
+          if (a >= 0 !== d >= 0) cross(px, ly);
+        }
+      }
+
+      rows(box, (s, e) => {
+        for (let i = s; i < e; i++) {
+          const f = field[i]!;
+          if (f <= 0) continue;
+          // How far inside the edge (device px); out past the band, as good as forever.
+          const depth = (f >= EDGE ? 1 : -1) * Math.sqrt(dist[i]!);
+          if (depth < -1) continue;
+          // The black rim, and the fill inside it, anti-aliased.
+          const a = clamp(depth + 0.5);
+          if (a <= 0) continue;
+          const aFill = clamp(depth - rim + 0.5);
+          const weight = sum[4]![i]!;
+          const per = weight > 0 ? 1 / weight : 0;
+          const o = i * 4;
+          // Fill over black: premultiplied, then back out of the rim's coverage.
+          data[o] = ((sum[0]![i]! * per * aFill) / a) * 255;
+          data[o + 1] = ((sum[1]![i]! * per * aFill) / a) * 255;
+          data[o + 2] = ((sum[2]![i]! * per * aFill) / a) * 255;
+          data[o + 3] = a * (weight > 0 ? sum[3]![i]! * per : 1) * 255;
+        }
+      });
+      if (all.x1 >= all.x0 && all.y1 >= all.y0) ctx.putImageData(img, 0, 0, all.x0, all.y0, all.x1 - all.x0 + 1, all.y1 - all.y0 + 1);
+    };
+
+    let frame = 0;
+    let running = false;
+    let last = 0;
+    const step = (now: number) => {
+      const t = 1 - Math.exp(-Math.min(100, Math.max(0, now - last)) / EASE_MS);
+      last = now;
+      let moving = false;
+      for (const [key, b] of balls.current) {
+        const to = b.to;
+        b.x += (to.x - b.x) * t;
+        b.y += (to.y - b.y) * t;
+        b.r += (to.r - b.r) * t;
+        b.alpha += (to.alpha - b.alpha) * t;
+        b.rgb = b.rgb.map((v, i) => v + (to.rgb[i]! - v) * t) as Vec3;
+        if (to.r === 0 && b.r < 0.05) {
+          balls.current.delete(key);
+        } else if (Math.abs(to.x - b.x) + Math.abs(to.y - b.y) + Math.abs(to.r - b.r) > 0.02) {
+          moving = true;
+        } else {
+          Object.assign(b, { ...to, to });
+        }
+      }
+      draw();
+
+      // Each count's number on its ball, or for counts that joined, in the
+      // middle of their blob (weighed by size); then nudged apart where
+      // numbers would print over each other.
+      const byCluster = new Map<string, Ball[]>();
+      for (const b of balls.current.values()) {
+        if (b.to.n > 1 && b.r >= 0.05) byCluster.set(b.to.cluster, [...(byCluster.get(b.to.cluster) ?? []), b]);
+      }
+      const spots: { el: HTMLSpanElement; x: number; y: number; half: number }[] = [];
+      for (const [key, el] of labels.current) {
+        const b = balls.current.get(key);
+        if (!b) continue;
+        let [x, y] = [b.x, b.y];
+        const members = b.to.n > 1 && key === b.to.cluster ? byCluster.get(key) : undefined;
+        if (members && members.length > 1) {
+          const weight = members.reduce((sum, m) => sum + m.r * m.r, 0) || 1;
+          x = members.reduce((sum, m) => sum + m.x * m.r * m.r, 0) / weight;
+          y = members.reduce((sum, m) => sum + m.y * m.r * m.r, 0) / weight;
+        }
+        spots.push({ el, x, y, half: (el.textContent?.length ?? 0) * LABEL_HALF_PX });
+      }
+      for (let round = 0; round < 4; round++) {
+        for (const [i, a] of spots.entries()) {
+          for (const b of spots.slice(i + 1)) {
+            if (!a.half || !b.half) continue;
+            const need = a.half + b.half + LABEL_GAP_PX;
+            const dx = b.x - a.x;
+            const dy = b.y - a.y;
+            const d = Math.hypot(dx, dy);
+            if (d >= need) continue;
+            const [ux, uy] = d > 0.01 ? [dx / d, dy / d] : [1, 0];
+            const push = (need - d) / 2;
+            a.x -= ux * push;
+            a.y -= uy * push;
+            b.x += ux * push;
+            b.y += uy * push;
+          }
+        }
+      }
+      for (const s of spots) {
+        s.el.style.transform = `translate(${s.x - PAD}px, ${s.y - PAD}px) translate(-50%, -50%)`;
+        s.el.style.visibility = "visible";
+      }
+      if (moving) frame = requestAnimationFrame(step);
+      else running = false;
+    };
+    kick.current = () => {
+      if (running) return;
+      running = true;
+      last = performance.now();
+      frame = requestAnimationFrame(step);
+    };
+    kick.current();
+    return () => {
+      cancelAnimationFrame(frame);
+      kick.current = () => {};
+    };
+  }, [width, height, gamut]);
+
+  // Where each ball should be: new ones grow in where they are, gone ones shrink away.
+  useEffect(() => {
+    const here = new Set<string>();
+    for (const g of marks) {
+      here.add(g.key);
+      const n = g.ids.length;
+      // A count that joined another is counted with it.
+      const cluster = n > 1 && g.into ? g.into.key : g.key;
+      const to = { x: g.x + PAD, y: g.y + PAD, r: sizeOf(n) / 2, rgb: swatch(g.t.a, g.t.b, gamut), alpha: g.dim ? 0.5 : 1, n, cluster };
+      const b = balls.current.get(g.key);
+      if (b) b.to = to;
+      else balls.current.set(g.key, { ...to, r: 0, to });
+    }
+    for (const [key, b] of balls.current) if (!here.has(key)) b.to = { ...b.to, r: 0 };
+    kick.current();
+  });
+
+  return (
+    <>
+      <canvas
+        ref={canvas}
+        className="goo"
+        style={{ left: -PAD, top: -PAD, width: width + 2 * PAD, height: height + 2 * PAD }}
+        aria-hidden="true"
+      />
+      {marks.map((g) => {
+        const n = g.ids.length;
+        const joined = n > 1 && g.into;
+        const [r, gr, b] = swatch(g.t.a, g.t.b, gamut);
+        const light = 0.2126 * r + 0.7152 * gr + 0.0722 * b > 0.6;
+        return (
+          <span
+            key={g.key}
+            ref={(el) => {
+              if (el) labels.current.set(g.key, el);
+              else labels.current.delete(g.key);
+            }}
+            className="goo-mark"
+            style={{ width: sizeOf(n), height: sizeOf(n), color: light ? "#0d0b09" : "#fff" }}
+            title={titleOf(joined ? g.into! : g)}
+          >
+            {/* Counts that joined another are counted there; single lights carry no number. */}
+            {!g.into && n > 1 && totalOf(g)}
+          </span>
+        );
+      })}
+    </>
+  );
+}
+
+const clamp = (v: number) => Math.min(1, Math.max(0, v));

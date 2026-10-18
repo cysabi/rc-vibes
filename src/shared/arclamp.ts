@@ -26,6 +26,14 @@ export interface ShaderDescriptor {
   template?: RoomTemplate;
   state: ShaderState;
   muted: boolean;
+  /** Lights this shader may not change (there its output is its input). Omitted when none. */
+  mask?: number[];
+  /**
+   * Lights this shader is trying to change: where its output differed from its input within the
+   * last second, before its mask or mute (take those off for what it actually changes). Omitted
+   * when none, and by arclamp before it reported this.
+   */
+  changing?: number[];
   error?: string;
   ports?: PortInfo[];
   /** Omitted when zero; -1 on the roomtone. */

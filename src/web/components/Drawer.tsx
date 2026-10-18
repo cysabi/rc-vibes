@@ -1,14 +1,15 @@
 // The map's bottom edge: lights that aren't on the map yet, and whatever sits
-// in the bottom-right corner (the scale and zoom). A small card in the
-// bottom-left corner opens and closes a full-width sheet of the lights, which
-// grows up from the bottom edge with the card and corner riding above it. Drag a light onto the plan to place it; in
-// Move mode, drag a light from the map onto the drawer to take it off.
-// Hidden when every light is placed.
+// in the bottom-right corner (the floors, scale and zoom). A small card in the
+// bottom-left corner opens and closes a sheet of the lights, which grows up
+// from the bottom edge with the card and corner riding above it. Drag a light
+// onto the plan to place it; in Edit lights, drag a light from the map onto the
+// drawer to take it off. Hidden when every light is placed.
 
 import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import type { LightInfo } from "../../shared/arclamp.ts";
-import { baseType, lemtoneOf } from "../../shared/fixtures.ts";
+import { baseType, seenOf } from "../../shared/fixtures.ts";
 import { lemtoneCss } from "../../shared/lemtone.ts";
+import { screenGamut } from "../gamut.ts";
 import { ChevronUpIcon } from "../icons.tsx";
 import { latestFrame } from "../live.ts";
 
@@ -27,9 +28,11 @@ interface Props {
   onDrop: (id: number, clientX: number, clientY: number) => void;
   /** The bottom-right corner's contents. */
   children?: ReactNode;
+  /** In the bottom-left corner, after the drawer's own card. */
+  lead?: ReactNode;
 }
 
-export function Drawer({ lights, onDrop, children }: Props) {
+export function Drawer({ lights, onDrop, children, lead }: Props) {
   // Until someone opens or closes it, open only if it's short.
   const [chosen, setOpen] = useState<boolean | null>(null);
   const open = chosen ?? lights.length <= OPEN_UP_TO;
@@ -43,7 +46,7 @@ export function Drawer({ lights, onDrop, children }: Props) {
     return () => window.clearInterval(t);
   }, [open]);
   const frame = latestFrame();
-  const colorOf = (l: LightInfo) => lemtoneCss(lemtoneOf(frame?.lights.get(l.id), l.type));
+  const colorOf = (l: LightInfo) => lemtoneCss(seenOf(frame?.lights.get(l.id), l.type), screenGamut());
   const groups = [
     ...GROUPS,
     ...[...new Set(lights.map((l) => baseType(l.type)))].filter((b) => !GROUPS.some((g) => g.base === b)).map((b) => ({ base: b, title: b })),
@@ -73,7 +76,6 @@ export function Drawer({ lights, onDrop, children }: Props) {
     },
   });
 
-  const count = `${lights.length} ${lights.length === 1 ? "light isn't" : "lights aren't"} on the map`;
 
   return (
     <div className="map-bottom">
@@ -83,15 +85,17 @@ export function Drawer({ lights, onDrop, children }: Props) {
             className={open ? "drawer drawer-tab open" : "drawer drawer-tab"}
             aria-expanded={open}
             aria-controls="drawer-sheet"
+            aria-label={`${lights.length} ${lights.length === 1 ? "light isn't" : "lights aren't"} on the map`}
             onClick={() => setOpen(!open)}
           >
-            <span>{count}</span>
-            <span className="drawer-tab-action">
-              {open ? "Hide" : "Show"}
+            <span className="drawer-tab-count mono">{lights.length}</span>
+            <span>not on the map</span>
+            <span className="drawer-tab-action" aria-hidden="true">
               <ChevronUpIcon />
             </span>
           </button>
         )}
+        {lead}
         <span className="spacer" />
         {children}
       </div>
@@ -99,22 +103,22 @@ export function Drawer({ lights, onDrop, children }: Props) {
         // Always rendered, so opening and closing can animate; inert while closed.
         <div id="drawer-sheet" className={open ? "drawer drawer-sheet open" : "drawer drawer-sheet"} inert={!open}>
           <div className="drawer-sheet-inner">
-          <div className="drawer-body">
-          <p className="hint">Drag a light onto the plan to place it.</p>
-          {groups.map((g) => (
-            <section key={g.base}>
-              <h3 className="section-title">{g.title}</h3>
-              <div className="drawer-lights">
-                {g.lights.map((l) => (
-                  <button key={l.id} className="drawer-light mono" title={`Light ${l.id}`} {...handlers(l)}>
-                    <span className="dot" style={{ background: colorOf(l) }} />
-                    {l.id}
-                  </button>
-                ))}
-              </div>
-            </section>
-          ))}
-          </div>
+            <div className="drawer-body">
+              <p className="hint">Drag a light onto the plan to place it.</p>
+              {groups.map((g) => (
+                <section key={g.base}>
+                  <h3 className="label">{g.title}</h3>
+                  <div className="drawer-lights">
+                    {g.lights.map((l) => (
+                      <button key={l.id} className="drawer-light mono" title={`Light ${l.id}`} {...handlers(l)}>
+                        <span className="dot" style={{ background: colorOf(l) }} />
+                        {l.id}
+                      </button>
+                    ))}
+                  </div>
+                </section>
+              ))}
+            </div>
           </div>
         </div>
       )}

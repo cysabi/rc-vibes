@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { abOf, hueChroma, kelvinOf, lemtoneCode, lookOf, lumensText, swatch, whiteAB } from "./lemtone.ts";
+import { abOf, cssColor, hueChroma, kelvinOf, lemtoneCode, lightRgb, lookOf, lumensText, swatch, whiteAB } from "./lemtone.ts";
 
 describe("lemtone colors", () => {
   it("puts whites where Walter's tool page does", () => {
@@ -48,6 +48,23 @@ describe("lemtone colors", () => {
     expect(Math.max(red[1], red[2])).toBeLessThan(0.6);
     // Far outside sRGB still gives a color in range.
     for (const v of swatch(-0.6, -0.9)) expect(v >= 0 && v <= 1).toBe(true);
+  });
+
+  it("keeps saturated colors that sRGB can't show in Display P3", () => {
+    // A vivid green past sRGB's edge: sRGB has to drop its red, P3 doesn't.
+    expect(swatch(-0.26, 0.16)[0]).toBe(0);
+    expect(swatch(-0.26, 0.16, "display-p3")[0]).toBeGreaterThan(0.2);
+    // White is white either way.
+    for (const v of swatch(0, 0, "display-p3")) expect(v).toBeCloseTo(1, 6);
+    expect(cssColor([1, 0.5, 0], "srgb", 0.25)).toBe("rgb(255 128 0 / 0.25)");
+    expect(cssColor([1, 0.5, 0], "display-p3")).toBe("color(display-p3 1 0.5 0)");
+  });
+
+  it("gives light as linear RGB with a luminance of one", () => {
+    for (const v of lightRgb(0, 0)) expect(v).toBeCloseTo(1, 6);
+    const [r, g, b] = lightRgb(0.069097, 0.146986, "display-p3"); // 2800 K
+    expect(0.2289746 * r + 0.6917385 * g + 0.0792869 * b).toBeCloseTo(1, 6);
+    expect(r).toBeGreaterThan(g);
   });
 
   it("dims by how bright a light looks", () => {

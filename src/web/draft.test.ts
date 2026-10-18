@@ -4,20 +4,26 @@ import type { SceneNode } from "../shared/vibes.ts";
 const calls: string[] = [];
 let failOn: string | null = null;
 let scene: SceneNode[] = [];
+// Something done while the next request is in flight (an edit mid-apply).
+let during: (() => void) | null = null;
 
 vi.mock("./api.ts", () => ({
   request: vi.fn(async (method: string, path: string, body?: unknown) => {
     const call = `${method} ${path}${body === undefined ? "" : ` ${JSON.stringify(body)}`}`;
     if (method === "GET" && path === "/api/scene") return scene;
     calls.push(call);
+    if (during) {
+      const meanwhile = during;
+      during = null;
+      meanwhile();
+    }
     if (failOn && call.startsWith(failOn)) throw new Error("arclamp said no");
-    if (method === "POST" && path === "/api/shaders") return { id: 90 + calls.length };
     return {};
   }),
   invalidateScene: vi.fn(async () => {}),
 }));
 
-const { applyDraft, currentDraft, drafts, EMPTY, layersOf, pendingCount, roomtoneChanges, templateOf } = await import("./draft.ts");
+const { applyDraft, currentDraft, drafts, EMPTY, layersOf, pendingCount, reorderWithin, roomtoneChanges, templateOf } = await import("./draft.ts");
 
 function shader(id: number, position: number, extra: Partial<SceneNode> = {}): SceneNode {
   return {
@@ -29,7 +35,6 @@ function shader(id: number, position: number, extra: Partial<SceneNode> = {}): S
     muted: false,
     created_by: "rc:1",
     modified_by: "rc:1",
-    meta: { name: `S${id}`, createdBy: { id: "rc:1", name: "Ana" }, modifiedBy: { id: "rc:1", name: "Ana" }, seenError: null },
     ...extra,
   } as SceneNode;
 }
@@ -43,56 +48,53 @@ const roomtone: SceneNode = {
   muted: false,
   created_by: "",
   modified_by: "",
-  meta: null,
 } as SceneNode;
 
 // Live: shader 12 on top of 11.
 const live = [roomtone, shader(11, 1), shader(12, 2)];
-const keys = (d = currentDraft()) => layersOf(live, d).map((l) => `${l.key}:${l.status}`);
+const keys = (d = currentDraft()) => layersOf(live, d).map((l) => l.key);
 
 beforeEach(() => {
   drafts.discard();
   calls.length = 0;
   failOn = null;
+  during = null;
   scene = live;
 });
 
 describe("the stack with pending edits", () => {
   it("shows the live stack, top first, with nothing pending", () => {
-    expect(keys()).toEqual(["#12:live", "#11:live"]);
+    expect(keys()).toEqual(["#12", "#11"]);
     expect(pendingCount(live, currentDraft())).toBe(0);
   });
 
-  it("puts new shaders on top, and marks edits and deletions in place", () => {
-    drafts.createShader("Fresh", "function update(){}", "Rose");
-    drafts.patchShader("#11", { script: "function update(){ return {lights:[]} }" });
-    drafts.deleteShader("#12");
-    expect(keys()).toEqual([expect.stringMatching(/^new-.*:new$/), "#12:deleted", "#11:edited"]);
-    expect(pendingCount(live, currentDraft())).toBe(3);
-  });
-
   it("doesn't count an edit that matches what's live", () => {
-    drafts.patchShader("#11", { name: "S11", muted: false });
-    expect(keys()).toEqual(["#12:live", "#11:live"]);
+    drafts.patchShader("#11", { muted: false });
+    expect(keys()).toEqual(["#12", "#11"]);
     expect(pendingCount(live, currentDraft())).toBe(0);
     drafts.patchShader("#11", { muted: true });
     expect(pendingCount(live, currentDraft())).toBe(1);
   });
 
-  it("counts a reorder once, and not once it's back as it was", () => {
-    drafts.reorder(["#11", "#12"]);
-    expect(keys()).toEqual(["#11:live", "#12:live"]);
-    expect(pendingCount(live, currentDraft())).toBe(1);
-    drafts.reorder(["#12", "#11"]);
-    expect(pendingCount(live, currentDraft())).toBe(0);
+  it("rearranges some shaders among their own places, leaving the rest put", () => {
+    expect(reorderWithin(["a", "b", "c", "d", "e"], ["d", "b"])).toEqual(["a", "d", "c", "b", "e"]);
+    expect(reorderWithin(["a", "b", "c"], [])).toEqual(["a", "b", "c"]);
   });
 
-  it("drops a new shader outright when it's deleted, and restores a live one", () => {
-    const key = drafts.createShader("Fresh", "function update(){}", "Rose");
-    drafts.deleteShader(key);
-    drafts.deleteShader("#11");
-    drafts.restoreShader("#11");
-    expect(currentDraft().created).toEqual([]);
+  it("counts a mask that differs from the live one, in any order", () => {
+    const masked = [roomtone, shader(11, 1, { mask: [1, 64] }), shader(12, 2)];
+    drafts.patchShader("#11", { mask: [64, 1] });
+    expect(pendingCount(masked, currentDraft())).toBe(0);
+    drafts.patchShader("#11", { mask: [64] });
+    expect(layersOf(masked, currentDraft()).find((l) => l.key === "#11")!.mask).toEqual([64]);
+    expect(pendingCount(masked, currentDraft())).toBe(1);
+  });
+
+  it("counts a reorder once, and not once it's back as it was", () => {
+    drafts.reorder(["#11", "#12"]);
+    expect(keys()).toEqual(["#11", "#12"]);
+    expect(pendingCount(live, currentDraft())).toBe(1);
+    drafts.reorder(["#12", "#11"]);
     expect(pendingCount(live, currentDraft())).toBe(0);
   });
 
@@ -102,10 +104,9 @@ describe("the stack with pending edits", () => {
     expect(layersOf(later, currentDraft()).map((l) => l.key)).toEqual(["#13", "#11", "#12"]);
   });
 
-  it("clears the stack by deleting every shader", () => {
-    drafts.createShader("Fresh", "function update(){}", "Rose");
-    drafts.clearAll(live);
-    expect(keys()).toEqual(["#12:deleted", "#11:deleted"]);
+  it("names shaders by id, and credits whoever arclamp says made them", () => {
+    const [top] = layersOf(live, currentDraft());
+    expect(top).toMatchObject({ name: "Shader #12", by: "rc:1" });
   });
 });
 
@@ -126,28 +127,40 @@ describe("room tone with pending edits", () => {
 });
 
 describe("apply", () => {
-  it("sends room tone, deletions, edits, new shaders, then the order", async () => {
+  it("sends room tone, then mutes and masks, then the order", async () => {
     drafts.setRoomtone({ "64": { on: 1 } }, "on");
-    drafts.deleteShader("#11");
-    drafts.patchShader("#12", { name: "Renamed", muted: true });
-    drafts.createShader("Fresh", "function update(){}", "Rose");
-    // After the deletion and creation, arclamp has 12 under the new 95.
-    scene = [roomtone, shader(12, 1), shader(95, 2)];
+    drafts.patchShader("#12", { muted: true });
+    drafts.reorder(["#11", "#12"]);
     await applyDraft(live);
     expect(calls).toEqual([
       'PUT /api/roomtone {"lights":{"64":{"on":1}},"code":"on"}',
-      "DELETE /api/shaders/11",
-      'PUT /api/shaders/12 {"name":"Renamed"}',
       'POST /api/shaders/12/muted {"muted":true}',
-      'POST /api/shaders {"name":"Fresh","script":"function update(){}"}',
+      'POST /api/shaders/12/position {"position":1}',
+      'POST /api/shaders/11/position {"position":2}',
     ]);
     expect(currentDraft()).toBe(EMPTY);
+  });
+
+  it("masks before unmuting, so a shader switched on for some lights never runs on the rest", async () => {
+    const muted = [roomtone, shader(11, 1, { muted: true }), shader(12, 2)];
+    scene = muted;
+    drafts.patchShader("#11", { muted: false, mask: [64] });
+    await applyDraft(muted);
+    expect(calls).toEqual(['POST /api/shaders/11/mask {"mask":[64]}', 'POST /api/shaders/11/muted {"muted":false}']);
   });
 
   it("moves shaders bottom first when the order changed", async () => {
     drafts.reorder(["#11", "#12"]);
     await applyDraft(live);
     expect(calls).toEqual(['POST /api/shaders/12/position {"position":1}', 'POST /api/shaders/11/position {"position":2}']);
+  });
+
+  it("keeps edits made while it sends", async () => {
+    drafts.setRoomtone({ "1": { brightness: 0.2 } }, "dim");
+    // Dragged on while the room tone is on its way.
+    during = () => drafts.setRoomtone({ "1": { brightness: 0.3 } }, "dimmer");
+    await applyDraft(live);
+    expect(currentDraft().roomtone).toEqual({ "1": { brightness: 0.3 } });
   });
 
   it("leaves just what didn't land pending when a step fails", async () => {

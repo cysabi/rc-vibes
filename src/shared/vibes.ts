@@ -18,23 +18,8 @@ export interface LoginOptions {
   dev: boolean;
 }
 
-/** What vibes knows about a shader that arclamp doesn't. */
-export interface ShaderMeta {
-  name: string;
-  createdBy: Person;
-  modifiedBy: Person;
-  /**
-   * arclamp never clears a shader's error, even after a later script runs
-   * fine. This is the error that was already showing at the last successful
-   * save through vibes, so the UI can hide it.
-   */
-  seenError: string | null;
-}
-
-export interface SceneNode extends ShaderDescriptor {
-  /** Null for shaders created outside vibes, and for the roomtone. */
-  meta: ShaderMeta | null;
-}
+/** A shader in the scene, as vibes passes it on from arclamp. */
+export type SceneNode = ShaderDescriptor;
 
 /** arclamp's lights and rails, with positions, rails and orientations changed in vibes applied. */
 export interface Lights extends LightsResponse {
@@ -60,6 +45,12 @@ export interface TypeChange {
   type: string;
 }
 
+/** A light's whole set of tags, as it should be now. */
+export interface TagChange {
+  id: number;
+  tags: string[];
+}
+
 export interface Status {
   /** Whether vibes can reach arclamp's API with its key. */
   arclamp: "ok" | "unreachable" | "rejected";
@@ -75,10 +66,12 @@ export type ActivityAction =
   | "shader.move"
   | "shader.mute"
   | "shader.unmute"
+  | "shader.mask"
   | "roomtone.set"
   | "scene.clear"
   | "lights.move"
   | "lights.turn"
+  | "lights.tag"
   | "rails.change";
 
 export interface ActivityEntry {

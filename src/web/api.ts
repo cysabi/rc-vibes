@@ -3,7 +3,6 @@
 import { QueryCache, QueryClient, useMutation, useQuery } from "@tanstack/react-query";
 import type { HealthResponse } from "../shared/arclamp.ts";
 import type {
-  ActivityEntry,
   ApiError,
   Lights,
   LoginOptions,
@@ -12,6 +11,7 @@ import type {
   RailChange,
   SceneNode,
   Status,
+  TagChange,
   TypeChange,
 } from "../shared/vibes.ts";
 
@@ -83,19 +83,7 @@ export const useScene = () =>
 export const useHealth = () =>
   useQuery({ queryKey: ["health"], queryFn: () => request<HealthResponse>("GET", "/api/health"), refetchInterval: 2000 });
 
-export const useActivity = () =>
-  useQuery({
-    queryKey: ["activity"],
-    queryFn: () => request<ActivityEntry[]>("GET", "/api/activity?limit=100"),
-    refetchInterval: 3000,
-  });
-
-export function invalidateScene() {
-  return Promise.all([
-    queryClient.invalidateQueries({ queryKey: ["scene"] }),
-    queryClient.invalidateQueries({ queryKey: ["activity"] }),
-  ]);
-}
+export const invalidateScene = () => queryClient.invalidateQueries({ queryKey: ["scene"] });
 
 export function useDevLogin() {
   return useMutation({
@@ -108,78 +96,34 @@ export function useLogout() {
   return useMutation({
     mutationFn: () => request<void>("POST", "/auth/logout"),
     onSuccess: () => {
-      queryClient.clear();
+      // Logged out first, so the app swaps to the login page; then drop the
+      // rest. (clear() would also drop "me" from under the mounted app, which
+      // then never hears that it's null.)
       queryClient.setQueryData(["me"], null);
+      queryClient.removeQueries({ predicate: (q) => q.queryKey[0] !== "me" });
     },
   });
 }
 
-export function useCreateShader() {
-  return useMutation({
-    mutationFn: (body: { name: string; script: string }) => request<SceneNode>("POST", "/api/shaders", body),
-    onSettled: invalidateScene,
-  });
-}
+const invalidateLights = () => queryClient.invalidateQueries({ queryKey: ["lights"] });
 
-export function useUpdateShader() {
-  return useMutation({
-    mutationFn: ({ id, ...body }: { id: number; name?: string; script?: string }) =>
-      request<SceneNode>("PUT", `/api/shaders/${id}`, body),
-    onSettled: invalidateScene,
-  });
-}
-
-export function useDeleteShader() {
-  return useMutation({
-    mutationFn: (id: number) => request<void>("DELETE", `/api/shaders/${id}`),
-    onSettled: invalidateScene,
-  });
-}
-
-export function useSetMuted() {
-  return useMutation({
-    mutationFn: ({ id, muted }: { id: number; muted: boolean }) =>
-      request<void>("POST", `/api/shaders/${id}/muted`, { muted }),
-    onSettled: invalidateScene,
-  });
-}
-
-export function useMoveShader() {
-  return useMutation({
-    mutationFn: ({ id, position }: { id: number; position: number }) =>
-      request<void>("POST", `/api/shaders/${id}/position`, { position }),
-    onSettled: invalidateScene,
-  });
-}
-
-const invalidateLights = () =>
-  Promise.all([
-    queryClient.invalidateQueries({ queryKey: ["lights"] }),
-    queryClient.invalidateQueries({ queryKey: ["activity"] }),
-  ]);
-
-/** A change to the map: rails drawn or moved, lights moved, and/or lights turned to another orientation. */
+/** A change to the map: rails drawn or moved, lights moved, turned to another orientation, and/or tagged. */
 export interface LayoutChange {
   rails?: RailChange[];
   placements?: Placement[];
   types?: TypeChange[];
+  tags?: TagChange[];
 }
 
 export function useChangeLayout() {
   return useMutation({
     // Rails first, so lights can be put on a rail drawn in the same change.
-    mutationFn: async ({ rails, placements, types }: LayoutChange) => {
+    mutationFn: async ({ rails, placements, types, tags }: LayoutChange) => {
       if (rails?.length) await request<void>("PUT", "/api/rails", { rails });
       if (placements?.length) await request<void>("PUT", "/api/placements", { placements });
       if (types?.length) await request<void>("PUT", "/api/light-types", { lights: types });
+      if (tags?.length) await request<void>("PUT", "/api/light-tags", { lights: tags });
     },
     onSettled: invalidateLights,
-  });
-}
-
-export function useClearScene() {
-  return useMutation({
-    mutationFn: () => request<void>("DELETE", "/api/scene"),
-    onSettled: invalidateScene,
   });
 }

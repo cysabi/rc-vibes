@@ -5,7 +5,8 @@
 // brightness), a brightness where 1.0 is 1000 lm (a fixed unit, not any
 // light's maximum), and a fidelity: 0 builds pale colors and whites from the
 // RGB LEDs, 1 from the white ones. Each bulb solves this into its own PWM;
-// vibes only converts it for picking and display.
+// this converts it for picking and display, and bulb.ts says what light a
+// bulb actually makes of it.
 
 export type Vec3 = [number, number, number];
 export type XY = [number, number];
@@ -85,20 +86,49 @@ const WHITE_TOLERANCE = 0.005;
  * white to any color.
  */
 export function kelvinOf(a: number, b: number, tolerance = WHITE_TOLERANCE): number | null {
+  const { mired, off } = nearestWhite(a, b);
+  return off <= tolerance ? 1e6 / mired : null;
+}
+
+// The coarse pass's whites, every 2 mired across the range, worked out once.
+let coarse: { m: number; a: number; b: number }[] | null = null;
+// Nearest whites found already: the same few colors are named over and over as things render.
+const nearest = new Map<string, { mired: number; off: number }>();
+
+/** The nearest white to a color (in mired) and how far off it the color is (in a/b). */
+function nearestWhite(a: number, b: number): { mired: number; off: number } {
+  const key = `${a} ${b}`;
+  const known = nearest.get(key);
+  if (known) return known;
+  if (nearest.size > 4096) nearest.clear();
+  if (!coarse) {
+    coarse = [];
+    for (let m = 1e6 / WHITE_K_MAX; m <= 1e6 / WHITE_K_MIN; m += 2) {
+      const [wa, wb] = whiteAB(1e6 / m);
+      coarse.push({ m, a: wa, b: wb });
+    }
+  }
   // Coarse to fine, in mired: even steps in mired are even steps in look.
   let best = 0;
   let bestD = Infinity;
-  const look = (m: number) => {
+  for (const w of coarse) {
+    const d = Math.hypot(w.a - a, w.b - b);
+    if (d < bestD) {
+      bestD = d;
+      best = w.m;
+    }
+  }
+  for (let m = best - 2; m <= best + 2; m += 0.02) {
     const [wa, wb] = whiteAB(1e6 / m);
     const d = Math.hypot(wa - a, wb - b);
     if (d < bestD) {
       bestD = d;
       best = m;
     }
-  };
-  for (let m = 1e6 / WHITE_K_MAX; m <= 1e6 / WHITE_K_MIN; m += 2) look(m);
-  for (let m = best - 2; m <= best + 2; m += 0.02) look(m);
-  return bestD <= tolerance ? 1e6 / best : null;
+  }
+  const found = { mired: best, off: bestD };
+  nearest.set(key, found);
+  return found;
 }
 
 /** Hue (degrees, 0–360) and chroma of a color: OKLCh at L = 1. */
@@ -115,34 +145,75 @@ export function abOf(hue: number, chroma: number): [number, number] {
 
 const gamma = (v: number) => (v <= 0.0031308 ? 12.92 * v : 1.055 * Math.pow(v, 1 / 2.4) - 0.055);
 
+/** The RGB spaces swatches come in: sRGB, or Display P3 for screens that show it. Both use sRGB's gamma. */
+export type Gamut = "srgb" | "display-p3";
+
+// OKLab's LMS (cubed) -> linear RGB. sRGB's is Björn Ottosson's; P3's is that
+// composed with sRGB -> XYZ -> Display P3 (CSS Color 4's matrices).
+export const LMS_RGB: Record<Gamut, number[][]> = {
+  srgb: [
+    [4.0767416621, -3.3077115913, 0.2309699292],
+    [-1.2684380046, 2.6097574011, -0.3413193965],
+    [-0.0041960863, -0.7034186147, 1.707614701],
+  ],
+  "display-p3": [
+    [3.1277689872, -2.2571357962, 0.129366809],
+    [-1.0910090478, 2.4133317587, -0.3223227108],
+    [-0.026010813, -0.5080413259, 1.5340521389],
+  ],
+};
+
 /**
- * The brightest sRGB color (0–1 per channel, gamma-encoded) with this
+ * The brightest color (0–1 per channel, gamma-encoded, in `gamut`) with this
  * color's hue and chroma: what a light of this color looks like, ignoring
- * how bright it is. Colors beyond sRGB lose the part the screen can't show.
+ * how bright it is. Colors beyond the gamut lose the part the screen can't
+ * show; Display P3 keeps more of the saturated ones.
  */
-export function swatch(a: number, b: number): Vec3 {
-  // OKLab (L = 1) -> LMS -> linear sRGB (Björn Ottosson's matrices).
+export function swatch(a: number, b: number, gamut: Gamut = "srgb"): Vec3 {
+  const rgb = linearOf(a, b, gamut);
+  const top = Math.max(...rgb) || 1;
+  return rgb.map((v) => gamma(v / top)) as Vec3;
+}
+
+/** OKLab (L = 1) -> LMS -> linear RGB, without what the gamut can't show. */
+function linearOf(a: number, b: number, gamut: Gamut): Vec3 {
   const l = Math.pow(1 + 0.3963377774 * a + 0.2158037573 * b, 3);
   const m = Math.pow(1 - 0.1055613458 * a - 0.0638541728 * b, 3);
   const s = Math.pow(1 - 0.0894841775 * a - 1.291485548 * b, 3);
-  const rgb = [
-    4.0767416621 * l - 3.3077115913 * m + 0.2309699292 * s,
-    -1.2684380046 * l + 2.6097574011 * m - 0.3413193965 * s,
-    -0.0041960863 * l - 0.7034186147 * m + 1.707614701 * s,
-  ].map((v) => Math.max(0, v));
-  const top = Math.max(...rgb) || 1;
-  return rgb.map((v) => gamma(v / top)) as Vec3;
+  return mul3(LMS_RGB[gamut], [l, m, s]).map((v) => Math.max(0, v)) as Vec3;
+}
+
+// How much each primary adds to luminance (Y).
+const LUMA: Record<Gamut, Vec3> = {
+  srgb: [0.2126729, 0.7151522, 0.072175],
+  "display-p3": [0.2289746, 0.6917385, 0.0792869],
+};
+
+/**
+ * Light of this color as linear RGB (in `gamut`) with a luminance of 1: one
+ * lumen's worth of it, to add up with other light and scale by lumens.
+ */
+export function lightRgb(a: number, b: number, gamut: Gamut = "srgb"): Vec3 {
+  const rgb = linearOf(a, b, gamut);
+  const y = rgb[0] * LUMA[gamut][0] + rgb[1] * LUMA[gamut][1] + rgb[2] * LUMA[gamut][2] || 1;
+  return rgb.map((v) => v / y) as Vec3;
+}
+
+/** A CSS color for gamma-encoded RGB (0–1) in `gamut`, optionally translucent. */
+export function cssColor([r, g, b]: Vec3, gamut: Gamut = "srgb", alpha = 1): string {
+  const a = alpha < 1 ? ` / ${+alpha.toFixed(3)}` : "";
+  if (gamut === "display-p3") return `color(display-p3 ${+r.toFixed(4)} ${+g.toFixed(4)} ${+b.toFixed(4)}${a})`;
+  return `rgb(${Math.round(r * 255)} ${Math.round(g * 255)} ${Math.round(b * 255)}${a})`;
 }
 
 /** How bright a light looks, 0–1: roughly perceptual (cube root of light output), with 1000 lm and up as full. */
 export const lookOf = (brightness: number) => Math.min(1, Math.cbrt(Math.max(0, brightness)));
 
 /** A CSS color for a lemtone as it looks: its swatch, dimmed by how bright it is. */
-export function lemtoneCss(t: Lemtone | null): string {
+export function lemtoneCss(t: Lemtone | null, gamut: Gamut = "srgb"): string {
   if (!t) return "rgb(0 0 0)";
   const k = lookOf(t.brightness);
-  const [r, g, b] = swatch(t.a, t.b).map((v) => Math.round(v * k * 255));
-  return `rgb(${r} ${g} ${b})`;
+  return cssColor(swatch(t.a, t.b, gamut).map((v) => v * k) as Vec3, gamut);
 }
 
 /** Brightness in lumens, as people read it: "800 lm", "25 lm", "2.5 lm". */

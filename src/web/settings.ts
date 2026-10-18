@@ -1,41 +1,41 @@
 // Per-browser preferences. Admin mode only reveals room-wide and destructive
-// controls; everyone is allowed to turn it on.
+// controls; everyone is allowed to turn it on. Live mode skips the preview:
+// edits go to the room as they're made.
 
 import { useSyncExternalStore } from "react";
 
-const ADMIN_KEY = "vibes.adminMode";
-const listeners = new Set<() => void>();
-
-function read(): boolean {
+/** A switch kept in this browser, and a hook that follows it. */
+function flag(key: string) {
+  const listeners = new Set<() => void>();
+  let cached = false;
   try {
-    return localStorage.getItem(ADMIN_KEY) === "1";
+    cached = localStorage.getItem(key) === "1";
   } catch {
-    return false;
+    // Storage blocked: it starts off.
   }
+  const set = (on: boolean) => {
+    try {
+      if (on) localStorage.setItem(key, "1");
+      else localStorage.removeItem(key);
+    } catch {
+      // Storage blocked (private window): the switch just won't persist.
+    }
+    cached = on;
+    for (const l of listeners) l();
+  };
+  const use = () =>
+    useSyncExternalStore(
+      (l) => {
+        listeners.add(l);
+        return () => listeners.delete(l);
+      },
+      () => cached,
+    );
+  return [set, use] as const;
 }
 
-let cached = read();
-
-export function setAdminMode(on: boolean) {
-  try {
-    if (on) localStorage.setItem(ADMIN_KEY, "1");
-    else localStorage.removeItem(ADMIN_KEY);
-  } catch {
-    // Storage blocked (private window): the switch just won't persist.
-  }
-  cached = on;
-  for (const l of listeners) l();
-}
-
-export function useAdminMode(): boolean {
-  return useSyncExternalStore(
-    (l) => {
-      listeners.add(l);
-      return () => listeners.delete(l);
-    },
-    () => cached,
-  );
-}
+export const [setAdminMode, useAdminMode] = flag("vibes.adminMode");
+export const [setLiveMode, useLiveMode] = flag("vibes.liveMode");
 
 const FLOOR_KEY = "vibes.floor";
 

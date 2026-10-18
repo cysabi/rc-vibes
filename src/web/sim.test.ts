@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import type { LightInfo } from "../shared/arclamp.ts";
-import { baseState, mergeOutput, prevOf } from "./sim.ts";
+import { applyLayer, baseState, mergeOutput, prevOf } from "./sim.ts";
 
 const light = (id: number, channels: string[]): LightInfo => ({ id, type: "br30", tags: null, coords: null, rail: null, channels });
 const lights = [light(1, ["a", "b", "brightness", "fidelity"]), light(64, ["on"])];
@@ -40,5 +40,26 @@ describe("the preview's room", () => {
     const state = baseState(lights, {});
     expect(mergeOutput(state, lights, { lights: "all" })).toBe(state);
     expect(mergeOutput(state, lights, null)).toBe(state);
+  });
+
+  it("leaves the lights a shader is masked from as the layer below had them", () => {
+    const state = baseState(lights, { "1": { brightness: 0.7 }, "64": { on: 1 } });
+    const out = { lights: [{ id: 1, channels: { brightness: 0.1 } }, { id: 64, channels: { on: 0 } }] };
+    const next = mergeOutput(state, lights, out, new Set([64]));
+    expect(next.get(1)!.brightness).toBe(0.1);
+    expect(next.get(64)).toEqual({ on: 1 });
+  });
+
+  it("counts what a shader tries to change before its mask or mute", () => {
+    const state = baseState(lights, { "1": { brightness: 0.7 }, "64": { on: 1 } });
+    // Light 64 set to what it already is: not a change.
+    const out = { lights: [{ id: 1, channels: { brightness: 0.1 } }, { id: 64, channels: { on: 1 } }] };
+    const masked = applyLayer(state, lights, out, { muted: false, mask: [1] });
+    expect(masked.trying).toEqual([1]);
+    expect(masked.state.get(1)!.brightness).toBe(0.7);
+    // Muted is masked from every light: it passes everything on as it was.
+    const muted = applyLayer(state, lights, out, { muted: true, mask: [] });
+    expect(muted.trying).toEqual([1]);
+    expect(muted.state).toBe(state);
   });
 });

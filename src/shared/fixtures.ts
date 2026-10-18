@@ -6,6 +6,7 @@
 // and show as a 2700 K incandescent when on.
 
 import type { Channels } from "./arclamp.ts";
+import { bulbOutput, type Output } from "./bulb.ts";
 import { whiteAB, type Lemtone } from "./lemtone.ts";
 
 /** arclamp turns an old bulb on when its on channel is at least this (rclamp sink.OnThreshold). */
@@ -60,9 +61,29 @@ export function requestedOf(channels: Channels | undefined, type: string): Lemto
   return { a: channels.a ?? 0, b: channels.b ?? 0, brightness: channels.brightness ?? 0, fidelity: channels.fidelity ?? 1 };
 }
 
-/** The light a set of channel values makes, or null when it's dark. */
+/** The light a set of channel values asks for, or null when it's dark. */
 export function lemtoneOf(channels: Channels | undefined, type: string): Lemtone | null {
   if (isBinary(type)) return isOn(channels) ? OLD_BULB : null;
   const t = requestedOf(channels, type);
   return t && t.brightness > 0 ? t : null;
+}
+
+/**
+ * What a light of this type makes of lemtone `t`: for a color bulb, what its
+ * solve makes of it (bulb.ts: a color asked for brighter than it can glow
+ * comes out paler, or dimmer). Panels have no model yet (their firmware
+ * ignores lemtones for now), so they're taken at their word.
+ */
+export function madeOf(t: Lemtone, type: string): Output {
+  if (solvesLemtones(type)) return bulbOutput(t);
+  return { light: t, mode: t.brightness > 0 ? "exact" : "off", desat: 0 };
+}
+
+/** Whether a light of this type makes lemtones as the bulb model solves them (bulb.ts), rather than as asked. */
+export const solvesLemtones = (type: string) => baseType(type) === "br30";
+
+/** The light a set of channel values makes, as you'd see it, or null when it's dark. */
+export function seenOf(channels: Channels | undefined, type: string): Lemtone | null {
+  const t = lemtoneOf(channels, type);
+  return t && !isBinary(type) ? madeOf(t, type).light : t;
 }

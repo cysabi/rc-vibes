@@ -1,0 +1,23 @@
+# On every push to main: check it, build the image with Nix, push it to
+# kokuzo's registry, and hand Argo CD a cd branch whose .kube points at it.
+name: deploy
+on:
+  push:
+    branches:
+      - main
+permissions:
+  contents: write
+jobs:
+  deploy:
+    runs-on: vibes-runner-set
+    steps:
+    - uses: actions/checkout@v4
+    - run: nix develop -c bash -c 'pnpm install --frozen-lockfile && pnpm typecheck && pnpm test'
+    - run: nix run -j32 -L '.#pushDockerImageActions'
+    - run: nu -c 'open .kube/version.yaml -r | from yaml | update value $"kokuzo.tailc38f.ts.net/vibes:${{ github.sha }}" | to yaml | save .kube/version.yaml -f'
+    - run: |
+        git config --global user.name 'GitHub Actions'
+        git config --global user.email 'actions@github.com'
+        git add .kube/version.yaml
+        git commit -m "deploy ${{ github.sha }}"
+        git push -f origin HEAD:cd

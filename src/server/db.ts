@@ -1,28 +1,10 @@
-// vibes' own records: who made each shader and what it's called, plus an
-// activity log. arclamp sees every vibes action as the single "vibes" token.
+// vibes' own records: the lights' positions, rails, orientations and tags set
+// in vibes, plus an activity log. arclamp sees every vibes action as the
+// single "vibes" token.
 
 import { DatabaseSync } from "node:sqlite";
-import type { ShaderDescriptor } from "../shared/arclamp.ts";
 import type { RailShape } from "../shared/rails.ts";
-import type { ActivityAction, ActivityEntry, Person, ShaderMeta, Spot } from "../shared/vibes.ts";
-
-/**
- * arclamp keeps its scene in memory and restarts ids from 1, so an id alone
- * could match a shader from before a restart. created_at disambiguates.
- */
-export function shaderKey(d: Pick<ShaderDescriptor, "id" | "created_at">): string {
-  return `${d.id}@${d.created_at ?? ""}`;
-}
-
-interface MetaRow {
-  key: string;
-  name: string;
-  created_by_id: string;
-  created_by_name: string;
-  modified_by_id: string;
-  modified_by_name: string;
-  seen_error: string | null;
-}
+import type { ActivityAction, ActivityEntry, Person, Spot } from "../shared/vibes.ts";
 
 interface ActivityRow {
   id: number;
@@ -47,15 +29,6 @@ export function openDb(path: string) {
   const db = new DatabaseSync(path);
   db.exec(`
     PRAGMA journal_mode = WAL;
-    CREATE TABLE IF NOT EXISTS shader_meta (
-      key TEXT PRIMARY KEY,
-      name TEXT NOT NULL,
-      created_by_id TEXT NOT NULL,
-      created_by_name TEXT NOT NULL,
-      modified_by_id TEXT NOT NULL,
-      modified_by_name TEXT NOT NULL,
-      seen_error TEXT
-    );
     -- Light positions set in vibes, until exported into arclamp's lights.json.
     -- A light is on a rail when rail_id is set, otherwise at mm_x, mm_y on
     -- floor; all of them null means "taken off the plan".
@@ -88,6 +61,15 @@ export function openDb(path: string) {
       by_name TEXT NOT NULL,
       at TEXT NOT NULL
     );
+    -- Tags set in vibes: a light's whole set, as a JSON array, in place of
+    -- arclamp's until exported into its lights.json.
+    CREATE TABLE IF NOT EXISTS light_tags (
+      light_id INTEGER PRIMARY KEY,
+      tags TEXT NOT NULL,
+      by_id TEXT NOT NULL,
+      by_name TEXT NOT NULL,
+      at TEXT NOT NULL
+    );
     CREATE TABLE IF NOT EXISTS activity (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       ts TEXT NOT NULL,
@@ -100,24 +82,11 @@ export function openDb(path: string) {
     );
   `);
 
-  const metaColumns = db.prepare("PRAGMA table_info(shader_meta)").all() as { name: string }[];
-  if (!metaColumns.some((c) => c.name === "seen_error")) {
-    db.exec("ALTER TABLE shader_meta ADD COLUMN seen_error TEXT");
-  }
   const placementColumns = db.prepare("PRAGMA table_info(placements)").all() as { name: string }[];
   if (!placementColumns.some((c) => c.name === "rail_id")) {
     db.exec("ALTER TABLE placements ADD COLUMN rail_id TEXT; ALTER TABLE placements ADD COLUMN mm_along REAL");
   }
 
-  const selectMeta = db.prepare("SELECT * FROM shader_meta WHERE key = ?");
-  const insertMeta = db.prepare(`
-    INSERT INTO shader_meta (key, name, created_by_id, created_by_name, modified_by_id, modified_by_name)
-    VALUES (?, ?, ?, ?, ?, ?)
-    ON CONFLICT (key) DO UPDATE SET
-      name = excluded.name,
-      modified_by_id = excluded.modified_by_id,
-      modified_by_name = excluded.modified_by_name
-  `);
   const selectPlacements = db.prepare("SELECT light_id, mm_x, mm_y, floor, rail_id, mm_along FROM placements");
   const upsertPlacement = db.prepare(`
     INSERT INTO placements (light_id, mm_x, mm_y, floor, rail_id, mm_along, by_id, by_name, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
@@ -139,7 +108,11 @@ export function openDb(path: string) {
     INSERT INTO light_types (light_id, type, by_id, by_name, at) VALUES (?, ?, ?, ?, ?)
     ON CONFLICT (light_id) DO UPDATE SET type = excluded.type, by_id = excluded.by_id, by_name = excluded.by_name, at = excluded.at
   `);
-  const updateSeenError = db.prepare("UPDATE shader_meta SET seen_error = ? WHERE key = ?");
+  const selectTags = db.prepare("SELECT light_id, tags FROM light_tags");
+  const upsertTags = db.prepare(`
+    INSERT INTO light_tags (light_id, tags, by_id, by_name, at) VALUES (?, ?, ?, ?, ?)
+    ON CONFLICT (light_id) DO UPDATE SET tags = excluded.tags, by_id = excluded.by_id, by_name = excluded.by_name, at = excluded.at
+  `);
   const insertActivity = db.prepare(`
     INSERT INTO activity (ts, user_id, user_name, action, shader_id, shader_name, detail)
     VALUES (?, ?, ?, ?, ?, ?, ?)
@@ -163,29 +136,7 @@ export function openDb(path: string) {
     }
   }
 
-  function toMeta(row: MetaRow): ShaderMeta {
-    return {
-      name: row.name,
-      createdBy: { id: row.created_by_id, name: row.created_by_name },
-      modifiedBy: { id: row.modified_by_id, name: row.modified_by_name },
-      seenError: row.seen_error,
-    };
-  }
-
   return {
-    meta(key: string): ShaderMeta | null {
-      const row = selectMeta.get(key) as MetaRow | undefined;
-      return row ? toMeta(row) : null;
-    },
-
-    /**
-     * Record a shader's name and last editor. The creator is only written the
-     * first time; later saves keep the original.
-     */
-    saveMeta(key: string, name: string, createdBy: Person, modifiedBy: Person) {
-      insertMeta.run(key, name, createdBy.id, createdBy.name, modifiedBy.id, modifiedBy.name);
-    },
-
     /** Positions set in vibes, by light id. Null means deliberately unplaced. */
     placements(): Map<number, Spot | null> {
       const rows = selectPlacements.all() as {
@@ -261,8 +212,17 @@ export function openDb(path: string) {
       });
     },
 
-    setSeenError(key: string, error: string | null) {
-      updateSeenError.run(error, key);
+    /** Tags set in vibes, by light id: each light's whole set. */
+    tags(): Map<number, string[]> {
+      const rows = selectTags.all() as { light_id: number; tags: string }[];
+      return new Map(rows.map((r) => [r.light_id, JSON.parse(r.tags) as string[]]));
+    },
+
+    setTags(list: { id: number; tags: string[] }[], by: Person) {
+      const at = new Date().toISOString();
+      transaction(() => {
+        for (const { id, tags } of list) upsertTags.run(id, JSON.stringify(tags), by.id, by.name, at);
+      });
     },
 
     log(entry: LogInput) {

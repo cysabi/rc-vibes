@@ -63,6 +63,8 @@ export function createArclamp(baseUrl: string, key: string) {
     deleteShader: (id: number) => call<void>("DELETE", `/v1/shader/${id}`),
     moveShader: (id: number, position: number) => call<void>("POST", `/v1/shader/${id}/position`, { position }),
     setMuted: (id: number, muted: boolean) => call<void>("POST", `/v1/shader/${id}/muted`, { muted }),
+    // The whole mask: the lights the shader may not change ([] clears it).
+    setMask: (id: number, mask: number[]) => call<void>("POST", `/v1/shader/${id}/mask`, { mask }),
     // Merges into the running template: lights and channels not named are
     // left as they are.
     mergeRoomtone: (template: RoomTemplate) => call<ShaderDescriptor>("PUT", "/v1/shader/0", template),

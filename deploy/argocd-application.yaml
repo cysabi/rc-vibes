@@ -1,0 +1,21 @@
+# Argo CD's view of vibes, applied once by hand (kubectl apply -f), as for the
+# other apps on kokuzo. It reads the repo with a read-only deploy key, kept in
+# the argocd namespace as the repo-rc-vibes repository Secret.
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: vibes
+  namespace: argocd
+spec:
+  project: default
+  source:
+    repoURL: git@github.com:roobscoob/rc-vibes.git
+    targetRevision: cd
+    path: .kube
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: vibes
+  syncPolicy:
+    automated: {}
+    syncOptions:
+    - CreateNamespace=true

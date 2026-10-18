@@ -10,10 +10,11 @@ import { z } from "zod";
 import { normalizeLights, type LightsResponse, type ShaderDescriptor } from "../shared/arclamp.ts";
 import { orientationsOf } from "../shared/fixtures.ts";
 import { clampAlong, hangsOnRails, RAIL_ID, railLength } from "../shared/rails.ts";
-import type { Lights, Person, SceneNode, Spot, Status } from "../shared/vibes.ts";
+import { MAX_TAGS, TAG } from "../shared/tags.ts";
+import type { Lights, Spot, Status } from "../shared/vibes.ts";
 import { ArclampError, type Arclamp } from "./arclamp.ts";
 import { requireUser, type AuthEnv } from "./auth.ts";
-import { shaderKey, type Db } from "./db.ts";
+import type { Db } from "./db.ts";
 import type { Config } from "./env.ts";
 import { applyEdits, lightsFile } from "./lights.ts";
 import type { StreamRelay } from "./stream.ts";
@@ -22,16 +23,6 @@ import type { StreamRelay } from "./stream.ts";
 // catches up, rather than queueing them in memory.
 const MAX_BUFFERED_BYTES = 256 * 1024;
 const LIGHTS_TTL_MS = 60_000;
-// After a save, how long to watch for the script failing as it starts.
-// arclamp loads scripts asynchronously and reports a failure by rolling back
-// to the previous script (or, for a new shader, by entering the error state).
-const START_CHECK_MS = 750;
-const START_POLL_MS = 125;
-// Some failures (e.g. update() returning null) kill the sandbox without an
-// error message; arclamp just respawns it with backoff. This many respawns
-// inside the check window counts as failing to start.
-const CRASH_LOOP_RESPAWNS = 3;
-const MAX_SCRIPT_BYTES = 200 * 1024;
 // Room tone changes (and light and rail moves) from one person within this
 // window log as one entry.
 const ROOMTONE_LOG_WINDOW_MS = 15_000;
@@ -57,8 +48,6 @@ export const handleError: ErrorHandler = (err, c) => {
 };
 
 const idParam = z.object({ id: z.coerce.number().int().positive() });
-const shaderName = z.string().trim().min(1).max(80);
-const script = z.string().min(1).max(MAX_SCRIPT_BYTES);
 // Any finite number: arclamp keeps values as given, out of range included (rclamp §4.1).
 const channelValue = z.number().finite();
 const coords = z.object({
@@ -68,6 +57,7 @@ const coords = z.object({
 });
 const railId = z.string().regex(RAIL_ID);
 const point = z.object({ mm_x: z.number().finite(), mm_y: z.number().finite() });
+const tag = z.string().regex(TAG, "tags are lowercase letters, digits, - and _");
 const placement = z.union([
   z.object({ id: z.number().int(), rail: z.object({ id: railId, mm_along: z.number().finite() }) }),
   z.object({ id: z.number().int(), coords: coords.nullable() }),
@@ -89,10 +79,15 @@ export function apiRoutes({ config, arclamp, db, relay, origins }: ApiDeps) {
   api.onError(handleError);
   // Browsers already refuse cross-site JSON requests without CORS headers,
   // and the session cookie is SameSite=Lax; this also covers non-browser
-  // clients that set a foreign Origin.
+  // clients that set a foreign Origin. In development, a page from whatever
+  // name reaches this machine (a phone on the network, through Vite) is
+  // same-origin too.
   api.use("*", async (c, next) => {
     const origin = c.req.header("origin");
-    if (origin && !origins.includes(origin)) return c.json({ error: "origin not allowed", code: "forbidden" }, 403);
+    const sameOrigin = !config.production && origin === new URL(c.req.url).origin;
+    if (origin && !sameOrigin && !origins.includes(origin)) {
+      return c.json({ error: "origin not allowed", code: "forbidden" }, 403);
+    }
     await next();
   });
   api.use("*", requireUser(config));
@@ -106,46 +101,12 @@ export function apiRoutes({ config, arclamp, db, relay, origins }: ApiDeps) {
     return lightsCache.value;
   }
 
-  /** arclamp's lights and rails with the positions, rails and orientations set in vibes applied. */
+  /** arclamp's lights and rails with the positions, rails, orientations and tags set in vibes applied. */
   async function currentLights(): Promise<Lights> {
-    return applyEdits(await arclampLights(), { rails: db.rails(), placements: db.placements(), types: db.types() });
+    return applyEdits(await arclampLights(), { rails: db.rails(), placements: db.placements(), types: db.types(), tags: db.tags() });
   }
 
-  function withMeta(d: ShaderDescriptor): SceneNode {
-    return { ...d, meta: d.type === "js" ? db.meta(shaderKey(d)) : null };
-  }
-
-  function nameOf(d: ShaderDescriptor): string {
-    return db.meta(shaderKey(d))?.name ?? `Shader #${d.id}`;
-  }
-
-  /**
-   * Watch a just-saved script start. Returns why it failed, if it did:
-   * arclamp swapped the previous script back in, the shader went into the
-   * error state with a new error, or its sandbox keeps dying.
-   */
-  async function startError(id: number, script: string, before: ShaderDescriptor | null): Promise<string | null> {
-    const respawnsBefore = Math.max(before?.respawns ?? 0, 0);
-    const deadline = Date.now() + START_CHECK_MS;
-    while (Date.now() < deadline) {
-      await new Promise((r) => setTimeout(r, START_POLL_MS));
-      const d = await arclamp.shader(id);
-      if (d.script !== script) return d.error ?? "the script failed as it started";
-      if (d.state === "error" && d.error && d.error !== before?.error) return d.error;
-      const respawns = (d.respawns ?? 0) - respawnsBefore;
-      if (respawns >= CRASH_LOOP_RESPAWNS) {
-        return d.error && d.error !== before?.error
-          ? d.error
-          : `its sandbox keeps crashing (restarted ${respawns} times). Check that update() returns the lights.`;
-      }
-    }
-    return null;
-  }
-
-  /** Who arclamp says made a shader vibes has no record of. */
-  function arclampAuthor(d: ShaderDescriptor): Person {
-    return { id: `arclamp:${d.created_by}`, name: d.created_by };
-  }
+  const nameOf = (d: ShaderDescriptor) => `Shader #${d.id}`;
 
   return api
     .get("/me", (c) => c.json(c.get("user")))
@@ -242,6 +203,33 @@ export function apiRoutes({ config, arclamp, db, relay, origins }: ApiDeps) {
       },
     )
 
+    // Each light's whole set of tags. The log says which tags went on and off.
+    .put(
+      "/light-tags",
+      zValidator(
+        "json",
+        z.object({ lights: z.array(z.object({ id: z.number().int(), tags: z.array(tag).max(MAX_TAGS) })).min(1).max(500) }),
+        badBody,
+      ),
+      async (c) => {
+        const user = c.get("user");
+        const lights = c.req.valid("json").lights.map(({ id, tags }) => ({ id, tags: [...new Set(tags)].sort() }));
+        const byId = new Map((await currentLights()).lights.map((l) => [l.id, l]));
+        const added = new Set<string>();
+        const removed = new Set<string>();
+        for (const { id, tags } of lights) {
+          const light = byId.get(id);
+          if (!light) return c.json({ error: `no light ${id}`, code: "not_found" }, 404);
+          const before = new Set(light.tags ?? []);
+          for (const t of tags) if (!before.has(t)) added.add(t);
+          for (const t of before) if (!tags.includes(t)) removed.add(t);
+        }
+        db.setTags(lights, user);
+        db.log({ user, action: "lights.tag", detail: { lights: lights.length, added: [...added], removed: [...removed] } });
+        return c.body(null, 204);
+      },
+    )
+
     // arclamp's lights.json, rebuilt from its API with everything changed
     // in vibes filled in (see lightsFile).
     .get("/lights.json", async (c) => {
@@ -249,7 +237,7 @@ export function apiRoutes({ config, arclamp, db, relay, origins }: ApiDeps) {
       return c.body(`${JSON.stringify(lightsFile(await currentLights()), null, 2)}\n`, 200, { "Content-Type": "application/json" });
     })
 
-    .get("/scene", async (c) => c.json((await arclamp.scene()).map(withMeta)))
+    .get("/scene", async (c) => c.json(await arclamp.scene()))
 
     .get("/health", async (c) => c.json(await arclamp.health()))
 
@@ -258,82 +246,7 @@ export function apiRoutes({ config, arclamp, db, relay, origins }: ApiDeps) {
       return c.json(db.activity(limit));
     })
 
-    .post("/shaders", zValidator("json", z.object({ name: shaderName, script }), badBody), async (c) => {
-      const user = c.get("user");
-      const { name, script } = c.req.valid("json");
-      const created = await arclamp.createShader(script);
-      const failed = await startError(created.id, script, null);
-      if (failed) {
-        // Don't leave a broken layer in everyone's stack; the editor keeps
-        // the script so it can be fixed and created again.
-        await arclamp.deleteShader(created.id).catch(() => {});
-        return c.json({ error: `The script failed as it started:\n${failed}`, code: "script_failed" }, 422);
-      }
-      const d = await arclamp.shader(created.id);
-      const key = shaderKey(d);
-      db.saveMeta(key, name, user, user);
-      db.setSeenError(key, d.error ?? null);
-      db.log({ user, action: "shader.create", shaderId: d.id, shaderName: name });
-      return c.json(withMeta(d), 201);
-    })
-
-    .get("/shaders/:id", zValidator("param", idParam, noSuchShader), async (c) =>
-      c.json(withMeta(await arclamp.shader(c.req.valid("param").id))),
-    )
-
-    .put(
-      "/shaders/:id",
-      zValidator("param", idParam, noSuchShader),
-      zValidator(
-        "json",
-        z.object({ name: shaderName.optional(), script: script.optional() }).refine(
-          (b) => b.name !== undefined || b.script !== undefined,
-          "send a name, a script, or both",
-        ),
-        badBody,
-      ),
-      async (c) => {
-        const user = c.get("user");
-        const { id } = c.req.valid("param");
-        const body = c.req.valid("json");
-        let d = await arclamp.shader(id);
-        if (d.type !== "js") return c.json({ error: "edit the roomtone through /api/roomtone", code: "roomtone" }, 409);
-        const key = shaderKey(d);
-        const before = db.meta(key);
-        const name = body.name ?? before?.name ?? `Shader #${id}`;
-
-        if (body.script !== undefined && body.script !== d.script) {
-          await arclamp.setScript(id, body.script);
-          const failed = await startError(id, body.script, d);
-          if (failed) {
-            // Nothing changed in the room and the editor shows the error, so
-            // the card shouldn't keep showing it to everyone.
-            db.setSeenError(key, failed);
-            return c.json(
-              { error: `The script failed as it started, so the previous version is still running:\n${failed}`, code: "script_failed" },
-              422,
-            );
-          }
-          d = await arclamp.shader(id);
-          db.log({ user, action: "shader.edit", shaderId: id, shaderName: name });
-        }
-        if (body.name !== undefined && body.name !== before?.name) {
-          db.log({ user, action: "shader.rename", shaderId: id, shaderName: name, detail: { from: before?.name ?? null } });
-        }
-        db.saveMeta(key, name, before?.createdBy ?? arclampAuthor(d), user);
-        if (body.script !== undefined) db.setSeenError(key, d.error ?? null);
-        return c.json(withMeta(d));
-      },
-    )
-
-    .delete("/shaders/:id", zValidator("param", idParam, noSuchShader), async (c) => {
-      const user = c.get("user");
-      const { id } = c.req.valid("param");
-      const d = await arclamp.shader(id);
-      await arclamp.deleteShader(id);
-      db.log({ user, action: "shader.delete", shaderId: id, shaderName: nameOf(d) });
-      return c.body(null, 204);
-    })
+    .get("/shaders/:id", zValidator("param", idParam, noSuchShader), async (c) => c.json(await arclamp.shader(c.req.valid("param").id)))
 
     .post(
       "/shaders/:id/position",
@@ -365,6 +278,22 @@ export function apiRoutes({ config, arclamp, db, relay, origins }: ApiDeps) {
       },
     )
 
+    // The lights a shader may not change: its whole mask ([] clears it).
+    .post(
+      "/shaders/:id/mask",
+      zValidator("param", idParam, noSuchShader),
+      zValidator("json", z.object({ mask: z.array(z.number().int()).max(2000) }), badBody),
+      async (c) => {
+        const user = c.get("user");
+        const { id } = c.req.valid("param");
+        const mask = [...new Set(c.req.valid("json").mask)].sort((a, b) => a - b);
+        const d = await arclamp.shader(id);
+        await arclamp.setMask(id, mask);
+        db.log({ user, action: "shader.mask", shaderId: id, shaderName: nameOf(d), detail: { lights: mask.length } });
+        return c.body(null, 204);
+      },
+    )
+
     .put(
       "/roomtone",
       zValidator(
@@ -388,17 +317,9 @@ export function apiRoutes({ config, arclamp, db, relay, origins }: ApiDeps) {
             ROOMTONE_LOG_WINDOW_MS,
           );
         }
-        return c.json(withMeta(d));
+        return c.json(d);
       },
     )
-
-    .delete("/scene", async (c) => {
-      const user = c.get("user");
-      const removed = (await arclamp.scene()).filter((d) => d.type === "js").length;
-      await arclamp.clearScene();
-      db.log({ user, action: "scene.clear", detail: { removed } });
-      return c.body(null, 204);
-    })
 
     .get(
       "/stream",

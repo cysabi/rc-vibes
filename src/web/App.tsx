@@ -1,24 +1,25 @@
-import { lazy, Suspense, useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Rail } from "../shared/arclamp.ts";
 import type { SceneNode } from "../shared/vibes.ts";
 import { useLights, useMe, useScene } from "./api.ts";
-import { layersOf, pendingCount, templateOf, useDraft, type Layer } from "./draft.ts";
-import { History } from "./components/History.tsx";
+import { applyDraft, layersOf, pendingCount, templateOf, useDraft } from "./draft.ts";
+import { Banners } from "./components/Banners.tsx";
+import { ColorPreview } from "./components/ColorPreview.tsx";
 import { Login } from "./components/Login.tsx";
+import { Pending } from "./components/Pending.tsx";
 import { RoomMap, type SelectMode } from "./components/RoomMap.tsx";
-import { RoomTone } from "./components/RoomTone.tsx";
-import { Stack } from "./components/Stack.tsx";
-import { TopBar } from "./components/TopBar.tsx";
+import { SelectionPanel } from "./components/SelectionPanel.tsx";
+import { TagChips } from "./components/TagChips.tsx";
+import { UserMenu } from "./components/UserMenu.tsx";
 import { FLOORS } from "./floors.ts";
 import { useLiveStream } from "./live.ts";
-import { savedFloor, saveFloor } from "./settings.ts";
+import { useNarrow } from "./narrow.ts";
+import { usePeek } from "./peek.ts";
+import { savedFloor, saveFloor, useLiveMode } from "./settings.ts";
 import { useSimulation } from "./sim.ts";
 
 const NO_RAILS: Rail[] = [];
 const NO_NODES: SceneNode[] = [];
-
-// The code editor is most of the bundle; load it the first time it opens.
-const ShaderSheet = lazy(() => import("./components/ShaderSheet.tsx").then((m) => ({ default: m.ShaderSheet })));
 
 export function App() {
   const me = useMe();
@@ -33,28 +34,64 @@ function Shell() {
   const scene = useScene();
   useLiveStream(lights.data);
   const [selected, setSelected] = useState<ReadonlySet<number>>(new Set());
-  const [side, setSide] = useState<"stack" | "history">("stack");
-  const [editing, setEditing] = useState<Layer | "new" | null>(null);
   const [floor, setFloor] = useState<number>(initialFloor);
   const all = useMemo(() => lights.data?.lights ?? [], [lights.data]);
 
   // Pending edits put vibes in simulated mode: the map shows the preview of
-  // them until they're applied or discarded.
+  // them until they're applied or discarded. So does peeking at the room
+  // tone, with every shader set aside while it's held. In live mode there's
+  // no preview: edits go to the room as they're made, one send at a time
+  // (each as soon as the last lands), and only a failed send shows them as
+  // pending, to try again or drop.
   const draft = useDraft();
   const live = scene.data ?? NO_NODES;
   const pending = scene.data ? pendingCount(live, draft) : 0;
-  const simulated = pending > 0;
-  const simInputs = useMemo(
-    () => ({ lights: all, layers: layersOf(live, draft), template: templateOf(live, draft) }),
-    [all, live, draft],
-  );
+  const peeking = usePeek();
+  const liveMode = useLiveMode();
+  const [liveError, setLiveError] = useState<string | null>(null);
+  const sending = useRef(false);
+  // Bumped as each send lands, to look again for what came in meanwhile.
+  const [sent, setSent] = useState(0);
+  useEffect(() => {
+    // After a failed send, it waits for Apply or Discard rather than trying again and again.
+    if (!liveMode || pending === 0 || sending.current || liveError) return;
+    sending.current = true;
+    applyDraft(live)
+      .catch((err: Error) => setLiveError(err.message))
+      .finally(() => {
+        sending.current = false;
+        setSent((n) => n + 1);
+      });
+  }, [liveMode, pending, draft, live, liveError, sent]);
+  // Nothing pending, or live mode switched, starts clean.
+  useEffect(() => {
+    if (pending === 0) setLiveError(null);
+  }, [pending]);
+  useEffect(() => setLiveError(null), [liveMode]);
+  const previewing = pending > 0 && (!liveMode || liveError !== null);
+  const simulated = previewing || peeking;
+  const simInputs = useMemo(() => {
+    const layers = layersOf(live, draft);
+    return { lights: all, layers: peeking ? layers.map((l) => ({ ...l, muted: true })) : layers, template: templateOf(live, draft) };
+  }, [all, live, draft, peeking]);
   useSimulation(simulated, simInputs);
   useEffect(() => {
     document.documentElement.toggleAttribute("data-simulated", simulated);
   }, [simulated]);
 
+  // Only the lights on the floor you're looking at can be selected, and so
+  // changed. Switching floors lets go of the selection.
+  const here = useMemo(() => all.filter((l) => l.coords?.floor === floor), [all, floor]);
+  // Lights on no floor's plan yet, waiting in the drawer.
+  const anyUnplaced = useMemo(() => all.some((l) => !l.coords), [all]);
+  const selectedHere = useMemo(() => {
+    const ids = new Set(here.map((l) => l.id));
+    return new Set([...selected].filter((id) => ids.has(id)));
+  }, [here, selected]);
+
   const showFloor = (id: number) => {
     setFloor(id);
+    setSelected(new Set());
     saveFloor(String(id));
   };
 
@@ -70,32 +107,55 @@ function Shell() {
     });
   }, []);
 
+  // Picking by tag also flies the map to what's picked.
+  const [framing, setFraming] = useState(0);
+  const selectByTag = useCallback(
+    (ids: number[], mode: SelectMode) => {
+      select(ids, mode);
+      setFraming((n) => n + 1);
+    },
+    [select],
+  );
+
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape" && !editing) setSelected(new Set());
+      if (e.key === "Escape") setSelected(new Set());
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, [editing]);
+  }, []);
 
-  // A fresh room tone panel per selection, so its picker starts from those
-  // lights, and again once its pending changes are discarded or applied.
-  const toneDrafted = Object.keys(draft.roomtone).length > 0;
-  const [toneEpoch, setToneEpoch] = useState(0);
-  const [wasDrafted, setWasDrafted] = useState(toneDrafted);
-  if (wasDrafted !== toneDrafted) {
-    setWasDrafted(toneDrafted);
-    if (!toneDrafted) setToneEpoch((n) => n + 1);
-  }
-  const selectionKey = `${[...selected].sort((a, b) => a - b).join(",") || "room"}#${toneEpoch}`;
+  // The map's own overlays (Move lights, the pending changes) sit under the
+  // HUD, so it hands them its height as --hud-h; the selection panel sits
+  // under just its banners (--banners-h). Measured before the first paint, so
+  // the map's first fit already leaves room for it.
+  const app = useRef<HTMLDivElement>(null);
+  const hud = useRef<HTMLDivElement>(null);
+  const bar = useRef<HTMLDivElement>(null);
+  useLayoutEffect(() => {
+    const measure = () => {
+      const style = app.current!.style;
+      style.setProperty("--hud-h", `${hud.current!.offsetHeight}px`);
+      style.setProperty("--banners-h", `${hud.current!.offsetHeight - bar.current!.offsetHeight}px`);
+    };
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(hud.current!);
+    observer.observe(bar.current!);
+    return () => observer.disconnect();
+  }, []);
 
+  // The map is the base of everything, always; all else floats over it. Along
+  // the top, the HUD: banners about degraded states, then the tags to select
+  // lights by (or, on a floor with no lights yet, a note saying so) on the
+  // left and the account on the right. Floors, zoom and the rest are the
+  // map's own. While anything's selected, a panel about it comes in along the
+  // left edge (or up from the bottom, on a phone), and the tags move over;
+  // what it looks like floats in the map's bottom left (not on a phone).
+  const hasSelection = selectedHere.size > 0;
+  const narrow = useNarrow();
   return (
-    <div className="app">
-      <TopBar lights={all} live={live} pending={pending} onHistory={() => setSide(side === "history" ? "stack" : "history")} />
-      <aside className="tone" aria-label="Room tone">
-        {/* Mounted once the scene is in, so the picker opens on the room's actual tone. */}
-        {lights.data && scene.data && <RoomTone key={selectionKey} lights={all} selected={selected} onSelect={select} />}
-      </aside>
+    <div className={hasSelection ? "app has-selection" : "app"} ref={app}>
       <main className="stage">
         {lights.error ? (
           <p className="map-error">Couldn't load the lights: {lights.error.message}</p>
@@ -106,19 +166,30 @@ function Shell() {
             floor={floor}
             onFloor={showFloor}
             changed={lights.data?.changed ?? 0}
-            selected={selected}
+            selected={selectedHere}
             onSelect={select}
+            dock={previewing && <Pending live={live} pending={pending} />}
+            framing={framing}
+            corner={hasSelection && !narrow && <ColorPreview lights={here.filter((l) => selectedHere.has(l.id))} />}
           />
         )}
       </main>
-      <aside className="side" aria-label={side === "history" ? "History" : "Shaders"}>
-        {side === "history" ? <History onBack={() => setSide("stack")} /> : <Stack onOpen={setEditing} />}
-      </aside>
-      {editing && (
-        <Suspense fallback={null}>
-          <ShaderSheet layer={editing === "new" ? null : editing} onClose={() => setEditing(null)} />
-        </Suspense>
+      {hasSelection && (
+        <SelectionPanel floor={floor} here={here} selected={selectedHere} previewing={previewing} onClose={() => setSelected(new Set())} />
       )}
+      <div className="hud" ref={hud}>
+        <Banners />
+        <div className="hud-bar" ref={bar}>
+          {lights.data && here.length === 0 ? (
+            <p className="map-note">
+              No lights on floor {floor} yet.{anyUnplaced ? " Drag them in from the drawer." : ""}
+            </p>
+          ) : (
+            <TagChips lights={here} selected={selectedHere} onSelect={selectByTag} />
+          )}
+          <UserMenu />
+        </div>
+      </div>
     </div>
   );
 }

@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
-import { baseType, channelsFor, footprintOf, isBinary, isOn, lemtoneOf, orientationsOf, requestedOf, switchChannels } from "./fixtures.ts";
-import { whiteAB } from "./lemtone.ts";
+import { baseType, channelsFor, footprintOf, isBinary, isOn, lemtoneOf, orientationsOf, requestedOf, seenOf, switchChannels } from "./fixtures.ts";
+import { hueChroma, whiteAB } from "./lemtone.ts";
 
 describe("fixture orientations", () => {
   it("treats a turned panel as the same hardware", () => {
@@ -56,5 +56,18 @@ describe("fixture channels", () => {
     expect(on.a).toBeCloseTo(a, 9);
     expect(on.b).toBeCloseTo(b, 9);
     expect(requestedOf({ on: 1 }, "relay")).toBeNull();
+  });
+
+  it("shows color bulbs as their solve makes them, and the rest as asked", () => {
+    const red = { a: 0.2, b: 0.1, brightness: 0.4, fidelity: 0 };
+    const seen = seenOf(red, "br30")!;
+    expect(hueChroma(seen.a, seen.b).chroma).toBeLessThan(hueChroma(red.a, red.b).chroma);
+    expect(seen.brightness).toBeCloseTo(0.4, 2);
+    // A color it can make is made as asked.
+    expect(seenOf(t, "br30")).toEqual(lemtoneOf(t, "br30"));
+    // Panels have no model yet; old bulbs only switch.
+    expect(seenOf(red, "4x1-horizontal")).toEqual(red);
+    expect(seenOf({ on: 1 }, "relay")).toEqual(lemtoneOf({ on: 1 }, "relay"));
+    expect(seenOf({ ...red, brightness: 0 }, "br30")).toBeNull();
   });
 });

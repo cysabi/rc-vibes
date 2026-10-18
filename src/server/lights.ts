@@ -1,10 +1,12 @@
-// The map as vibes has it: arclamp's lights with the positions, rails and
-// orientations set in vibes applied, and the lights.json that would deploy it.
+// The map as vibes has it: arclamp's lights with the positions, rails,
+// orientations and tags set in vibes applied, and the lights.json that would
+// deploy it.
 
 import type { Coords, LightsResponse, Rail, RailSpot } from "../shared/arclamp.ts";
 import { sameCoords, sameRailSpot } from "../shared/arclamp.ts";
 import { orientationsOf } from "../shared/fixtures.ts";
 import { clampAlong, hangsOnRails, railCoords, sameRail, type RailShape } from "../shared/rails.ts";
+import { sameTags } from "../shared/tags.ts";
 import type { Lights, Spot } from "../shared/vibes.ts";
 
 export interface Edits {
@@ -14,6 +16,8 @@ export interface Edits {
   placements: Map<number, Spot | null>;
   /** Orientations, as arclamp types (e.g. "4x1-horizontal"). */
   types: Map<number, string>;
+  /** Each light's whole set of tags, in place of arclamp's. */
+  tags: Map<number, string[]>;
 }
 
 export function applyEdits(raw: LightsResponse, edits: Edits): Lights {
@@ -56,8 +60,11 @@ export function applyEdits(raw: LightsResponse, edits: Edits): Lights {
       coords = spot.coords;
     }
 
-    if (!sameCoords(coords, l.coords) || !sameRailSpot(rail, l.rail) || type !== l.type) changed++;
-    return { ...l, type, coords, rail };
+    // The same tags in another order are no change: keep arclamp's, so the export stays byte-identical.
+    const edited = edits.tags.get(l.id);
+    const tags = edited && !sameTags(edited, l.tags) ? edited : l.tags;
+    if (!sameCoords(coords, l.coords) || !sameRailSpot(rail, l.rail) || type !== l.type || !sameTags(tags, l.tags)) changed++;
+    return { ...l, type, tags, coords, rail };
   });
   return { id_width: raw.id_width, rails, lights, changed };
 }

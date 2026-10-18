@@ -1,44 +1,83 @@
-/* vibes: a warm-dark console. The only color on screen should be the
-   lights; the interface stays in neutrals and gets out of their way. */
+/* vibes: a dark room, seen from above. The map fills the window and the
+   controls float over it on frosted glass, so the room's own light glows
+   through them. The only color on screen should be the lights: the interface
+   stays in warm neutrals and gets out of their way. */
+
+/* Registered so they compute to pixels: the map reads them to keep the
+   building clear of whatever floats over each side of it. */
+@property --inset-top {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+
+@property --inset-right {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+
+@property --inset-bottom {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
+
+@property --inset-left {
+  syntax: "<length>";
+  inherits: true;
+  initial-value: 0px;
+}
 
 :root {
-  --floor: #0b0a09;
-  --bg: #11100e;
-  --raise: #1a1815;
-  --line: #24211d;
-  --line-2: #36312b;
-  --ink: #ede6da;
-  --ink-2: #bdb3a4;
-  --mute: #8a8174;
-  --faint: #5d564d;
-  --bad: #ec7b62;
-  --warn: #e2b25e;
-  --filament: #e0a96d;
-  --ease-out: cubic-bezier(0.25, 0.8, 0.25, 1);
-  --plan-line: #423b33;
-  --plan-text: #6b6359;
+  --void: #070708;
+  --glass: rgb(24 23 21 / 0.6);
+  --glass-strong: rgb(22 21 20 / 0.9);
+  --solid: #161514;
+  --solid-2: #1f1e1c;
+  --edge: rgb(255 250 240 / 0.09);
+  --line: rgb(255 250 240 / 0.07);
+  --line-2: rgb(255 250 240 / 0.13);
+  --fill: rgb(255 250 240 / 0.045);
+  --fill-2: rgb(255 250 240 / 0.085);
+  --fill-3: rgb(255 250 240 / 0.14);
+  --well: rgb(0 0 0 / 0.26);
+  --ink: #f5f1ea;
+  --ink-2: rgb(245 241 234 / 0.74);
+  --mute: rgb(245 241 234 / 0.52);
+  --faint: rgb(245 241 234 / 0.3);
+  --on-ink: #141311;
+  --bad: #ff7d6b;
+  --warn: #f5c066;
+  /* Simulated mode's accent: cool, so it never reads as a light. */
+  --sim: #8fb9ff;
+  /* The room's average color right now (set by the brand's glow). */
+  --room: rgb(60 56 50);
+  --plan-line: #302e2b;
+  --plan-text: #57534e;
+  --blur: blur(22px) saturate(1.5);
+  --float: 0 18px 48px rgb(0 0 0 / 0.42);
+  --radius: 18px;
+  --gap: 12px;
+  --ease-out: cubic-bezier(0.22, 0.8, 0.24, 1);
   --font: "Recursive Variable", ui-sans-serif, system-ui, sans-serif;
   --mono-font: "Recursive Variable", ui-monospace, Menlo, monospace;
-  /* Simulated mode's accent: cool, so it never reads as a light. */
-  --sim: #86b4ec;
   color-scheme: dark;
 }
 
 /* Simulated mode: with edits pending, the map is a preview, not the room.
-   The neutrals cool a little, so it never passes for live. */
+   The glass cools and its edges pick up the accent, so it never passes for
+   live. */
 
 :root[data-simulated] {
-  --floor: #090a0d;
-  --bg: #0e1014;
-  --raise: #161a20;
-  --line: #1f242b;
-  --line-2: #2f3640;
-  --ink: #e4e8ee;
-  --ink-2: #aeb5c0;
-  --mute: #7d8592;
-  --faint: #515864;
-  --plan-line: #353c47;
-  --plan-text: #5f6774;
+  --void: #06070a;
+  --glass: rgb(19 21 27 / 0.62);
+  --glass-strong: rgb(18 20 26 / 0.92);
+  --solid: #13151b;
+  --solid-2: #1b1e25;
+  --edge: rgb(170 200 255 / 0.16);
+  --plan-line: #2a2e36;
+  --plan-text: #4f5561;
 }
 
 * {
@@ -53,9 +92,9 @@ body,
 
 body {
   margin: 0;
-  background: var(--bg);
+  background: var(--void);
   color: var(--ink);
-  font: 13px/1.5 var(--font);
+  font: 13.5px/1.5 var(--font);
   font-variation-settings: "MONO" 0, "CASL" 0;
   -webkit-font-smoothing: antialiased;
 }
@@ -74,7 +113,38 @@ p {
   margin: 0;
 }
 
-/* Buttons. Unclassed buttons are quiet outlined ones. */
+/* Small uppercase captions over a group of controls. */
+.label {
+  margin: 0;
+  color: var(--mute);
+  font: 500 10.5px/1.4 var(--mono-font);
+  font-variation-settings: "MONO" 1;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+}
+
+/* Glass: anything floating over the map. */
+.glass-button,
+.toolbar,
+.tag-editor,
+.floor-switch,
+.zoom-group,
+.zoom-fit,
+.drawer-tab,
+.drawer-sheet.open,
+.map-note,
+.pending,
+.hover-card {
+  background: var(--glass);
+  -webkit-backdrop-filter: var(--blur);
+  backdrop-filter: var(--blur);
+  box-shadow:
+    inset 0 0 0 1px var(--edge),
+    inset 0 1px 0 rgb(255 255 255 / 0.03),
+    var(--float);
+}
+
+/* Buttons. Unclassed buttons are quiet filled ones. */
 
 button {
   font: inherit;
@@ -85,108 +155,104 @@ button {
   cursor: pointer;
 }
 
-button:not([class]) {
-  padding: 5px 12px;
-  border: 1px solid var(--line-2);
-  border-radius: 7px;
+button:not([class]),
+button.quiet {
+  height: 32px;
+  padding: 0 14px;
+  border-radius: 10px;
+  background: var(--fill-2);
   color: var(--ink-2);
+  font-weight: 550;
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 
-button:not([class]):hover:not(:disabled) {
-  border-color: var(--mute);
+button:not([class]):hover:not(:disabled),
+button.quiet:hover:not(:disabled) {
+  background: var(--fill-3);
   color: var(--ink);
 }
 
 button.primary,
 a.button.primary {
-  padding: 6px 14px;
-  border-radius: 7px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 15px;
+  border-radius: 10px;
   background: var(--ink);
-  color: #15130f;
-  font-weight: 600;
+  color: var(--on-ink);
+  font-weight: 650;
   text-decoration: none;
+  white-space: nowrap;
+  transition:
+    background 0.15s,
+    transform 0.15s;
 }
 
 button.primary:hover:not(:disabled),
 a.button.primary:hover {
-  background: #fff8ec;
+  background: #fff;
 }
 
-button.danger {
-  padding: 5px 12px;
-  border-radius: 7px;
-  background: var(--bad);
-  color: #1a0f0b;
-  font-weight: 600;
+button.primary:active:not(:disabled) {
+  transform: scale(0.98);
 }
 
 button:disabled {
-  opacity: 0.45;
+  opacity: 0.4;
   cursor: default;
-}
-
-.text-button {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  padding: 4px 2px;
-  color: var(--ink-2);
-}
-
-.text-button:hover {
-  color: var(--ink);
-}
-
-.danger-text,
-.danger-text:hover {
-  color: var(--bad);
 }
 
 .icon-button {
   display: grid;
   place-items: center;
   flex: none;
-  width: 28px;
-  height: 28px;
-  border-radius: 6px;
+  width: 30px;
+  height: 30px;
+  border-radius: 9px;
   color: var(--mute);
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 
 .icon-button:hover:not(:disabled) {
-  background: var(--raise);
+  background: var(--fill-2);
   color: var(--ink);
-}
-
-.link {
-  color: var(--ink-2);
-  text-decoration: underline;
-  text-decoration-color: var(--line-2);
-  text-underline-offset: 3px;
-}
-
-.link:hover {
-  color: var(--ink);
-  text-decoration-color: var(--mute);
 }
 
 :focus-visible {
-  outline: 1.5px solid var(--filament);
+  outline: 2px solid rgb(255 250 242 / 0.7);
   outline-offset: 2px;
-  border-radius: 4px;
+  border-radius: 6px;
 }
 
 input {
   font: inherit;
   color: var(--ink);
-  background: var(--raise);
+  background: var(--well);
   border: 1px solid var(--line-2);
-  border-radius: 7px;
-  padding: 6px 10px;
+  border-radius: 10px;
+  padding: 7px 12px;
 }
 
 input:focus {
   outline: none;
   border-color: var(--mute);
+}
+
+kbd {
+  padding: 1px 5px;
+  border-radius: 5px;
+  background: var(--fill-2);
+  box-shadow: inset 0 -1px 0 rgb(0 0 0 / 0.35);
+  color: var(--ink-2);
+  font: 11px var(--mono-font);
+  font-variation-settings: "MONO" 1;
 }
 
 .spacer {
@@ -208,219 +274,1497 @@ input:focus {
 .hint {
   color: var(--mute);
   font-size: 12px;
-}
-
-.empty {
-  color: var(--mute);
-  margin: 16px 0;
+  line-height: 1.5;
 }
 
 .error-text {
+  margin-top: 8px;
   color: var(--bad);
   font-size: 12px;
-  margin-top: 8px;
 }
 
-/* Layout: a top bar over three columns: room tone, the map, shaders. */
+/* Layout: the map is the base of everything, at every size, and all else
+   floats over it. Along the top, the HUD: banners about degraded states, then
+   the tag chips and the account. */
 
 .app {
-  display: grid;
-  grid-template-columns: 312px minmax(0, 1fr) 340px;
-  grid-template-rows: 44px minmax(0, 1fr);
-  grid-template-areas:
-    "bar bar bar"
-    "tone stage side";
+  --inset-top: calc(var(--hud-h, 56px) + 8px);
+  --inset-right: var(--gap);
+  --inset-bottom: 52px;
+  --inset-left: var(--gap);
+  --panel-w: 360px;
+  position: relative;
   height: 100vh;
+  height: 100dvh;
+  overflow: hidden;
 }
 
-.topbar {
-  grid-area: bar;
-  display: flex;
-  align-items: center;
-  gap: 18px;
-  padding: 0 14px 0 18px;
-  border-bottom: 1px solid var(--line);
+/* With the selection panel in along the left, the map's own overlays and the tags move over. */
+.app.has-selection {
+  --inset-left: calc(var(--panel-w) + var(--gap));
+  /* What it looks like is in the bottom left corner. */
+  --inset-bottom: max(52px, calc(var(--preview-h, 0px) + var(--gap) * 2));
+}
+
+.app.has-selection .hud-bar {
+  padding-left: calc(var(--panel-w) + var(--gap));
 }
 
 .stage {
-  grid-area: stage;
-  position: relative;
-  min-height: 0;
-  background: var(--floor);
-}
-
-/* A glow round the map's edge while it shows the preview. */
-.stage::after {
-  content: "";
   position: absolute;
   inset: 0;
-  z-index: 20;
+  background: var(--void);
+}
+
+
+.hud {
+  position: absolute;
+  top: 0;
+  right: 0;
+  left: 0;
+  z-index: 10;
+  display: flex;
+  flex-direction: column;
   pointer-events: none;
+}
+
+.hud-bar {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: var(--gap);
+}
+
+.hud-bar > * {
+  pointer-events: auto;
+}
+
+.hud-bar .user {
+  margin-left: auto;
+}
+
+/* The tag chips: one row over the top left of the map, scrolling sideways
+   when there are more than fit (with room round them for their shadows). Its
+   end fades out, so a row that runs on reads as one you can scroll. */
+/* The chips, and under them (over the map, so the HUD keeps its height), a
+   quieter pill that lets go of everything while more than one is on. */
+.tag-bar {
+  position: relative;
+  display: flex;
+  min-width: 0;
+}
+
+.tag-clear {
+  position: absolute;
+  top: calc(100% + 8px);
+  left: 0;
+  height: 28px;
+  padding: 0 12px;
+  border-radius: 999px;
+  background: var(--glass);
+  -webkit-backdrop-filter: var(--blur);
+  backdrop-filter: var(--blur);
   box-shadow:
-    inset 0 0 0 1px rgb(134 180 236 / 0.45),
-    inset 0 0 26px rgb(134 180 236 / 0.2);
+    inset 0 0 0 1px var(--edge),
+    0 2px 8px rgb(0 0 0 / 0.35);
+  color: var(--ink-2);
+  font-size: 12px;
+  white-space: nowrap;
+  animation: chip-in 0.18s var(--ease-out);
+  transition:
+    color 0.15s,
+    background 0.15s;
+}
+
+.tag-clear:hover {
+  background: var(--glass-strong);
+  color: var(--ink);
+}
+
+@keyframes chip-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px);
+  }
+}
+
+/* It ends short of the account button, so the fade is seen, not under it. */
+.tag-chips {
+  display: flex;
+  gap: 6px;
+  min-width: 0;
+  margin: -8px 0 -8px -8px;
+  padding: 8px 28px 8px 8px;
+  overflow-x: auto;
+  scrollbar-width: none;
+  -webkit-mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+  mask-image: linear-gradient(to right, #000 calc(100% - 28px), transparent);
+}
+
+.tag-chips::-webkit-scrollbar {
+  display: none;
+}
+
+.tag-chips .chip {
+  flex: none;
+  height: 34px;
+  padding: 0 14px;
+  background: var(--glass);
+  -webkit-backdrop-filter: var(--blur);
+  backdrop-filter: var(--blur);
+  box-shadow:
+    inset 0 0 0 1px var(--edge),
+    0 2px 8px rgb(0 0 0 / 0.35);
+  font-size: 13px;
+}
+
+.tag-chips .chip:hover {
+  background: var(--glass-strong);
+}
+
+/* A chip that's on lets go when clicked again, as the × ahead of it says. */
+.tag-chips .chip.on {
+  background: var(--ink);
+  box-shadow: 0 2px 8px rgb(0 0 0 / 0.35);
+  cursor: pointer;
+}
+
+.tag-chips .chip svg {
+  margin: 0 -2px 0 -4px;
+}
+
+/* The account, over the top right. */
+.hud .avatar {
+  width: 36px;
+  height: 36px;
+  background: var(--glass-strong);
+  -webkit-backdrop-filter: var(--blur);
+  backdrop-filter: var(--blur);
+  box-shadow:
+    inset 0 0 0 1px var(--edge),
+    0 2px 8px rgb(0 0 0 / 0.35);
+  font-size: 13.5px;
+}
+
+.hud .admin-flag {
+  background: rgb(58 45 22 / 0.85);
+  -webkit-backdrop-filter: var(--blur);
+  backdrop-filter: var(--blur);
+}
+
+.hud .live-flag {
+  background: rgb(66 28 24 / 0.85);
+  -webkit-backdrop-filter: var(--blur);
+  backdrop-filter: var(--blur);
+}
+
+/* A floor with no lights yet says so where its tags would be, chip-sized. */
+.hud-bar .map-note {
+  display: flex;
+  align-items: center;
+  min-height: 34px;
+  margin: 0;
+  padding: 0 14px;
+  border-radius: 999px;
+}
+
+/* The selection panel: along the left edge of the map, under the banners,
+   top to bottom, rounded on the side it opens to. On a phone it's a sheet up
+   from the bottom instead. */
+.selection-panel {
+  position: absolute;
+  top: var(--banners-h, 0px);
+  bottom: 0;
+  left: 0;
+  z-index: 9;
+  display: flex;
+  flex-direction: column;
+  width: var(--panel-w);
+  border-radius: 0 var(--radius) var(--radius) 0;
+  background: var(--glass);
+  -webkit-backdrop-filter: var(--blur);
+  backdrop-filter: var(--blur);
+  box-shadow:
+    inset -1px 0 0 var(--edge),
+    inset 0 1px 0 rgb(255 255 255 / 0.03),
+    var(--float);
+  /* Rows run edge to edge; the corners trim them. */
+  overflow: hidden;
+  animation: panel-from-left 0.28s var(--ease-out);
+}
+
+@keyframes panel-from-left {
+  from {
+    transform: translateX(-100%);
+  }
+}
+
+.selection-head {
+  display: flex;
+  flex: none;
+  align-items: flex-start;
+  gap: 10px;
+  padding: 16px 12px 14px 18px;
+}
+
+.selection-grabber {
+  display: none;
+}
+
+.selection-title {
+  flex: 1;
+  min-width: 0;
+}
+
+.selection-title h2 {
+  font-size: 21px;
+  font-weight: 750;
+  font-variation-settings: "CASL" 1;
+  letter-spacing: -0.03em;
+  line-height: 1.2;
+  overflow-wrap: anywhere;
+}
+
+.selection-title p {
+  margin-top: 3px;
+  font-size: 12.5px;
+}
+
+.selection-body {
+  display: grid;
+  gap: 16px;
+  min-height: 0;
+  padding-top: 14px;
+  overflow-y: auto;
+  border-top: 1px solid var(--line);
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-2) transparent;
+}
+
+.selection-section {
+  display: grid;
+  gap: 8px;
+}
+
+/* What the selection looks like, in the map's bottom left corner with no
+   card, like a car's instruments: Color · White over the wheel (or the white
+   field), and beside it, rows alike for brightness and fidelity (ticks along
+   tracks) and old bulbs (one bar), spread over the wheel's height. A dark
+   wash behind, with no edge, and shadowed text keep it readable over a lit
+   room. Only its tabs and marks take the pointer; the rest is still the map. */
+.color-preview {
+  /* A row: its label's line, a gap, and its bar's. */
+  --label-h: 14px;
+  --row-gap: 6px;
+  --bar-h: 18px;
+  --bar: 8px;
+  /* How far in from those lines their ink starts: a label's capitals, a bar. */
+  --ink-top: 3px;
+  --ink-bottom: calc((var(--bar-h) - var(--bar)) / 2);
+  --label-ink: rgb(245 241 234 / 0.64);
+}
+
+.map-bottom-row > .color-preview {
+  position: relative;
+  display: flex;
+  align-items: flex-end;
+  min-width: 0;
+  animation: preview-in 0.24s var(--ease-out);
+}
+
+/* Short of room for the tracks beside the wheel, they go under it. */
+.color-preview.stacked {
+  flex-direction: column;
+  align-items: flex-start;
+}
+
+/* Over the bottom row's rule that what's in its corners takes the pointer. */
+.app .map-bottom-row > .color-preview {
+  pointer-events: none;
+}
+
+@keyframes preview-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+}
+
+/* Behind what floats along the map's bottom, a dusk across its whole width:
+   dark up to the top of what it looks like, then easing out over the room
+   above (many stops, so it fades smoothly, without bands). Over the dark
+   round the plan it's barely there; over a lit room it keeps them readable. */
+.map-scrim {
+  /* Dark up to here (the top of what it looks like), then easing out over this. */
+  --dusk: calc(var(--preview-h, 0px) + var(--gap));
+  --fade: 220px;
+  position: absolute;
+  right: 0;
+  bottom: 0;
+  left: 0;
+  height: calc(var(--dusk) + var(--fade));
+  background: linear-gradient(
+    to top,
+    rgb(8 7 6 / 0.86) 0,
+    rgb(8 7 6 / 0.82) calc(var(--dusk) * 0.5),
+    rgb(8 7 6 / 0.72) var(--dusk),
+    rgb(8 7 6 / 0.56) calc(var(--dusk) + var(--fade) * 0.15),
+    rgb(8 7 6 / 0.4) calc(var(--dusk) + var(--fade) * 0.3),
+    rgb(8 7 6 / 0.26) calc(var(--dusk) + var(--fade) * 0.45),
+    rgb(8 7 6 / 0.14) calc(var(--dusk) + var(--fade) * 0.6),
+    rgb(8 7 6 / 0.06) calc(var(--dusk) + var(--fade) * 0.75),
+    rgb(8 7 6 / 0.015) calc(var(--dusk) + var(--fade) * 0.9),
+    rgb(8 7 6 / 0) 100%
+  );
   opacity: 0;
+  pointer-events: none;
   transition: opacity 0.3s var(--ease-out);
 }
 
-:root[data-simulated] .stage::after {
+.app.has-selection .map-scrim {
   opacity: 1;
 }
 
-.tone,
-.side {
-  min-height: 0;
-  overflow-y: auto;
+.color-preview .label,
+.color-preview .field-head .mono,
+.preview-tabs button {
+  text-shadow:
+    0 1px 2px rgb(0 0 0 / 0.9),
+    0 0 10px rgb(0 0 0 / 0.7);
 }
 
-.tone {
-  grid-area: tone;
-  border-right: 1px solid var(--line);
+.color-preview .goo-mark,
+.color-preview .tick,
+.preview-tabs button,
+.field-note.left-out {
+  pointer-events: auto;
 }
 
-.side {
-  grid-area: side;
-  border-left: 1px solid var(--line);
+/* The tabs centered over the wheel. */
+.preview-look {
+  display: grid;
+  flex: none;
+  justify-items: center;
+  gap: 10px;
 }
 
-/* Narrower: the map across the top, the two panels side by side beneath. */
-@media (max-width: 1100px) {
-  .app {
-    grid-template-columns: minmax(0, 1fr) minmax(0, 1fr);
-    grid-template-rows: 44px 58vh auto;
-    grid-template-areas:
-      "bar bar"
-      "stage stage"
-      "tone side";
-    height: auto;
-    min-height: 100vh;
-  }
+/* Set as the labels are; the one showing is bright and underlined. */
+.preview-tabs {
+  display: flex;
+  gap: 14px;
+}
 
-  .tone,
-  .side {
-    overflow: visible;
-    border-top: 1px solid var(--line);
-  }
+.preview-tabs button {
+  position: relative;
+  padding: 0;
+  color: rgb(245 241 234 / 0.42);
+  font: 500 10px / var(--label-h) var(--mono-font);
+  font-variation-settings: "MONO" 1;
+  letter-spacing: 0.09em;
+  text-transform: uppercase;
+  transition: color 0.15s;
+}
 
-  .side {
-    border-left: 0;
+.preview-tabs button:hover {
+  color: var(--label-ink);
+}
+
+.preview-tabs button.on {
+  color: var(--ink);
+}
+
+.preview-tabs button.on::after {
+  position: absolute;
+  right: 0.09em;
+  bottom: -3px;
+  left: 0;
+  height: 1.5px;
+  border-radius: 1px;
+  background: currentColor;
+  content: "";
+}
+
+.preview-tracks {
+  display: flex;
+  flex: none;
+  flex-direction: column;
+  justify-content: space-between;
+  width: var(--tracks, 220px);
+}
+
+/* Beside the wheel, as tall as it: the first label's capitals level with
+   its top, the last bar's bottom with its bottom. Two rows sit in the middle. */
+.color-preview.has-look:not(.stacked) .preview-tracks {
+  height: calc(var(--look) + var(--ink-top) + var(--ink-bottom));
+  margin: calc(var(--ink-top) * -1) 0 calc(var(--ink-bottom) * -1);
+}
+
+.color-preview.has-look:not(.stacked) .preview-tracks.two {
+  justify-content: center;
+  gap: 20px;
+}
+
+.color-preview.stacked .preview-tracks {
+  justify-content: flex-start;
+  gap: 14px;
+}
+
+/* Just one row: it goes without its label (kept for screen readers), its
+   value from the left; just one old bulb's word, no wider than it takes. */
+.preview-tracks > :only-child .field-head {
+  justify-content: flex-start;
+}
+
+.preview-tracks > :only-child .field-head .label {
+  position: absolute;
+  width: 1px;
+  height: 1px;
+  overflow: hidden;
+  clip-path: inset(50%);
+  white-space: nowrap;
+}
+
+.preview-tracks:has(> .onoff-view.one:only-child) {
+  width: auto;
+}
+
+.wheel,
+.white-strip {
+  position: relative;
+}
+
+.wheel canvas:not(.goo),
+.white-strip canvas:not(.goo) {
+  display: block;
+  box-shadow:
+    0 0 0 1px rgb(255 255 255 / 0.08),
+    0 8px 24px rgb(0 0 0 / 0.55);
+}
+
+.wheel canvas:not(.goo) {
+  border-radius: 50%;
+}
+
+.white-strip canvas:not(.goo) {
+  width: 100%;
+  height: 100%;
+  border-radius: 10px;
+}
+
+/* Small, dark on the pale field, in its corners: which way is warm, which
+   cool, and how many lights aren't whites (so aren't on it). */
+.field-note {
+  position: absolute;
+  color: rgb(28 20 12 / 0.6);
+  font: 500 9.5px / 1 var(--mono-font);
+  font-variation-settings: "MONO" 1;
+  letter-spacing: 0.04em;
+  pointer-events: none;
+}
+
+.field-note.warm {
+  bottom: 8px;
+  left: 8px;
+}
+
+.field-note.cool {
+  right: 8px;
+  bottom: 8px;
+}
+
+.field-note.left-out {
+  top: 8px;
+  right: 8px;
+}
+
+/* Where lights are, as metaballs: a canvas of goo over the wheel or strip,
+   reaching past its edges, with counts (and hovers) riding over it, placed
+   by the goo's own frames. A readout, not a handle. */
+.goo {
+  position: absolute;
+  pointer-events: none;
+}
+
+.goo-mark {
+  position: absolute;
+  top: 0;
+  left: 0;
+  display: grid;
+  place-items: center;
+  border-radius: 999px;
+  font: 750 10.5px var(--font);
+  font-variant-numeric: tabular-nums;
+  visibility: hidden;
+}
+
+/* A row's label and value on one line: the value whole and brighter, the
+   label quieter (cut short if it must be). */
+.color-preview .field-head {
+  align-items: baseline;
+  height: var(--label-h);
+  margin: 0 0 var(--row-gap);
+  white-space: nowrap;
+}
+
+.color-preview .field-head .label {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--label-ink);
+  font-size: 10px;
+  line-height: var(--label-h);
+  text-overflow: ellipsis;
+}
+
+.color-preview .field-head .mono {
+  flex: none;
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 500;
+  line-height: var(--label-h);
+}
+
+/* A track, outlined so its whole length shows on the dark, with a taller
+   tick per light crossing it, in the light's color as bright as it looks; a
+   dark and a light hairline keep each in sight at either end. */
+.ticks {
+  position: relative;
+  height: var(--bar-h);
+}
+
+.ticks::before {
+  position: absolute;
+  top: 50%;
+  right: 0;
+  left: 0;
+  height: var(--bar);
+  border-radius: 999px;
+  background: var(--track);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.16);
+  content: "";
+  transform: translateY(-50%);
+}
+
+.tick {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  width: 3px;
+  border-radius: 999px;
+  box-shadow:
+    0 0 0 1px rgb(0 0 0 / 0.6),
+    0 0 0 1.5px rgb(255 255 255 / 0.22);
+  transform: translateX(-50%);
+  transition: left 0.25s var(--ease-out);
+}
+
+/* On from the left, off to the right: a bar as thick as a track, in a row as tall. */
+.onoff-bar {
+  position: relative;
+  height: var(--bar);
+  margin: var(--ink-bottom) 0;
+  overflow: hidden;
+  border-radius: 999px;
+  background: rgb(255 255 255 / 0.07);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.16);
+}
+
+/* One old bulb: a glowing filament ahead of the word, or off, just its outline. */
+.onoff-lamp {
+  display: inline-block;
+  width: 8px;
+  height: 8px;
+  margin-right: 7px;
+  border-radius: 50%;
+  background: var(--filament);
+  box-shadow: 0 0 8px var(--filament);
+  vertical-align: 1px;
+}
+
+.onoff-lamp.off {
+  background: none;
+  box-shadow: inset 0 0 0 1.5px var(--label-ink);
+}
+
+.onoff-view.one .field-head {
+  margin-bottom: 0;
+}
+
+.onoff-on {
+  position: absolute;
+  top: 0;
+  bottom: 0;
+  left: 0;
+  width: var(--on);
+  border-radius: 999px;
+  background: var(--filament);
+  box-shadow: 0 0 12px var(--filament);
+  transition: width 0.3s var(--ease-out);
+}
+
+.lit-by {
+  padding: 0 18px;
+  color: var(--ink-2);
+  font-size: 13px;
+  font-weight: 650;
+}
+
+/* What's making the selection's light, bottom of the stack first: full-width
+   rows between hairlines, room tone's like any shader's. */
+.layers {
+  display: grid;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+  border-top: 1px solid var(--line);
+}
+
+/* Clipped, so each row's piece of the rail stops at its edges. */
+.layer {
+  position: relative;
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-height: 56px;
+  padding: 8px 14px 8px 6px;
+  overflow: hidden;
+  border-bottom: 1px solid var(--line);
+  transition: background 0.15s;
+}
+
+/* The rail: a line down through a stop on each row, as the light builds up
+   from room tone (the solid source) through each shader in turn. A shader
+   switched off for these lights is a hollow stop the light passes by. */
+.layer-node {
+  position: relative;
+  flex: none;
+  width: 9px;
+  height: 9px;
+  margin: 0 8px 0 2px;
+  border-radius: 50%;
+  background: var(--ink-2);
+}
+
+.layer-node::before,
+.layer-node::after {
+  content: "";
+  position: absolute;
+  left: 50%;
+  width: 1.5px;
+  height: 60px;
+  margin-left: -0.75px;
+  background: var(--line-2);
+}
+
+.layer-node::before {
+  bottom: calc(100% + 3px);
+}
+
+.layer-node::after {
+  top: calc(100% + 3px);
+}
+
+.layer:first-child .layer-node::before,
+.layer:last-child .layer-node::after {
+  display: none;
+}
+
+.layer.base .layer-node {
+  width: 11px;
+  height: 11px;
+  margin: 0 7px 0 1px;
+  background: var(--ink);
+  box-shadow: 0 0 10px 1px rgb(255 250 242 / 0.35);
+}
+
+.layer.off .layer-node {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--faint);
+}
+
+/* Switched off here: bypassed for these lights, so off the rail. */
+.layers.bypassed .layer-node::before,
+.layers.bypassed .layer-node::after {
+  display: none;
+}
+
+.layer:last-child {
+  border-bottom: 0;
+}
+
+.layer:hover {
+  background: var(--fill);
+}
+
+/* Lifted while it's dragged to another place. */
+.layer.dragging {
+  position: relative;
+  z-index: 2;
+  background: var(--solid-2);
+  box-shadow: 0 14px 32px rgb(0 0 0 / 0.5);
+}
+
+/* The handle shows as you come to its row (always, without a pointer that hovers). */
+.layer-grip {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 26px;
+  height: 34px;
+  border-radius: 7px;
+  color: var(--faint);
+  cursor: grab;
+  opacity: 0;
+  touch-action: none;
+  transition:
+    background 0.15s,
+    color 0.15s,
+    opacity 0.15s;
+}
+
+.layer:hover .layer-grip,
+.layer-grip:focus-visible,
+.layer.dragging .layer-grip {
+  opacity: 1;
+}
+
+@media (hover: none) {
+  .layer-grip {
+    opacity: 1;
   }
 }
 
-@media (max-width: 680px) {
-  .app {
-    grid-template-columns: minmax(0, 1fr);
-    grid-template-rows: 44px 56vh auto auto;
-    grid-template-areas:
-      "bar"
-      "stage"
-      "tone"
-      "side";
+.layer-grip:hover,
+.layer.dragging .layer-grip {
+  background: var(--fill-2);
+  color: var(--ink-2);
+}
+
+.layer.dragging .layer-grip {
+  cursor: grabbing;
+}
+
+/* Room tone keeps the handle's room, so the names line up, but has none. */
+.layer.base .layer-grip {
+  visibility: hidden;
+}
+
+.layer-text {
+  display: grid;
+  flex: 1;
+  min-width: 0;
+}
+
+.layer-name {
+  overflow: hidden;
+  font-size: 13.5px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.layer-meta {
+  overflow: hidden;
+  color: var(--mute);
+  font-size: 12px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* Switched off for every selected light: it has no say here. */
+.layer.off .layer-name {
+  color: var(--mute);
+}
+
+/* A layer with parameters: its name opens them under it, the rail running
+   on down beside them. */
+.layer-toggle {
+  padding: 0;
+  text-align: left;
+}
+
+.layer-chevron {
+  display: grid;
+  flex: none;
+  place-items: center;
+  width: 22px;
+  height: 22px;
+  color: var(--mute);
+  transform: rotate(180deg);
+  transition: transform 0.2s var(--ease-out);
+}
+
+.layer.open .layer-chevron {
+  transform: none;
+}
+
+.layer.base {
+  flex-wrap: wrap;
+  padding: 0;
+}
+
+/* Room tone's head, the row itself: all of it opens and closes its
+   parameter, so it's what lights up, open or closed, not the parameter. */
+.layer-head {
+  display: flex;
+  flex-basis: 100%;
+  align-items: center;
+  gap: 6px;
+  min-height: 56px;
+  padding: 8px 14px 8px 6px;
+  cursor: pointer;
+  transition: background 0.15s;
+}
+
+.layer.base:hover {
+  background: none;
+}
+
+.layer-head:hover {
+  background: var(--fill);
+}
+
+.layer.base.open .layer-node::after {
+  height: 2000px;
+}
+
+/* Room tone's color, under its row, lined up with its name. */
+.tone-editor {
+  display: grid;
+  flex-basis: 100%;
+  gap: 20px;
+  margin: -4px 14px 20px 64px;
+}
+
+/* The color editor (ColorEditor), wherever there's a color to set. */
+.color-editor {
+  display: grid;
+  gap: 20px;
+}
+
+.color-editor > .hint {
+  margin-top: -10px;
+}
+
+/* The lights can't make what's asked: how far short they fall. */
+.color-editor > .color-limit {
+  color: var(--warn);
+}
+
+/* The picker, as Hue's: circles over a wheel (or a strip of whites), one per
+   color, the active one bigger and ringed. Press anywhere: on a circle to
+   take it, elsewhere to bring the active one there. */
+.picker {
+  position: relative;
+  cursor: crosshair;
+  touch-action: none;
+  user-select: none;
+  -webkit-user-select: none;
+}
+
+.picker:focus-visible {
+  outline: none;
+}
+
+.wheel-picker {
+  justify-self: center;
+}
+
+.wheel-picker canvas {
+  display: block;
+  border-radius: 50%;
+  box-shadow: 0 14px 40px rgb(0 0 0 / 0.45);
+}
+
+/* Temperature across, tint up and down (painted to match how it goes with height). */
+.white-picker-field {
+  position: absolute;
+  inset: 0;
+  display: block;
+  width: 100%;
+  height: 100%;
+  border-radius: 12px;
+  box-shadow: inset 0 0 0 1px rgb(0 0 0 / 0.15);
+}
+
+/* The black-body line itself, faintly. */
+.white-picker::after {
+  position: absolute;
+  top: 50%;
+  right: 8px;
+  left: 8px;
+  height: 1px;
+  background: rgb(0 0 0 / 0.12);
+  content: "";
+  pointer-events: none;
+}
+
+.white-picker-scale {
+  position: relative;
+  height: 14px;
+  margin-top: 7px;
+  color: var(--faint);
+  font-size: 10.5px;
+}
+
+.white-picker-scale span {
+  position: absolute;
+  transform: translateX(-50%);
+}
+
+.white-picker-scale span:last-child {
+  transform: translateX(-100%);
+}
+
+/* A color's lights: filled with it, ringed in white, how many in it. */
+.picker-circle {
+  position: absolute;
+  z-index: 1;
+  display: grid;
+  place-items: center;
+  box-sizing: border-box;
+  width: 20px;
+  height: 20px;
+  border: 2px solid #fff;
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 1px rgb(0 0 0 / 0.45),
+    0 2px 6px rgb(0 0 0 / 0.45);
+  font: 750 9px/1 var(--font);
+  font-variant-numeric: tabular-nums;
+  cursor: grab;
+  transform: translate(-50%, -50%);
+  transition:
+    width 0.15s var(--ease-out),
+    height 0.15s var(--ease-out),
+    box-shadow 0.15s;
+}
+
+.picker-circle.on {
+  z-index: 2;
+  width: 30px;
+  height: 30px;
+  border-width: 3px;
+  box-shadow:
+    0 0 0 1px rgb(0 0 0 / 0.5),
+    0 0 0 5px rgb(255 255 255 / 0.22),
+    0 4px 12px rgb(0 0 0 / 0.5);
+  font-size: 10.5px;
+}
+
+.picker-circle.hollow {
+  background: rgb(255 255 255 / 0.25);
+  border-style: dashed;
+}
+
+/* Where a circle's color is asked for, when the lights can't make it: a
+   ghost of the circle, which sits where their light lands. */
+.picker-ghost {
+  position: absolute;
+  z-index: 1;
+  box-sizing: border-box;
+  width: 20px;
+  height: 20px;
+  border: 2px dashed rgb(255 255 255 / 0.9);
+  border-radius: 50%;
+  background: rgb(0 0 0 / 0.5);
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.3);
+  cursor: grab;
+  transform: translate(-50%, -50%);
+}
+
+.picker-ghost.on {
+  width: 30px;
+  height: 30px;
+}
+
+/* From each ghost to its circle: under both, cut off at their edges. */
+.picker-links {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  overflow: visible;
+  pointer-events: none;
+}
+
+.picker-link,
+.picker-link-shade {
+  stroke-linecap: round;
+}
+
+.picker-link {
+  stroke: #fff;
+  stroke-opacity: 0.9;
+  stroke-width: 1.5;
+}
+
+.picker-link-shade {
+  stroke: #000;
+  stroke-opacity: 0.35;
+  stroke-width: 3.5;
+}
+
+.picker:focus-visible .picker-circle.on {
+  box-shadow:
+    0 0 0 1px rgb(0 0 0 / 0.5),
+    0 0 0 5px var(--sim),
+    0 4px 12px rgb(0 0 0 / 0.5);
+}
+
+/* Which circle the sliders below are for, and a way to give them all its color. */
+.color-active {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  min-height: 26px;
+  margin-top: -6px;
+  font-size: 12px;
+}
+
+.color-swatch {
+  flex: none;
+  width: 12px;
+  height: 12px;
+  border-radius: 50%;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.2);
+}
+
+.color-active-name {
+  color: var(--ink);
+  font-weight: 600;
+}
+
+.color-count {
+  color: var(--mute);
+  font-family: var(--mono-font);
+  font-size: 11px;
+}
+
+.color-all {
+  height: 26px;
+  margin-left: auto;
+  padding: 0 10px;
+  border-radius: 8px;
+  background: var(--fill);
+  color: var(--ink-2);
+  font-size: 11.5px;
+  white-space: nowrap;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+.color-all:hover {
+  background: var(--fill-2);
+  color: var(--ink);
+}
+
+/* Where the active circle's lights are on a track, when they differ. */
+.color-editor .slider-mark {
+  width: 2px;
+  margin-left: -1px;
+  border-radius: 1px;
+  box-shadow: 0 0 0 1px rgb(0 0 0 / 0.45);
+}
+
+.tone-old {
+  display: grid;
+}
+
+/* Shaders draw over them: say so, and offer a look at the room tone alone. */
+.tone-over {
+  align-items: center;
+}
+
+.tone-over > span {
+  flex: 1;
+}
+
+.peek {
+  flex: none;
+  height: 28px;
+  padding: 0 11px;
+  border-radius: 9px;
+  background: var(--fill-2);
+  color: var(--ink);
+  font-size: 12px;
+  font-weight: 600;
+  white-space: nowrap;
+  touch-action: none;
+  user-select: none;
+  transition: background 0.15s;
+}
+
+.peek:hover {
+  background: var(--fill-3);
+}
+
+.peek:active {
+  background: var(--ink);
+  color: var(--void);
+}
+
+/* Whether a shader is on for these lights. Halfway when it's off for some. */
+.switch {
+  position: relative;
+  flex: none;
+  width: 36px;
+  height: 22px;
+  border-radius: 999px;
+  background: var(--fill-3);
+  transition: background 0.18s;
+}
+
+.switch:hover {
+  background: rgb(255 250 242 / 0.2);
+}
+
+.switch.on {
+  background: var(--ink);
+}
+
+.switch.on:hover {
+  background: #fff;
+}
+
+.switch-knob {
+  position: absolute;
+  top: 3px;
+  left: 3px;
+  width: 16px;
+  height: 16px;
+  border-radius: 50%;
+  background: var(--ink);
+  box-shadow: 0 1px 3px rgb(0 0 0 / 0.4);
+  transition:
+    transform 0.2s var(--ease-out),
+    background 0.18s;
+}
+
+.switch.on .switch-knob {
+  background: var(--on-ink);
+  transform: translateX(14px);
+}
+
+.switch.mixed .switch-knob {
+  transform: translateX(7px);
+}
+
+/* Narrow: as in narrow.ts, where the width comes from. */
+@media (max-width: 800px) {
+  /* The sheet covers the bottom instead (with the map's controls riding over it). */
+  .app.has-selection {
+    --inset-left: var(--gap);
+    --inset-bottom: calc(var(--sheet-h, 0px) + 52px);
   }
 
-  .tone {
-    border-right: 0;
+  /* What it looks like isn't shown here (see App), so there's no dusk for it. */
+  .map-scrim {
+    display: none;
+  }
+
+  .app.has-selection .hud-bar {
+    padding-left: var(--gap);
+  }
+
+  /* Its height (set inline) is one of three it rests at, easing between
+     them; over the HUD, as it can reach the top. */
+  .selection-panel {
+    top: auto;
+    right: 0;
+    bottom: 0;
+    left: 0;
+    z-index: 20;
+    width: auto;
+    max-height: none;
+    padding-bottom: env(safe-area-inset-bottom);
+    border-radius: 20px 20px 0 0;
+    box-shadow:
+      inset 0 1px 0 var(--edge),
+      var(--float);
+    animation-name: panel-from-bottom;
+    transition:
+      height 0.3s var(--ease-out),
+      border-radius 0.3s var(--ease-out);
+  }
+
+  /* Following a finger dragging it, it doesn't ease behind. */
+  .selection-panel.dragging {
+    transition: none;
+  }
+
+  /* The whole screen: square, and clear of the notch. */
+  .selection-panel.full {
+    padding-top: env(safe-area-inset-top);
+    border-radius: 0;
+  }
+
+  .selection-head {
+    padding-top: 8px;
+    touch-action: none;
+    user-select: none;
+    -webkit-user-select: none;
+  }
+
+  /* The grabber says the sheet moves; the whole head is what takes the pull. */
+  .selection-grabber {
+    position: absolute;
+    top: 7px;
+    left: 50%;
+    display: block;
+    width: 36px;
+    height: 5px;
+    border-radius: 3px;
+    background: var(--line-2);
+    transform: translateX(-50%);
+  }
+
+  .selection-title {
+    padding-top: 12px;
+  }
+
+  /* The floors, zoom and drawer ride up above the sheet, keeping up with it frame by frame. */
+  .app.has-selection .map-bottom {
+    bottom: var(--sheet-h, 0px);
   }
 }
 
-/* Top bar */
+@keyframes panel-from-bottom {
+  from {
+    transform: translateY(100%);
+  }
+}
+
+/* Brand: the top of the room tone panel. */
 
 .brand {
   display: flex;
   align-items: center;
-  gap: 9px;
+  gap: 10px;
+  width: 100%;
 }
 
 .room-glow {
-  width: 8px;
-  height: 8px;
+  flex: none;
+  width: 10px;
+  height: 10px;
   border-radius: 50%;
+  background: var(--room);
+  box-shadow:
+    0 0 14px 2px var(--room),
+    inset 0 0 0 1px rgb(255 255 255 / 0.2);
   transition:
     background 0.4s,
     box-shadow 0.4s;
 }
 
 .wordmark {
-  font-size: 17px;
-  font-weight: 750;
+  font-size: 22px;
+  font-weight: 800;
   font-variation-settings: "CASL" 1;
-  letter-spacing: -0.02em;
+  letter-spacing: -0.035em;
+  line-height: 1;
 }
 
-.status {
-  color: var(--mute);
+@keyframes breathe {
+  50% {
+    opacity: 0.45;
+  }
 }
 
-.status.bad {
+/* Banners: degraded states, across the top of the whole site, over the map. */
+
+.banners {
+  display: grid;
+  pointer-events: auto;
+}
+
+.banner {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: center;
+  gap: 2px 10px;
+  min-height: 38px;
+  margin: 0;
+  padding: 8px 16px;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  line-height: 1.4;
+  text-align: center;
+  -webkit-backdrop-filter: var(--blur);
+  backdrop-filter: var(--blur);
+}
+
+.banner strong {
+  font-weight: 650;
+}
+
+.banner-dot {
+  flex: none;
+  width: 7px;
+  height: 7px;
+  border-radius: 50%;
+}
+
+.banner.bad {
+  background: rgb(66 26 22 / 0.8);
+  box-shadow: inset 0 -1px 0 rgb(255 125 107 / 0.3);
+}
+
+.banner.bad strong {
   color: var(--bad);
 }
 
-.status.warn {
+.banner.bad .banner-dot {
+  background: var(--bad);
+  box-shadow: 0 0 8px 1px rgb(255 125 107 / 0.7);
+  animation: breathe 2s ease-in-out infinite;
+}
+
+.banner.warn {
+  background: rgb(60 47 22 / 0.8);
+  box-shadow: inset 0 -1px 0 rgb(245 192 102 / 0.28);
+}
+
+.banner.warn strong {
   color: var(--warn);
 }
 
-.status.sim {
-  color: var(--sim);
+.banner.warn .banner-dot {
+  background: var(--warn);
+  box-shadow: 0 0 8px 1px rgb(245 192 102 / 0.6);
+  animation: breathe 2.4s ease-in-out infinite;
 }
 
-.admin-flag {
-  color: var(--filament);
-  font-size: 12px;
+.banner.info {
+  background: rgb(30 29 27 / 0.8);
+  box-shadow: inset 0 -1px 0 var(--line-2);
 }
 
-.pending {
+.banner.info strong {
+  color: var(--ink);
+}
+
+.banner.info .banner-dot {
+  background: var(--mute);
+}
+
+/* Who's logged in, top right. */
+
+.user {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 8px;
 }
 
-.sim-flag {
-  color: var(--sim);
-  font-size: 12px;
+.admin-flag,
+.live-flag {
+  padding: 2px 8px;
+  border-radius: 999px;
+  background: rgb(245 192 102 / 0.12);
+  color: var(--warn);
+  font: 500 10.5px/1.5 var(--mono-font);
+  font-variation-settings: "MONO" 1;
+  letter-spacing: 0.08em;
+  text-transform: uppercase;
 }
 
-.pending-error {
-  max-width: 280px;
-  overflow: hidden;
+/* Live: edits reach the room as they're made, so it says so in red. */
+.live-flag {
+  background: rgb(255 120 100 / 0.14);
   color: var(--bad);
-  font-size: 12px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
 }
+
+.user-button {
+  border-radius: 50%;
+  transition: box-shadow 0.15s;
+}
+
+.user-button:hover,
+.user-button[aria-expanded="true"] {
+  box-shadow: 0 0 0 3px var(--fill-2);
+}
+
+.avatar {
+  display: grid;
+  place-items: center;
+  flex: none;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  background: var(--fill-3);
+  color: var(--ink);
+  font-size: 12.5px;
+  font-weight: 750;
+  font-variation-settings: "CASL" 1;
+  line-height: 1;
+}
+
+.avatar.small {
+  width: 22px;
+  height: 22px;
+  background: var(--fill-2);
+  color: var(--ink-2);
+  font-size: 10.5px;
+}
+
+/* Menus */
 
 .menu {
   position: relative;
+  display: inline-flex;
 }
 
 .menu-panel {
   position: absolute;
   top: calc(100% + 8px);
-  right: 0;
   z-index: 30;
   min-width: 270px;
   padding: 6px;
-  background: var(--raise);
-  border: 1px solid var(--line-2);
-  border-radius: 9px;
-  box-shadow: 0 16px 40px rgb(0 0 0 / 0.5);
+  background: var(--solid-2);
+  border-radius: 14px;
+  box-shadow:
+    inset 0 0 0 1px var(--line-2),
+    0 20px 50px rgb(0 0 0 / 0.55);
+  animation: pop-in 0.16s var(--ease-out);
 }
 
-.brand + .menu .menu-panel {
+.menu.start .menu-panel {
   left: 0;
-  right: auto;
+}
+
+.menu.end .menu-panel {
+  right: 0;
+}
+
+@keyframes pop-in {
+  from {
+    opacity: 0;
+    transform: translateY(-4px) scale(0.98);
+  }
+}
+
+.menu-heading {
+  padding: 8px 10px 6px;
+  font-weight: 650;
 }
 
 .menu-switch {
   display: flex;
   gap: 10px;
-  padding: 8px;
-  border-radius: 6px;
+  padding: 9px 10px;
+  border-radius: 9px;
   cursor: pointer;
+}
+
+.menu-switch:hover {
+  background: var(--fill);
 }
 
 .menu-switch input {
   margin-top: 3px;
-  accent-color: var(--filament);
+  accent-color: var(--warn);
 }
 
 .menu-switch span {
@@ -431,29 +1775,213 @@ input:focus {
 .menu-switch small {
   color: var(--mute);
   font-size: 11.5px;
-  line-height: 1.4;
+  line-height: 1.45;
 }
 
 .menu-item {
   display: block;
   width: 100%;
-  padding: 7px 8px;
-  border-radius: 6px;
+  padding: 8px 10px;
+  border-radius: 9px;
   text-align: left;
   color: var(--ink-2);
 }
 
 .menu-item:hover {
-  background: var(--line);
+  background: var(--fill-2);
   color: var(--ink);
 }
 
-.status-detail {
+/* Segmented controls: a recessed track, equal-width options, and a raised
+   highlight that slides to the chosen one. */
+
+.segmented {
+  position: relative;
+  display: inline-grid;
+  grid-template-columns: repeat(var(--count), 1fr);
+  justify-self: start;
+  padding: 3px;
+  border-radius: 12px;
+  background: var(--well);
+  box-shadow: inset 0 0 0 1px var(--line);
+}
+
+.segmented.stretch {
   display: grid;
+  justify-self: stretch;
+}
+
+/* Unselected options are part of the track: no fill of their own. */
+.segmented button,
+.segmented button:hover:not(:disabled) {
+  background: transparent;
+}
+
+.segmented button {
+  position: relative;
+  z-index: 1;
+  height: 28px;
+  padding: 0 14px;
+  border-radius: 9px;
+  color: var(--mute);
+  font-size: 12.5px;
+  font-weight: 550;
+  white-space: nowrap;
+  transition: color 0.2s;
+}
+
+.segmented button:hover,
+.segmented button[aria-checked="true"] {
+  color: var(--ink);
+}
+
+.segmented.vertical {
+  grid-template-columns: none;
+  grid-template-rows: repeat(var(--count), 1fr);
+}
+
+.segmented.vertical .segmented-thumb {
+  right: 3px;
+  bottom: auto;
+  width: auto;
+  height: calc((100% - 6px) / var(--count));
+  transform: translateY(calc(var(--index) * 100%));
+}
+
+.segmented-thumb {
+  position: absolute;
+  top: 3px;
+  bottom: 3px;
+  left: 3px;
+  width: calc((100% - 6px) / var(--count));
+  border-radius: 9px;
+  background: var(--fill-3);
+  box-shadow:
+    0 1px 3px rgb(0 0 0 / 0.4),
+    inset 0 1px 0 rgb(255 255 255 / 0.06);
+  transform: translateX(calc(var(--index) * 100%));
+  transition: transform 0.24s cubic-bezier(0.3, 0.7, 0.2, 1);
+}
+
+.chips {
+  display: flex;
+  flex-wrap: wrap;
   gap: 6px;
-  padding: 6px 8px;
-  font-size: 12px;
+}
+
+.chip {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 28px;
+  padding: 0 11px;
+  border-radius: 999px;
+  background: var(--fill);
+  box-shadow: inset 0 0 0 1px var(--line);
   color: var(--ink-2);
+  font-size: 12.5px;
+  font-weight: 500;
+  white-space: nowrap;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+.chip:hover {
+  background: var(--fill-2);
+  color: var(--ink);
+}
+
+.chip.on {
+  background: var(--ink);
+  box-shadow: none;
+  color: var(--on-ink);
+  font-weight: 650;
+  cursor: default;
+}
+
+/* A hand-picked selection's chip clears it. */
+.chip.on:has(svg) {
+  cursor: pointer;
+}
+
+.chip svg {
+  width: 12px;
+  height: 12px;
+  margin-right: -3px;
+}
+
+.field-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 12px;
+  margin-bottom: 10px;
+}
+
+.field-head .mono {
+  color: var(--ink);
+  font-size: 12.5px;
+}
+
+.slider-track {
+  position: relative;
+  height: 10px;
+  border-radius: 999px;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.06);
+  cursor: pointer;
+  touch-action: none;
+}
+
+.slider-thumb {
+  position: absolute;
+  top: 50%;
+  width: 20px;
+  height: 20px;
+  margin: -10px 0 0 -10px;
+  border-radius: 50%;
+  background: #fff;
+  box-shadow:
+    0 0 0 1px rgb(0 0 0 / 0.35),
+    0 2px 8px rgb(0 0 0 / 0.5);
+  pointer-events: none;
+}
+
+.slider-mark {
+  position: absolute;
+  top: -4px;
+  bottom: -4px;
+  width: 1px;
+  background: rgb(255 255 255 / 0.6);
+}
+
+.slider-ends {
+  display: flex;
+  justify-content: space-between;
+  margin-top: 8px;
+  color: var(--faint);
+  font-size: 11px;
+}
+
+.slider.dim {
+  opacity: 0.4;
+}
+
+.note {
+  display: flex;
+  gap: 10px;
+  padding: 11px 13px;
+  border-radius: 12px;
+  background: var(--fill);
+  color: var(--ink-2);
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.note svg {
+  flex: none;
+  margin-top: 1px;
+  color: var(--mute);
 }
 
 /* The map */
@@ -462,7 +1990,18 @@ input:focus {
   position: absolute;
   inset: 0;
   overflow: hidden;
-  background: var(--floor);
+  background-color: var(--void);
+}
+
+/* The simulated light on the floor (lighting.ts), under the plan's lines,
+   adding to the grid beneath it. */
+.map-light {
+  position: absolute;
+  inset: 0;
+  width: 100%;
+  height: 100%;
+  pointer-events: none;
+  mix-blend-mode: screen;
 }
 
 .floorplan {
@@ -478,10 +2017,33 @@ input:focus {
 }
 
 /* The plans are drawn black on white; redraw them as faint lines on the dark
-   floor so the lights stay the brightest thing on the map. */
+   floor so the lights stay the brightest thing on the map. Lines stay the
+   same weight at every zoom, in screen pixels (floors.ts sets the widths). */
 .floorplan svg * {
   fill: none !important;
   stroke: var(--plan-line) !important;
+  vector-effect: non-scaling-stroke;
+}
+
+/* The drawing's white strokes are breaks cut through the stairs' lines. With
+   light on the floor there's no one color to cut them in, so they go. */
+.floorplan svg [stroke="white"] {
+  stroke: none !important;
+}
+
+/* Walls, columns and door leaves are filled shapes (white or hatched in the
+   drawing): solid, so dark, covering the light on the floor beneath right
+   to their edges at any zoom. */
+.floorplan svg [fill="white"],
+.floorplan svg [fill^="url("],
+.floorplan svg [fill="#333"] {
+  fill: var(--void) !important;
+}
+
+/* Except the stairs' steps and rail, which are drawn on the floor (floors.ts
+   marks them). */
+.floorplan svg [data-step] {
+  fill: none !important;
 }
 
 .floorplan svg text {
@@ -492,70 +2054,241 @@ input:focus {
   letter-spacing: 0.06em;
 }
 
-.map .floor-switch {
+/* Under the HUD: Move lights (and its tools while moving) on the left, the
+   pending changes on the right. The pending changes drop beneath the tools
+   when there's no room beside them. */
+.map-top {
   position: absolute;
-  top: 14px;
-  right: 14px;
+  top: var(--hud-h, var(--gap));
+  right: var(--inset-right);
+  left: var(--inset-left);
+  display: flex;
+  flex-wrap: wrap;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 8px 12px;
+  pointer-events: none;
 }
 
-/* Map overlays share one look: a dark, slightly see-through surface. */
-.map-tools button:not([class]),
-.map-tools .button:not(.primary),
-.drawer {
-  background: rgb(17 16 14 / 0.9);
+.map-top > * {
+  pointer-events: auto;
 }
 
-/* Top left: Move lights, and its tools while moving. */
 .map-tools {
-  position: absolute;
-  top: 14px;
-  left: 14px;
   display: grid;
   justify-items: start;
   gap: 8px;
-  max-width: min(640px, calc(100% - 220px));
+  min-width: 0;
+  transition: margin-top 0.18s var(--ease-out);
 }
 
-/* Two groups (what you can do to the map, and the session) that wrap as wholes. */
+/* While Deselect all shows under the chips (outside the HUD's height, so the
+   map doesn't refit for it), the tools drop clear of it: it starts 8px under
+   the chips' row and is 28px tall, and they start 8px under it. */
+.app:has(.tag-clear) .map-tools {
+  margin-top: calc(8px + 28px + 8px - var(--gap));
+}
+
+.map-tools > * {
+  max-width: 100%;
+}
+
+.pending {
+  margin-left: auto;
+}
+
+.glass-button {
+  display: inline-flex;
+  align-items: center;
+  gap: 8px;
+  height: 38px;
+  padding: 0 15px 0 13px;
+  border-radius: 13px;
+  color: var(--ink-2);
+  font-weight: 550;
+  white-space: nowrap;
+  transition: color 0.15s;
+}
+
+.glass-button:hover {
+  color: var(--ink);
+}
+
 .toolbar {
+  display: grid;
+  padding: 5px;
+  border-radius: 15px;
+}
+
+.toolbar-row {
   display: flex;
   flex-wrap: wrap;
-  gap: 6px 14px;
+  gap: 4px 8px;
 }
 
 .toolbar-group {
   display: flex;
+  align-items: center;
+  gap: 2px;
+}
+
+.toolbar-group + .toolbar-group {
+  padding-left: 8px;
+  border-left: 1px solid var(--line);
+}
+
+.tool {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: 32px;
+  padding: 0 10px;
+  border-radius: 10px;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  font-weight: 550;
+  text-decoration: none;
+  white-space: nowrap;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+.tool:hover:not(:disabled) {
+  background: var(--fill-2);
+  color: var(--ink);
+}
+
+.tool[aria-pressed="true"] {
+  background: var(--fill-3);
+  color: var(--ink);
+}
+
+.tool-count {
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgb(245 192 102 / 0.16);
+  color: var(--warn);
+  font: 600 10.5px/1.6 var(--mono-font);
+  font-variation-settings: "MONO" 1;
+}
+
+.toolbar .primary {
+  margin-left: 4px;
+}
+
+.toolbar-hint {
+  max-width: 540px;
+  margin-top: 5px;
+  padding: 8px 9px 5px;
+  border-top: 1px solid var(--line);
+  color: var(--mute);
+  font-size: 12px;
+}
+
+.map-note {
+  padding: 7px 12px;
+  border-radius: 11px;
+  color: var(--ink-2);
+  font-size: 12px;
+}
+
+/* Tags for the lights selected in Edit lights. A tag only some of them carry
+   is dashed, with how many; clicking it puts it on the rest. */
+.tag-editor {
+  display: grid;
+  gap: 10px;
+  width: 320px;
+  padding: 12px;
+  border-radius: 15px;
+}
+
+.tag-editor-head {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  font-size: 12px;
+}
+
+.tags {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 5px;
+}
+
+.tag {
+  display: inline-flex;
+  align-items: stretch;
+  height: 26px;
+  border: 1px solid var(--line-2);
+  border-radius: 8px;
+  background: var(--fill-2);
+  color: var(--ink);
+  font-size: 12.5px;
+  line-height: 1;
+}
+
+.tag.partial {
+  border-style: dashed;
+  background: transparent;
+  color: var(--ink-2);
+}
+
+.tag-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  padding: 0 3px 0 9px;
+}
+
+button.tag-name:hover {
+  color: var(--ink);
+}
+
+.tag-count {
+  color: var(--mute);
+  font-size: 10.5px;
+}
+
+.tag-remove {
+  display: grid;
+  place-items: center;
+  width: 24px;
+  border-radius: 0 7px 7px 0;
+  color: var(--mute);
+}
+
+.tag-remove:hover {
+  background: var(--fill-2);
+  color: var(--ink);
+}
+
+.tag-remove svg {
+  width: 11px;
+  height: 11px;
+}
+
+.tag-add {
+  display: flex;
   gap: 6px;
 }
 
-/* A tool that's on, like Draw rail. */
-.map-tools button[aria-pressed="true"] {
-  border-color: var(--ink-2);
-  background: rgb(46 42 36 / 0.95);
-  color: var(--ink);
+.tag-add input {
+  flex: 1;
+  min-width: 0;
+  height: 32px;
+  padding: 0 10px;
+  font: 12.5px var(--mono-font);
+  font-variation-settings: "MONO" 1;
 }
 
-.map-tools .button:not(.primary) {
-  padding: 5px 12px;
-  border: 1px solid var(--line-2);
-  border-radius: 7px;
-  color: var(--ink-2);
-  text-decoration: none;
-}
-
-.map-tools .button:not(.primary):hover {
-  border-color: var(--mute);
-  color: var(--ink);
-}
-
-.map-tools .hint,
-.map-tools .error-text {
-  max-width: 520px;
+.tag-editor .error-text {
   margin: 0;
-  text-shadow: 0 0 4px var(--floor);
 }
 
+/* Positioned, so the lights, rails and selection draw over the plan. */
 .map-canvas {
+  position: relative;
   display: block;
   touch-action: none;
   cursor: default;
@@ -584,9 +2317,9 @@ input:focus {
 /* The bottom edge: the drawer spans it, with the scale and zoom just above. */
 .map-bottom {
   position: absolute;
-  right: 0;
+  right: var(--inset-right);
   bottom: 0;
-  left: 0;
+  left: var(--inset-left);
   display: flex;
   flex-direction: column;
   pointer-events: none;
@@ -596,9 +2329,10 @@ input:focus {
    Only the controls take clicks; the gap between them is still the map. */
 .map-bottom-row {
   display: flex;
+  flex-wrap: wrap;
   align-items: flex-end;
   gap: 12px;
-  padding: 0 14px 14px;
+  padding-bottom: var(--gap);
 }
 
 .map-bottom-row > :not(.spacer),
@@ -610,6 +2344,7 @@ input:focus {
   display: flex;
   align-items: flex-end;
   gap: 12px;
+  margin-left: auto;
 }
 
 .scale {
@@ -631,22 +2366,44 @@ input:focus {
   font: 10.5px var(--mono-font);
   font-variation-settings: "MONO" 1;
   paint-order: stroke;
-  stroke: var(--floor);
+  stroke: var(--void);
   stroke-width: 3px;
 }
 
-/* Zoom: in and out as one group, fit on its own beneath. */
+/* Floors, then zoom in and out as one group, then fit on its own. */
 .zoom {
   display: grid;
   gap: 6px;
 }
 
+.zoom .floor-switch {
+  margin-bottom: 6px;
+  padding: 3px;
+  border-radius: 12px;
+}
+
+.zoom .floor-switch button {
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  color: var(--mute);
+  font-family: var(--mono-font);
+  font-variation-settings: "MONO" 1;
+}
+
+.zoom .floor-switch button:hover:not(:disabled) {
+  background: transparent;
+  color: var(--ink);
+}
+
+.zoom .floor-switch button[aria-checked="true"] {
+  color: var(--ink);
+}
+
 .zoom-group,
 .zoom-fit {
   overflow: hidden;
-  border: 1px solid var(--line-2);
-  border-radius: 8px;
-  background: rgb(17 16 14 / 0.9);
+  border-radius: 12px;
 }
 
 .zoom-group {
@@ -656,9 +2413,12 @@ input:focus {
 .zoom button {
   display: grid;
   place-items: center;
-  width: 32px;
-  height: 32px;
+  width: 36px;
+  height: 36px;
   color: var(--ink-2);
+  transition:
+    background 0.15s,
+    color 0.15s;
 }
 
 .zoom-group button + button {
@@ -666,31 +2426,115 @@ input:focus {
 }
 
 .zoom button:hover:not(:disabled) {
-  background: var(--raise);
+  background: var(--fill-2);
   color: var(--ink);
 }
 
-/* Lights not on the map yet: a small card in the corner opens a full-width
-   sheet that grows up from the bottom edge. */
-.drawer-tab {
+/* Pending changes: send them to the room, or drop them. */
+.pending {
   display: flex;
-  gap: 14px;
-  padding: 8px 12px;
-  border: 1px solid var(--line-2);
-  border-radius: 9px;
-  box-shadow: 0 10px 26px rgb(0 0 0 / 0.4);
-  color: var(--ink-2);
+  align-items: center;
+  gap: 8px;
+  max-width: 100%;
+  padding: 7px 7px 7px 16px;
+  border-radius: 16px;
+  background: var(--glass-strong);
+  box-shadow:
+    inset 0 0 0 1px rgb(143 185 255 / 0.32),
+    var(--float);
+  animation: rise-in 0.28s var(--ease-out);
+}
+
+@keyframes rise-in {
+  from {
+    opacity: 0;
+    transform: translateY(-8px) scale(0.98);
+  }
+}
+
+.pending-dot {
+  flex: none;
+  width: 8px;
+  height: 8px;
+  margin-right: 4px;
+  border-radius: 50%;
+  background: var(--sim);
+  box-shadow: 0 0 6px rgb(143 185 255 / 0.5);
+}
+
+.pending-text {
+  display: grid;
+  min-width: 0;
+  margin-right: 8px;
+  line-height: 1.3;
+}
+
+.pending-text strong {
+  font-size: 13px;
+  font-weight: 650;
   white-space: nowrap;
+}
+
+.pending-text span {
+  overflow: hidden;
+  color: var(--mute);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.pending-text span.bad {
+  color: var(--bad);
+}
+
+button.apply {
+  height: 34px;
+  background: var(--sim);
+  color: #0b1424;
+}
+
+button.apply:hover:not(:disabled) {
+  background: #b0ceff;
+}
+
+.pending .quiet {
+  height: 34px;
+}
+
+/* Lights not on the map yet: a small card in the corner opens a sheet that
+   grows up from the bottom edge. */
+.drawer-tab {
+  display: inline-flex;
+  align-items: center;
+  gap: 9px;
+  height: 38px;
+  padding: 0 10px 0 8px;
+  border-radius: 13px;
+  color: var(--ink-2);
+  font-size: 12.5px;
+  white-space: nowrap;
+  transition: color 0.15s;
 }
 
 .drawer-tab:hover {
   color: var(--ink);
 }
 
+.drawer-tab-count {
+  display: grid;
+  place-items: center;
+  min-width: 22px;
+  height: 22px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: rgb(245 192 102 / 0.16);
+  color: var(--warn);
+  font-size: 11.5px;
+  font-weight: 600;
+}
+
 .drawer-tab-action {
   display: inline-flex;
-  align-items: center;
-  gap: 4px;
   color: var(--mute);
 }
 
@@ -703,22 +2547,20 @@ input:focus {
 }
 
 /* Height animates from nothing to the content's own height via the grid
-   0fr → 1fr trick; the corner row above rides up with it. */
+   0fr → 1fr trick; the rows above ride up with it. */
 .drawer-sheet {
   display: grid;
   grid-template-rows: 0fr;
-  border-top: 1px solid transparent;
-  box-shadow: 0 -12px 30px rgb(0 0 0 / 0);
+  margin-bottom: 0;
+  border-radius: var(--radius);
   transition:
     grid-template-rows 0.36s var(--ease-out),
-    border-color 0.36s,
-    box-shadow 0.36s;
+    margin-bottom 0.36s var(--ease-out);
 }
 
 .drawer-sheet.open {
   grid-template-rows: 1fr;
-  border-top-color: var(--line-2);
-  box-shadow: 0 -12px 30px rgb(0 0 0 / 0.35);
+  margin-bottom: var(--gap);
 }
 
 .drawer-sheet-inner {
@@ -740,53 +2582,51 @@ input:focus {
   transition-delay: 0.06s;
 }
 
-@media (prefers-reduced-motion: reduce) {
-  .drawer-sheet,
-  .drawer-sheet .drawer-body,
-  .drawer-tab-action svg {
-    transition: none;
-  }
-}
-
 .drawer-body {
+  display: grid;
+  gap: 10px;
   max-height: min(320px, 36vh);
-  padding: 10px 16px 12px;
+  padding: 14px 16px 16px;
   overflow-y: auto;
 }
 
-.drawer-body .section-title {
-  margin: 12px 0 6px;
+.drawer-body section {
+  display: grid;
+  gap: 7px;
 }
 
 .drawer-lights {
   display: flex;
   flex-wrap: wrap;
-  gap: 4px;
+  gap: 5px;
 }
 
 .drawer-light {
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 2px 7px 2px 5px;
-  border: 1px solid var(--line);
-  border-radius: 5px;
+  gap: 6px;
+  height: 26px;
+  padding: 0 9px 0 7px;
+  border-radius: 8px;
+  background: var(--fill);
+  box-shadow: inset 0 0 0 1px var(--line);
   color: var(--ink-2);
-  font-size: 11px;
+  font-size: 11.5px;
   cursor: grab;
   touch-action: none;
 }
 
 .drawer-light:hover {
-  border-color: var(--mute);
+  background: var(--fill-2);
   color: var(--ink);
 }
 
 .dot {
-  width: 7px;
-  height: 7px;
+  flex: none;
+  width: 8px;
+  height: 8px;
   border-radius: 50%;
-  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.12);
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.14);
 }
 
 .drag-ghost {
@@ -794,685 +2634,161 @@ input:focus {
   z-index: 50;
   display: inline-flex;
   align-items: center;
-  gap: 5px;
-  padding: 3px 8px 3px 6px;
-  border: 1px solid var(--mute);
-  border-radius: 5px;
-  background: var(--raise);
-  font-size: 11px;
+  gap: 6px;
+  padding: 4px 9px 4px 7px;
+  border-radius: 8px;
+  background: var(--solid-2);
+  box-shadow:
+    inset 0 0 0 1px var(--line-2),
+    0 10px 24px rgb(0 0 0 / 0.5);
+  font-size: 11.5px;
   transform: translate(-50%, -150%);
   pointer-events: none;
 }
 
 .map-error {
-  padding: 24px;
+  padding: calc(var(--hud-h, 0px) + 12px) 24px 24px;
   color: var(--bad);
 }
 
 .hover-card {
   position: absolute;
+  z-index: 4;
   display: grid;
-  gap: 1px;
-  padding: 6px 9px;
-  border: 1px solid var(--line-2);
-  border-radius: 6px;
-  background: rgb(17 16 14 / 0.92);
-  font-size: 12px;
-  white-space: nowrap;
-  pointer-events: none;
-}
-
-/* Side panel */
-
-.panel {
-  padding: 12px 16px 28px;
-}
-
-.panel-head {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  min-height: 32px;
-}
-
-.panel-head h2 {
-  font-size: 15px;
-  font-weight: 650;
-  letter-spacing: -0.01em;
-}
-
-.panel-head .icon-button {
-  margin-left: -8px;
-}
-
-.section-title {
-  margin: 22px 0 2px;
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--ink-2);
-}
-
-/* Stack */
-
-.stack {
-  list-style: none;
-  margin: 14px -16px 0;
-  padding: 0;
-}
-
-.row {
-  display: flex;
-  align-items: flex-start;
   gap: 2px;
-  padding: 8px 8px 8px 4px;
-  border-top: 1px solid var(--line);
-  background: var(--bg);
-}
-
-.row.dragging {
-  position: relative;
-  z-index: 2;
-  background: var(--raise);
-  box-shadow: 0 10px 30px rgb(0 0 0 / 0.5);
-}
-
-.grip {
-  flex: none;
-  padding: 6px 4px;
-  color: var(--faint);
-  cursor: grab;
-  touch-action: none;
-  opacity: 0;
-}
-
-.row:hover .grip,
-.grip:focus-visible {
-  opacity: 1;
-}
-
-@media (hover: none) {
-  .grip {
-    opacity: 1;
-  }
-}
-
-.row-main {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-  align-items: flex-start;
-  padding: 3px 4px;
-  text-align: left;
-}
-
-.row-name {
-  font-size: 13.5px;
-  font-weight: 600;
-  overflow-wrap: anywhere;
-}
-
-.row-main:hover .row-name {
-  text-decoration: underline;
-  text-decoration-color: var(--line-2);
-  text-underline-offset: 3px;
-}
-
-.row-meta {
-  color: var(--mute);
+  padding: 8px 11px;
+  border-radius: 11px;
+  background: var(--glass-strong);
   font-size: 12px;
-}
-
-.row.muted .row-name {
-  color: var(--mute);
-}
-
-/* Rows with pending changes. */
-.row.changed {
-  box-shadow: inset 2px 0 0 var(--sim);
-}
-
-.row-badge {
-  margin-left: 7px;
-  padding: 0 5px;
-  border: 1px solid rgb(134 180 236 / 0.35);
-  border-radius: 4px;
-  color: var(--sim);
-  font-size: 10.5px;
-  font-weight: 500;
-  vertical-align: 1px;
-}
-
-.row.deleted .row-name {
-  color: var(--mute);
-  text-decoration: line-through;
-  text-decoration-color: var(--faint);
-}
-
-.row.deleted .row-badge {
-  border-color: rgb(236 123 98 / 0.35);
-  color: var(--bad);
-  text-decoration: none;
-}
-
-.row.deleted.changed {
-  box-shadow: inset 2px 0 0 var(--bad);
-}
-
-.row-restore {
-  margin-top: 2px;
-  font-size: 12px;
-}
-
-.row-warn {
-  color: var(--warn);
-  font-size: 12px;
-}
-
-.row-error {
-  display: -webkit-box;
-  margin-top: 4px;
-  overflow: hidden;
-  -webkit-line-clamp: 2;
-  -webkit-box-orient: vertical;
-  color: var(--bad);
-  font: 11.5px/1.4 var(--mono-font);
-  font-variation-settings: "MONO" 1;
-}
-
-.row .icon-button {
-  margin-top: 2px;
-}
-
-.stack .row:last-child {
-  border-bottom: 1px solid var(--line);
-}
-
-.palette {
-  display: flex;
-  height: 5px;
-  overflow: hidden;
-  border-radius: 3px;
-}
-
-.palette span {
-  flex: 1;
-}
-
-.clear-all {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  margin-top: 22px;
-  color: var(--bad);
-}
-
-/* Room tone */
-
-.scope {
-  display: grid;
-  gap: 6px;
-  margin-top: 14px;
-  padding-bottom: 14px;
-  border-bottom: 1px solid var(--line);
-}
-
-.scope-nav {
-  line-height: 1.7;
-}
-
-.scope-nav strong {
-  font-weight: 600;
-}
-
-.picker {
-  display: grid;
-  gap: 18px;
-  margin-top: 14px;
-}
-
-/* Segmented controls: a recessed track, equal-width options, and a raised
-   highlight that slides to the chosen one. */
-.segmented {
-  position: relative;
-  display: inline-grid;
-  grid-template-columns: repeat(var(--count), 1fr);
-  justify-self: start;
-  padding: 2px;
-  border-radius: 8px;
-  background: #1f1c19;
-  box-shadow: inset 0 0 0 1px var(--line);
-}
-
-/* Unselected options are part of the track: no border or fill of their own
-   (and none of the default outlined-button style). */
-.segmented button,
-.segmented button:hover:not(:disabled) {
-  border: 0;
-  background: transparent;
-}
-
-.segmented button {
-  position: relative;
-  z-index: 1;
-  padding: 4px 16px;
-  border-radius: 6px;
-  color: var(--ink-2);
-  font-size: 12.5px;
-  font-weight: 500;
   white-space: nowrap;
-  transition: color 0.2s;
-}
-
-.segmented button:hover {
-  color: var(--ink);
-}
-
-.segmented button[aria-checked="true"] {
-  color: var(--ink);
-}
-
-.segmented-thumb {
-  position: absolute;
-  top: 2px;
-  bottom: 2px;
-  left: 2px;
-  width: calc((100% - 4px) / var(--count));
-  border-radius: 6px;
-  background: #3b3631;
-  box-shadow:
-    0 1px 2px rgb(0 0 0 / 0.45),
-    inset 0 1px 0 rgb(255 255 255 / 0.05);
-  transform: translateX(calc(var(--index) * 100%));
-  transition: transform 0.22s cubic-bezier(0.3, 0.7, 0.2, 1);
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .segmented-thumb,
-  .segmented button {
-    transition: none;
-  }
-}
-
-.temp-strip {
-  position: relative;
-  height: 36px;
-  border-radius: 6px;
-  cursor: ew-resize;
-  touch-action: none;
-}
-
-.temp-thumb {
-  position: absolute;
-  top: -4px;
-  bottom: -4px;
-  width: 4px;
-  margin-left: -2px;
-  border-radius: 2px;
-  background: var(--ink);
-  box-shadow: 0 0 0 1.5px var(--floor);
   pointer-events: none;
 }
 
-.temp-scale {
-  position: relative;
-  height: 14px;
-  margin-top: 5px;
-  color: var(--faint);
-  font-size: 10.5px;
-}
-
-.temp-scale span {
-  position: absolute;
-  transform: translateX(-50%);
-}
-
-.temp-scale span:last-child {
-  transform: translateX(-100%);
-}
-
-.disc {
-  position: relative;
-  justify-self: center;
-  width: 208px;
-  height: 208px;
-}
-
-.disc canvas {
-  display: block;
-  border-radius: 50%;
-  cursor: crosshair;
-  touch-action: none;
-}
-
-.disc-thumb {
-  position: absolute;
-  width: 16px;
-  height: 16px;
-  margin: -8px 0 0 -8px;
-  border: 2px solid #fff;
-  border-radius: 50%;
-  box-shadow:
-    0 0 0 1px rgb(0 0 0 / 0.6),
-    0 1px 4px rgb(0 0 0 / 0.5);
-  pointer-events: none;
-}
-
-.readout {
+.hover-title {
   display: flex;
-  flex-wrap: wrap;
   align-items: center;
-  gap: 10px;
+  gap: 7px;
 }
 
-.swatch {
-  width: 20px;
-  height: 20px;
-  border-radius: 50%;
-  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.12);
-}
-
-.readout-main {
-  font-size: 15px;
-  font-weight: 600;
-}
-
-.readout-code {
-  margin-left: auto;
-  color: var(--mute);
-  font-size: 12px;
-}
-
-.slider-head {
-  display: flex;
-  justify-content: space-between;
-  margin-bottom: 7px;
+.hover-value {
   color: var(--ink-2);
-  font-size: 12px;
-}
-
-.slider-head .mono {
-  color: var(--ink);
-}
-
-.slider-track {
-  position: relative;
-  height: 8px;
-  border-radius: 4px;
-  cursor: pointer;
-  touch-action: none;
-}
-
-.slider-thumb {
-  position: absolute;
-  top: 50%;
-  width: 14px;
-  height: 14px;
-  margin: -7px 0 0 -7px;
-  border-radius: 50%;
-  background: var(--ink);
-  box-shadow:
-    0 0 0 2px var(--bg),
-    0 1px 3px rgb(0 0 0 / 0.6);
-  pointer-events: none;
-}
-
-.slider-mark {
-  position: absolute;
-  top: -4px;
-  bottom: -4px;
-  width: 1px;
-  background: rgb(255 255 255 / 0.6);
-}
-
-.slider-ends {
-  display: flex;
-  justify-content: space-between;
-  margin-top: 6px;
-  color: var(--faint);
-  font-size: 11px;
-}
-
-.slider.dim {
-  opacity: 0.45;
-}
-
-.picker > .hint {
-  margin-top: -12px;
-}
-
-.outcomes {
-  display: grid;
-  gap: 4px;
-  margin: 18px 0 0;
-  padding-top: 12px;
-  border-top: 1px solid var(--line);
-  font-size: 12px;
-}
-
-.outcomes div {
-  display: flex;
-  justify-content: space-between;
-  gap: 12px;
-}
-
-.outcomes dt {
-  color: var(--mute);
-  white-space: nowrap;
-}
-
-.outcomes dd {
-  margin: 0;
-  text-align: right;
-}
-
-.onoff {
-  display: grid;
-  gap: 10px;
-  margin-top: 12px;
-}
-
-.tone-foot {
-  display: grid;
-  justify-items: start;
-  gap: 10px;
-  margin-top: 18px;
-}
-
-/* History */
-
-.history-day .section-title {
-  margin-top: 18px;
-}
-
-.history {
-  display: grid;
-  gap: 8px;
-  margin: 6px 0 0;
-  padding: 0;
-  list-style: none;
-}
-
-.history li {
-  display: grid;
-  grid-template-columns: 44px 1fr;
-  gap: 8px;
-  color: var(--ink-2);
-  font-size: 12.5px;
-}
-
-.history time {
-  padding-top: 1px;
-  color: var(--faint);
   font-size: 11.5px;
 }
 
-.history strong,
-.history em {
-  color: var(--ink);
-  font-style: normal;
-  font-weight: 600;
-}
-
-/* Shader editor sheet */
-
-.sheet {
-  position: fixed;
-  top: 44px;
-  right: 0;
-  bottom: 0;
-  z-index: 20;
-  display: flex;
-  flex-direction: column;
-  width: min(760px, calc(100vw - 80px));
-  background: var(--bg);
-  border-left: 1px solid var(--line-2);
-  box-shadow: -24px 0 60px rgb(0 0 0 / 0.45);
-  animation: sheet-in 0.18s ease-out;
-}
-
-@keyframes sheet-in {
-  from {
-    transform: translateX(24px);
-    opacity: 0;
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .sheet {
-    animation: none;
-  }
-}
-
-@media (max-width: 820px) {
-  .sheet {
-    top: 0;
-    width: 100vw;
-  }
-}
-
-.sheet-head {
+/* A selection's color: one dot when its lights are alike, else a strip of them. */
+.selection-tone {
   display: flex;
   align-items: center;
-  gap: 8px;
-  padding: 12px 12px 0 20px;
+  gap: 7px;
 }
 
-.sheet-name {
-  flex: 1;
-  min-width: 0;
-  padding: 4px 0;
-  border: 0;
-  border-bottom: 1px solid transparent;
-  border-radius: 0;
-  background: transparent;
-  font-size: 18px;
-  font-weight: 650;
-}
-
-.sheet-name:focus {
-  border-bottom-color: var(--line-2);
-}
-
-.sheet-meta {
-  margin: 0 20px 10px;
-  color: var(--mute);
-  font-size: 12px;
-}
-
-.code {
-  flex: 1;
-  min-height: 0;
-  border-top: 1px solid var(--line);
-}
-
-.code > div,
-.code .cm-editor {
-  height: 100%;
-}
-
-.sheet-error {
-  max-height: 140px;
-  margin: 0;
-  padding: 10px 20px;
-  overflow: auto;
-  border-top: 1px solid var(--line);
-  color: var(--bad);
-  white-space: pre-wrap;
-  font: 12px/1.45 var(--mono-font);
-  font-variation-settings: "MONO" 1;
-}
-
-.sheet-foot {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  padding: 10px 16px 10px 20px;
-  border-top: 1px solid var(--line);
-}
-
-.confirm {
+.slivers {
   display: inline-flex;
-  align-items: center;
-  gap: 8px;
-  color: var(--bad);
+  flex: none;
+  height: 8px;
+  overflow: hidden;
+  border-radius: 4px;
+  box-shadow: inset 0 0 0 1px rgb(255 255 255 / 0.14);
 }
 
-/* Login */
+.slivers > span {
+  width: 3px;
+}
+
+/* Login, and the moment before the app knows who you are. */
 
 .splash {
   display: grid;
   place-items: center;
   min-height: 100vh;
-  background: var(--floor);
+  background: var(--void);
   color: var(--mute);
+}
+
+.splash:empty::before {
+  content: "";
+  width: 10px;
+  height: 10px;
+  border-radius: 50%;
+  background: #fffaf2;
+  box-shadow: 0 0 22px 4px rgb(255 214 160 / 0.5);
+  animation: breathe 1.6s ease-in-out infinite;
 }
 
 .login {
   position: relative;
-  display: flex;
-  flex-direction: column;
-  align-items: center;
-  justify-content: center;
-  gap: 10px;
+  display: grid;
+  place-items: center;
   min-height: 100vh;
   padding: 16px;
   overflow: hidden;
-  background: var(--floor);
-  text-align: center;
+  background: var(--void);
 }
 
-.login > * {
-  position: relative;
-}
-
-.login-glow {
+/* A dark room with a few lights drifting in it. */
+.login-room span {
   position: absolute;
-  top: 50%;
-  left: 50%;
-  width: 680px;
-  height: 680px;
   border-radius: 50%;
-  background: radial-gradient(circle, rgb(255 178 102 / 0.17), rgb(255 178 102 / 0.05) 40%, transparent 70%);
-  transform: translate(-50%, -62%);
+  mix-blend-mode: screen;
+  transform: translate(-50%, -50%);
+  animation: drift 16s ease-in-out infinite alternate;
   pointer-events: none;
 }
 
+@keyframes drift {
+  0% {
+    opacity: 0.6;
+    transform: translate(-50%, -50%) scale(0.9);
+  }
+
+  50% {
+    opacity: 1;
+  }
+
+  100% {
+    opacity: 0.75;
+    transform: translate(calc(-50% + 40px), calc(-50% - 24px)) scale(1.1);
+  }
+}
+
+.login-card {
+  position: relative;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  gap: 10px;
+  text-align: center;
+}
+
 .login .wordmark {
-  font-size: 64px;
-  text-shadow: 0 0 40px rgb(255 190 120 / 0.35);
+  font-size: clamp(72px, 13vw, 128px);
+  letter-spacing: -0.05em;
+  text-shadow: 0 0 60px rgb(255 200 140 / 0.35);
 }
 
 .login p {
-  margin-bottom: 18px;
+  margin-bottom: 22px;
   color: var(--ink-2);
+  font-size: 15px;
+}
+
+.login a.button.primary {
+  height: 44px;
+  padding: 0 22px;
+  border-radius: 13px;
+  font-size: 14px;
 }
 
 .dev-login {
   display: grid;
   gap: 8px;
-  margin-top: 8px;
+  margin-top: 10px;
+  padding: 14px;
+  border-radius: 16px;
+  background: var(--glass);
+  -webkit-backdrop-filter: var(--blur);
+  backdrop-filter: var(--blur);
+  box-shadow: inset 0 0 0 1px var(--edge);
   color: var(--mute);
   font-size: 12px;
 }
@@ -1480,4 +2796,17 @@ input:focus {
 .login-row {
   display: flex;
   gap: 8px;
+}
+
+.login-row .primary {
+  height: auto;
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation: none !important;
+    transition: none !important;
+  }
 }
