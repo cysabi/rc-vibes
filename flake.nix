@@ -102,9 +102,16 @@
             };
           };
 
+          # From a runner on kokuzo, to kokuzo's registry. skopeo rather than
+          # the runner image's own push-docker-image, whose uploads the
+          # registry (distribution v3) refuses as "size invalid". The
+          # registry's certificate is for kokuzo.tailc38f.ts.net, hence no
+          # TLS verification, as with push-docker-image's --insecure.
           pushDockerImageActions = pkgs.writeShellScriptBin "push-docker-image" ''
             echo "pushing ${tag}"
-            push-docker-image ${dockerImage}
+            ${pkgs.skopeo}/bin/skopeo --insecure-policy copy --dest-tls-verify=false \
+              docker-archive:${dockerImage} \
+              docker://kokuzo-access.arc-runners.svc.cluster.local/vibes:${tag}
           '';
         };
       }
