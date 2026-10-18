@@ -1,5 +1,5 @@
 # The same, on a local cluster (OrbStack's Kubernetes): a locally built
-# image, the local cluster's storage, and its own public URL.
+# image and its own public URL.
 #   kubectl create namespace vibes
 #   kubectl -n vibes create secret generic vibes-secrets --from-literal=...
 #   kubectl apply -k deploy/local
@@ -7,14 +7,6 @@ resources:
 - ../../.kube
 
 patches:
-- patch: |-
-    apiVersion: v1
-    kind: PersistentVolumeClaim
-    metadata:
-      name: vibes-data
-      namespace: vibes
-    spec:
-      storageClassName: local-path
 - patch: |-
     apiVersion: apps/v1
     kind: Deployment
