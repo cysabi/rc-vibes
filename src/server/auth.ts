@@ -11,6 +11,7 @@ import type { Config } from "./env.ts";
 
 const SESSION_COOKIE = "vibes_session";
 const STATE_COOKIE = "vibes_oauth_state";
+const HANDOFF_COOKIE = "vibes_handoff";
 const SESSION_DAYS = 30;
 
 const RC_AUTHORIZE = "https://www.recurse.com/oauth/authorize";
@@ -64,24 +65,42 @@ export function requireUser(config: Config): MiddlewareHandler<AuthEnv> {
 
 export function authRoutes(config: Config) {
   const auth = new Hono();
-  // Each of vibes' addresses logs in on its own, since cookies stay with the
-  // address that set them: RC returns to the address the login started from.
-  // The page names it, since a proxy in front (vibes.recurse.com's) may not.
+  // RC's OAuth app takes one callback, on the main address, and cookies stay
+  // with the address that set them. So a login from another address (like
+  // vibes.recurse.com, RC's proxy in front of vibes.hall.ly) hops to the main
+  // one, logs in there, and comes back with a one-time code that only the
+  // browser that started it can redeem. The page names its address, since the
+  // proxy may not.
   const origins = config.publicUrls.map((u) => u.origin);
-  const callbackUrl = (origin: string) => new URL("/auth/callback", origin).toString();
+  const main = origins[0]!;
+  const known = (origin: string | undefined) => origins.find((o) => o === origin);
+  const callbackUrl = new URL("/auth/callback", main).toString();
+  const handoffs = new Map<string, { user: Me; nonce: string; exp: number }>();
+  const failed = (c: Context) => c.text("Login failed: the request didn't match. Try logging in again.", 400);
 
   auth.get("/options", (c) => c.json<LoginOptions>({ rc: config.rc !== null, dev: config.devLogin }));
 
   auth.get("/login", async (c) => {
     if (!config.rc) return c.redirect("/");
-    const asked = c.req.query("origin");
-    const origin = origins.find((o) => o === asked) ?? origins[0]!;
+    const from = known(c.req.query("origin")) ?? main;
+    if (from !== main) {
+      const nonce = randomBytes(16).toString("hex");
+      await setSignedCookie(c, HANDOFF_COOKIE, nonce, config.sessionSecret, cookieOptions(config, 600));
+      const hop = new URL("/auth/login", main);
+      hop.searchParams.set("for", from);
+      hop.searchParams.set("nonce", nonce);
+      return c.redirect(hop.toString());
+    }
+    // On the main address, maybe for another one that hopped here.
+    const returnTo = known(c.req.query("for")) ?? main;
+    const nonce = /^[0-9a-f]{32}$/.test(c.req.query("nonce") ?? "") ? c.req.query("nonce")! : "-";
     const state = randomBytes(16).toString("hex");
-    await setSignedCookie(c, STATE_COOKIE, `${state} ${origin}`, config.sessionSecret, cookieOptions(config, 600));
+    const saved = `${state} ${returnTo} ${nonce}`;
+    await setSignedCookie(c, STATE_COOKIE, saved, config.sessionSecret, cookieOptions(config, 600));
     const url = new URL(RC_AUTHORIZE);
     url.searchParams.set("response_type", "code");
     url.searchParams.set("client_id", config.rc.clientId);
-    url.searchParams.set("redirect_uri", callbackUrl(origin));
+    url.searchParams.set("redirect_uri", callbackUrl);
     url.searchParams.set("state", state);
     return c.redirect(url.toString());
   });
@@ -90,11 +109,9 @@ export function authRoutes(config: Config) {
     if (!config.rc) return c.redirect("/");
     const saved = await getSignedCookie(c, config.sessionSecret, STATE_COOKIE);
     deleteCookie(c, STATE_COOKIE, { path: "/" });
-    const [expected, origin] = saved ? saved.split(" ") : [];
+    const [expected, returnTo, nonce] = saved ? saved.split(" ") : [];
     const code = c.req.query("code");
-    if (!expected || !origin || !code || c.req.query("state") !== expected) {
-      return c.text("Login failed: the request didn't match. Try logging in again.", 400);
-    }
+    if (!expected || !returnTo || !nonce || !code || c.req.query("state") !== expected) return failed(c);
 
     const tokenRes = await fetch(RC_TOKEN, {
       method: "POST",
@@ -102,7 +119,7 @@ export function authRoutes(config: Config) {
       body: new URLSearchParams({
         grant_type: "authorization_code",
         code,
-        redirect_uri: callbackUrl(origin),
+        redirect_uri: callbackUrl,
         client_id: config.rc.clientId,
         client_secret: config.rc.clientSecret,
       }),
@@ -114,8 +131,28 @@ export function authRoutes(config: Config) {
     const profileRes = await fetch(RC_PROFILE, { headers: { Authorization: `Bearer ${access_token}` } });
     if (!profileRes.ok) return c.text(`Login failed: couldn't read your RC profile (${profileRes.status}).`, 502);
     const profile = (await profileRes.json()) as { id: number; name: string };
+    const user: Me = { id: `rc:${profile.id}`, name: profile.name, dev: false };
 
-    await startSession(c, config, { id: `rc:${profile.id}`, name: profile.name, dev: false });
+    if (returnTo === main) {
+      await startSession(c, config, user);
+      return c.redirect("/");
+    }
+    const now = Date.now();
+    for (const [key, handoff] of handoffs) if (handoff.exp < now) handoffs.delete(key);
+    const handoff = randomBytes(24).toString("hex");
+    handoffs.set(handoff, { user, nonce, exp: now + 60_000 });
+    return c.redirect(new URL(`/auth/handoff?code=${handoff}`, returnTo).toString());
+  });
+
+  // Back on the address the login started from.
+  auth.get("/handoff", async (c) => {
+    const code = c.req.query("code") ?? "";
+    const handoff = handoffs.get(code);
+    handoffs.delete(code);
+    const nonce = await getSignedCookie(c, config.sessionSecret, HANDOFF_COOKIE);
+    deleteCookie(c, HANDOFF_COOKIE, { path: "/" });
+    if (!handoff || handoff.exp < Date.now() || !nonce || nonce !== handoff.nonce) return failed(c);
+    await startSession(c, config, handoff.user);
     return c.redirect("/");
   });
 

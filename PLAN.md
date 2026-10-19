@@ -41,7 +41,7 @@ lighting system at the Recurse Center, served at `vibes.recurse.com`.
 | `ARCLAMP_KEY` | yes | arclamp service token for vibes |
 | `SESSION_SECRET` | yes | ≥ 32 chars; signs login cookies |
 | `PUBLIC_URL` | prod | where people reach vibes, comma-separated, main one first, e.g. `https://vibes.hall.ly,https://vibes.recurse.com` |
-| `RC_CLIENT_ID`, `RC_CLIENT_SECRET` | prod | RC OAuth app; each address's callback is `<address>/auth/callback` |
+| `RC_CLIENT_ID`, `RC_CLIENT_SECRET` | prod | RC OAuth app; callback is `<main address>/auth/callback` |
 | `VIBES_DEV_LOGIN` | no | `1` allows logging in as any name; refused when `NODE_ENV=production` |
 | `DATABASE_PATH` | no | SQLite file, default `vibes.db` |
 | `PORT` | no | default `8787` |
@@ -185,8 +185,9 @@ lights where they are, as free lights. vibes keeps its rail changes in the
    moving and turning lights with undo, rails to hang lights on, and a
    `lights.json` export.
 6. **RC OAuth and deploy.** vibes runs on kokuzo's k3s at `vibes.hall.ly`,
-   and at `vibes.recurse.com`, RC's proxy in front of it. Each address logs
-   in on its own, so both are registered callbacks in the RC OAuth app. Each push to `main` runs `.github/workflows/deploy.yaml`: typecheck and
+   and at `vibes.recurse.com`, RC's proxy in front of it. RC's OAuth app takes
+   one callback, on `vibes.hall.ly`, so a login from `vibes.recurse.com` hops
+   there and comes back with a one-time code. Each push to `main` runs `.github/workflows/deploy.yaml`: typecheck and
    tests, then the flake's image (`kokuzo.tailc38f.ts.net/vibes:<sha>`) is
    pushed and `.kube/version.yaml` pinned to it on the `cd` branch, which
    Argo CD (`deploy/argocd-application.yaml`) syncs. Secrets live in the
