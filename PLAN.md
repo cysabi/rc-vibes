@@ -255,12 +255,23 @@ ever be built from one of its commits. On while `SKETCHES=1`.
   Code…") and loads it afresh once it's ready: the files are in your home
   and the open tabs in the browser, so only undo history is lost. vibes
   restarting doesn't end boxes; it adopts them.
-- **Deleting.** Anyone can delete a sketch (from its page) and anyone can
-  restore it (from its page, or "Recently deleted" under the library) for
-  `SKETCH_RESTORE_DAYS` (30). Deleting removes everyone's boxes for it, and
-  nothing opens it meanwhile; its repo and everyone's homes are kept until
-  it's erased, hourly once the 30 days are up (the homes by a pod that only
-  removes them, since vibes can't reach them).
+- **Deleting.** Anyone can delete a sketch (from its page), and anyone can
+  restore it, always (from its page, or the library's "Recently deleted"
+  dropdown; `/sketches?deleted=<id>` opens that with it picked out).
+  Deleting removes everyone's boxes for it, and nothing opens it meanwhile;
+  its repo and everyone's homes are kept.
+- **Stamps: knowing its own shaders** (`src/server/stamp.ts`). Every script
+  vibes builds for the room will start with a line naming its sketch and
+  commit, signed (HMAC-SHA256, over that and all the code under it) with
+  `VIBES_SIGNING_KEY`, which boxes and builds never see. vibes checks each
+  shader's script as it passes the scene on: a plain shader, sketch X at
+  commit Y, or edited (changed since, or signed with another key). "Lit by"
+  shows the sketch's name and short commit, badged "edited" or "deleted",
+  with a button that opens the sketch at that commit (a checkout of just it,
+  `/home/workspace/commits/<commit>` beside your clone, made by the
+  extension; `/sketches/<id>?commit=<sha>`), or, deleted, finds it in the
+  library's "Recently deleted". Nothing makes stamped scripts yet: that's the
+  builder.
 - **Through vibes only.** `/box/<id>/…` is proxied to your box's VS Code, for
   you only (`src/server/box-proxy.ts`). The box never sees vibes' cookies,
   only its VS Code's connection token, which vibes adds (and sets for the

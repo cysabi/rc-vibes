@@ -3,8 +3,8 @@
 // under vibes' bar. The preview and console are panels inside VS Code (the
 // extension in box/extension), so this page is just the way in.
 
-import { useState, type FormEvent, type MouseEvent, type ReactNode } from "react";
-import { SKETCH_RESTORE_DAYS, type Sketch } from "../../shared/vibes.ts";
+import { useEffect, useRef, useState, type FormEvent, type MouseEvent, type ReactNode } from "react";
+import { BOX_COMMITS_FOLDER, type Sketch } from "../../shared/vibes.ts";
 import {
   RequestError,
   useBox,
@@ -19,8 +19,8 @@ import {
 } from "../api.ts";
 import { Brand } from "../components/Brand.tsx";
 import { UserMenu } from "../components/UserMenu.tsx";
-import { PlusIcon, TrashIcon } from "../icons.tsx";
-import { navigate } from "../route.ts";
+import { ChevronUpIcon, PlusIcon, TrashIcon } from "../icons.tsx";
+import { navigate, useQueryParam } from "../route.ts";
 import "./sketches.css";
 
 /** A link that moves within the app rather than loading the page again. */
@@ -89,6 +89,7 @@ function Library() {
         <div className="library-toolbar">
           <input className="library-search" placeholder="Search sketches" value={search} onChange={(e) => setSearch(e.target.value)} />
           <span className="spacer" />
+          <RecentlyDeleted />
           <NewSketch />
         </div>
         {sketches.isError && <p className="error-text">Couldn't load the sketches: {sketches.error.message}</p>}
@@ -106,36 +107,75 @@ function Library() {
             </li>
           ))}
         </ul>
-        <RecentlyDeleted />
       </main>
     </div>
   );
 }
 
-/** Deleted sketches, for anyone to bring back until they're erased. */
+/**
+ * The deleted sketches, in a dropdown, for anyone to restore. ?deleted=<id>
+ * opens it with that one picked out: where a deleted sketch's shader in the
+ * room sends you.
+ */
 function RecentlyDeleted() {
   const deleted = useDeletedSketches();
   const restore = useRestoreSketch();
+  const picked = useQueryParam("deleted");
+  const [open, setOpen] = useState(picked !== null);
+  const menu = useRef<HTMLDivElement>(null);
+  useEffect(() => {
+    if (picked !== null) setOpen(true);
+  }, [picked]);
+  // Closed by a click anywhere else, or Escape.
+  useEffect(() => {
+    if (!open) return;
+    const away = (e: PointerEvent) => {
+      if (!menu.current?.contains(e.target as Node)) setOpen(false);
+    };
+    const escape = (e: KeyboardEvent) => {
+      if (e.key === "Escape") setOpen(false);
+    };
+    document.addEventListener("pointerdown", away);
+    document.addEventListener("keydown", escape);
+    return () => {
+      document.removeEventListener("pointerdown", away);
+      document.removeEventListener("keydown", escape);
+    };
+  }, [open]);
+  useEffect(() => {
+    if (open) menu.current?.querySelector(".picked")?.scrollIntoView({ block: "nearest" });
+  }, [open, deleted.data]);
   if (!deleted.data?.length) return null;
   return (
-    <section className="recently-deleted">
-      <h2>Recently deleted</h2>
-      <p>Anyone can restore these for {SKETCH_RESTORE_DAYS} days after they're deleted. Then they're gone for good, with everyone's copies.</p>
-      <ul>
-        {deleted.data.map((s) => (
-          <li key={s.id}>
-            <span className="card-name">{s.name}</span>
-            <span className="card-meta">
-              deleted {ago(s.deleted!.at)} by {s.deleted!.by}
-            </span>
-            <button className="quiet" disabled={restore.isPending} onClick={() => restore.mutate(s.id)}>
-              Restore
-            </button>
-          </li>
-        ))}
-      </ul>
-      {restore.isError && <p className="error-text">Couldn't restore it: {restore.error.message}</p>}
-    </section>
+    <div className="deleted-menu" ref={menu}>
+      <button className={open ? "quiet open" : "quiet"} aria-expanded={open} onClick={() => setOpen(!open)}>
+        <TrashIcon /> Recently deleted <span className="count">{deleted.data.length}</span>
+        <span className="chevron" aria-hidden="true">
+          <ChevronUpIcon />
+        </span>
+      </button>
+      {open && (
+        <div className="deleted-panel">
+          <p>Anyone can restore these, for everyone.</p>
+          <ul>
+            {deleted.data.map((s) => (
+              <li key={s.id} className={s.id === picked ? "picked" : undefined}>
+                <span className="deleted-text">
+                  <span className="card-name">{s.name}</span>
+                  <span className="card-meta">
+                    deleted {ago(s.deleted!.at)} by {s.deleted!.by}
+                  </span>
+                </span>
+                <button className="quiet" disabled={restore.isPending} onClick={() => restore.mutate(s.id)}>
+                  Restore
+                </button>
+              </li>
+            ))}
+          </ul>
+          {restore.isError && <p className="error-text">Couldn't restore it: {restore.error.message}</p>}
+        </div>
+      )}
+    </div>
   );
 }
 
@@ -183,7 +223,7 @@ function DeleteSketch({ sketch }: { sketch: Sketch }) {
   return (
     <div className="confirm-delete">
       <span>
-        Delete <b>{sketch.name}</b> for everyone? Anyone can restore it for {SKETCH_RESTORE_DAYS} days.
+        Delete <b>{sketch.name}</b> for everyone? Anyone can restore it.
       </span>
       <button className="quiet danger" disabled={remove.isPending} onClick={() => remove.mutate(sketch.id, { onSuccess: () => navigate("/sketches") })}>
         Delete it
@@ -200,6 +240,11 @@ function SketchPage({ id }: { id: string }) {
   const sketch = useSketch(id);
   const deleted = sketch.data?.deleted;
   const restore = useRestoreSketch();
+  // At one commit (?commit=), it opens in a checkout of just that commit, beside
+  // your clone (the extension makes it): what a shader in the room was built
+  // from. Without, it's your clone, on your branch.
+  const asked = useQueryParam("commit");
+  const commit = asked && COMMIT.test(asked) ? asked : null;
   // Not opened once it's deleted. (Asked for before the sketch itself is
   // known, so VS Code starts as soon as it can.)
   const box = useBox(id, !deleted);
@@ -210,7 +255,8 @@ function SketchPage({ id }: { id: string }) {
   // home and the open tabs in the browser, so only undo history is lost.
   const [shown, setShown] = useState<{ run: string; url: string } | null>(null);
   const ready = box.data?.state === "ready" ? box.data : null;
-  if (ready && ready.run !== shown?.run) setShown({ run: ready.run, url: ready.url });
+  const url = ready && (commit ? inFolder(ready.url, `${BOX_COMMITS_FOLDER}/${commit}`) : ready.url);
+  if (ready && url && (ready.run !== shown?.run || url !== shown.url)) setShown({ run: ready.run, url });
   // Deleted meanwhile is said below, once the sketch has been looked at again.
   const goneMeanwhile = box.error instanceof RequestError && box.error.status === 410;
   const failed = box.data?.state === "failed" ? box.data.error : box.isError && !goneMeanwhile ? box.error.message : null;
@@ -230,7 +276,19 @@ function SketchPage({ id }: { id: string }) {
           <span className="crumb-sep">/</span>
           <Link to="/sketches">Sketches</Link>
           <span className="crumb-sep">/</span>
-          <span className="crumb-name">{sketch.data?.name ?? "…"}</span>
+          {commit ? (
+            <>
+              <Link to={`/sketches/${id}`} className="crumb-name">
+                {sketch.data?.name ?? "…"}
+              </Link>
+              <span className="crumb-sep">@</span>
+              <span className="crumb-commit" title={`At commit ${commit}. The sketch's name goes back to your branch.`}>
+                {commit.slice(0, 7)}
+              </span>
+            </>
+          ) : (
+            <span className="crumb-name">{sketch.data?.name ?? "…"}</span>
+          )}
         </nav>
       </TopBar>
       {sketch.isError ? (
@@ -239,8 +297,7 @@ function SketchPage({ id }: { id: string }) {
         </Notice>
       ) : deleted ? (
         <Notice>
-          <b>{sketch.data!.name}</b> was deleted {ago(deleted.at)} by {deleted.by}. Anyone can restore it until{" "}
-          {new Date(deleted.erasedAt).toLocaleDateString(undefined, { month: "long", day: "numeric" })}.{" "}
+          <b>{sketch.data!.name}</b> was deleted {ago(deleted.at)} by {deleted.by}. Anyone can restore it.{" "}
           <button className="quiet" disabled={restore.isPending} onClick={() => restore.mutate(id)}>
             Restore it
           </button>{" "}
@@ -248,7 +305,7 @@ function SketchPage({ id }: { id: string }) {
         </Notice>
       ) : shown ? (
         <div className="box-stage">
-          <iframe key={shown.run} className="box-frame" src={shown.url} title={`${sketch.data?.name ?? "The sketch"} in VS Code`} allow="clipboard-read; clipboard-write" />
+          <iframe key={`${shown.run} ${shown.url}`} className="box-frame" src={shown.url} title={`${sketch.data?.name ?? "The sketch"} in VS Code`} allow="clipboard-read; clipboard-write" />
           {!ready && <div className={failure ? "box-notice box-cover" : "box-notice box-cover starting"}>{failure ? <p>{failure}</p> : <p>Waking your VS Code…</p>}</div>}
         </div>
       ) : failure ? (
@@ -260,6 +317,15 @@ function SketchPage({ id }: { id: string }) {
       )}
     </div>
   );
+}
+
+const COMMIT = /^[0-9a-f]{7,40}$/;
+
+/** VS Code's address, opening another folder. */
+function inFolder(url: string, folder: string): string {
+  const u = new URL(url, location.origin);
+  u.searchParams.set("folder", folder);
+  return u.pathname + u.search;
 }
 
 function Notice({ children, starting }: { children: ReactNode; starting?: boolean }) {

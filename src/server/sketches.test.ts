@@ -4,16 +4,14 @@ import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { SKETCH_RESTORE_DAYS, type BoxState, type Me, type Sketch } from "../shared/vibes.ts";
+import type { BoxState, Me, Sketch } from "../shared/vibes.ts";
 import type { LightsSource } from "./api.ts";
 import type { AuthEnv } from "./auth.ts";
 import { boxToken, createBoxes, type Boxes } from "./boxes.ts";
 import { openDb, type Db } from "./db.ts";
 import { loadConfig, type Config } from "./env.ts";
 import { fakeBoxRunner } from "./fake-box-runner.ts";
-import { boxApiRoutes, eraseDeleted, sketchRoutes } from "./sketches.ts";
-
-const RESTORE_MS = SKETCH_RESTORE_DAYS * 24 * 60 * 60_000;
+import { boxApiRoutes, sketchRoutes } from "./sketches.ts";
 
 const ada: Me = { id: "rc:1", name: "Ada Lovelace", dev: false };
 const grace: Me = { id: "rc:2", name: "Grace", dev: false };
@@ -120,7 +118,6 @@ describe("deleting a sketch", () => {
     expect(await listed("/sketches/deleted")).toContain(s.id);
     const gone = (await (await app.request(`/sketches/${s.id}`)).json()) as Sketch;
     expect(gone.deleted).toMatchObject({ by: "Grace" });
-    expect(gone.deleted!.erasedAt - gone.deleted!.at).toBe(RESTORE_MS);
     // Nothing opens it meanwhile.
     expect((await app.request(`/sketches/${s.id}/box`, json({}))).status).toBe(410);
 
@@ -146,23 +143,11 @@ describe("deleting a sketch", () => {
     expect((await boxApi.request(`/git/${s.id}.git/info/refs?service=git-upload-pack`, { headers: basic })).status).toBe(404);
   });
 
-  it("erases it all once it can't be restored", async () => {
+  it("keeps its repo, to restore", async () => {
     as = ada;
-    const s = await make("Ephemeral");
-    await open(s.id);
-    const box = db.boxFor(s.id, ada.id)!.id;
+    const s = await make("Kept");
     await del(s.id);
-    const deletedAt = db.sketch(s.id)!.deleted_at!;
-
-    await eraseDeleted(config.sketches!, db, fake.runner, deletedAt + RESTORE_MS - 1);
-    expect(db.sketch(s.id)).toBeDefined();
     expect(existsSync(path.join(dir, `${s.id}.git`))).toBe(true);
-
-    await eraseDeleted(config.sketches!, db, fake.runner, deletedAt + RESTORE_MS + 1);
-    expect(db.sketch(s.id)).toBeUndefined();
-    expect(db.box(box)).toBeUndefined();
-    expect(fake.homesRemoved.has(box)).toBe(true);
-    expect(existsSync(path.join(dir, `${s.id}.git`))).toBe(false);
   });
 });
 

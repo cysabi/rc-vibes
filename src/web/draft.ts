@@ -79,7 +79,8 @@ export function layersOf(live: SceneNode[], d: Draft): Layer[] {
       key,
       id: node.id,
       node,
-      name: `Shader #${node.id}`,
+      // Built from a sketch: the sketch's name (by the shader's stamp).
+      name: node.sketch ? (node.sketch.name ?? "Unknown sketch") : `Shader #${node.id}`,
       script: node.script ?? "",
       muted: patch.muted ?? node.muted,
       mask: patch.mask ?? node.mask ?? [],

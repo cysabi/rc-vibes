@@ -18,8 +18,24 @@ export interface LoginOptions {
   dev: boolean;
 }
 
-/** A shader in the scene, as vibes passes it on from arclamp. */
-export type SceneNode = ShaderDescriptor;
+/**
+ * A shader in the scene, as vibes passes it on from arclamp, with the sketch
+ * it was built from, if its script has vibes' stamp.
+ */
+export type SceneNode = ShaderDescriptor & { sketch?: ShaderSketch };
+
+/** The sketch a shader was built from, as its stamp says. */
+export interface ShaderSketch {
+  id: string;
+  /** Its name, or null if vibes has no such sketch. */
+  name: string | null;
+  /** The commit it was built from (its full hash). */
+  commit: string;
+  /** Changed since it was built, or stamped with a key vibes can't check: not what the stamp says. */
+  edited: boolean;
+  /** Its sketch has been deleted (and can be restored). */
+  deleted: boolean;
+}
 
 /** arclamp's lights and rails, with positions, rails and orientations changed in vibes applied. */
 export interface Lights extends LightsResponse {
@@ -60,8 +76,12 @@ export interface Status {
   sketches: boolean;
 }
 
-/** How long anyone can restore a deleted sketch, before it's erased for good. */
-export const SKETCH_RESTORE_DAYS = 30;
+/**
+ * Where a box keeps checkouts of single commits of its sketch, each at
+ * <folder>/<commit> beside the clone; vibes' extension makes one when VS Code
+ * opens it.
+ */
+export const BOX_COMMITS_FOLDER = "/home/workspace/commits";
 
 /** A sketch: code made in vibes, kept as a git repo whose `main` is the sketch. */
 export interface Sketch {
@@ -72,11 +92,8 @@ export interface Sketch {
   /** The latest commit on main: when, and by whom (the commit's author). */
   updatedAt: number;
   updatedBy: string;
-  /**
-   * If it's been deleted: when, by whom, and when it'll be erased (until
-   * then, anyone can restore it).
-   */
-  deleted?: { at: number; by: string; erasedAt: number };
+  /** If it's been deleted: when, and by whom. Anyone can restore it, always. */
+  deleted?: { at: number; by: string };
 }
 
 /**

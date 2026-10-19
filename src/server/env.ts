@@ -5,6 +5,7 @@ const schema = z.object({
   ARCLAMP_BASE_URL: z.url(),
   ARCLAMP_KEY: z.string().min(1),
   SESSION_SECRET: z.string().min(32),
+  VIBES_SIGNING_KEY: z.string().min(32).optional(),
   // Comma-separated: every address vibes is reached at, the main one first.
   PUBLIC_URL: z
     .string()
@@ -54,6 +55,8 @@ export interface SketchesConfig {
 export interface Config {
   arclamp: { baseUrl: string; key: string };
   sessionSecret: string;
+  /** What vibes signs the scripts it builds with (stamp.ts); without it, no stamp is trusted. */
+  signingKey: string | null;
   /** Where people reach vibes, the main one first: each logs in on its own. */
   publicUrls: URL[];
   rc: { clientId: string; clientSecret: string } | null;
@@ -104,6 +107,7 @@ export function loadConfig(source: Record<string, string | undefined> = process.
   return {
     arclamp: { baseUrl: env.ARCLAMP_BASE_URL.replace(/\/+$/, ""), key: env.ARCLAMP_KEY },
     sessionSecret: env.SESSION_SECRET,
+    signingKey: env.VIBES_SIGNING_KEY ?? null,
     publicUrls: env.PUBLIC_URL.map((u) => new URL(u)),
     rc,
     devLogin,

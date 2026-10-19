@@ -73,10 +73,6 @@ export function dockerRunner(sketches: SketchesConfig): BoxRunner {
       }
     },
 
-    async removeHomes(ids) {
-      await docker("run", "--rm", "--entrypoint", "rm", "--volume", `${sketches.homes}:/homes`, sketches.image, "-rf", ...ids.map((id) => `/homes/${id}`));
-    },
-
     async list(image) {
       const ids = (await docker("ps", "--quiet", "--filter", "label=vibes.box")).split("\n").filter(Boolean);
       if (!ids.length) return [];

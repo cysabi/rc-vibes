@@ -9,12 +9,18 @@
 //
 // The lights' layout comes from vibes (VIBES_URL), asked with the box's own
 // token (VIBES_BOX_TOKEN), so the webview never needs vibes' cookies.
+//
+// Opened at <BOX_COMMITS_FOLDER>/<commit> (vibes' page does that for a sketch
+// at one commit), it first makes that folder: a checkout of just that commit,
+// beside the clone, which it's left alone.
 
 import * as esbuild from "esbuild-wasm";
+import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
+import { promisify } from "node:util";
 import * as vscode from "vscode";
-import type { Lights } from "../../../src/shared/vibes.ts";
+import { BOX_COMMITS_FOLDER, type Lights } from "../../../src/shared/vibes.ts";
 import type { FromPreview, LogLine, ToPreview } from "../../../src/web/preview/protocol.ts";
 
 // What a sketch is built from: the first of these it has.
@@ -38,6 +44,11 @@ export function activate(context: vscode.ExtensionContext) {
   process.env.PATH = `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH ?? ""}`;
 
   const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
+  const commit = root && path.dirname(root) === BOX_COMMITS_FOLDER ? path.basename(root) : null;
+  if (root && commit && !fs.existsSync(root)) {
+    void checkOut(root, commit);
+    return;
+  }
   const problems = vscode.languages.createDiagnosticCollection("sketch");
   const status = vscode.window.createStatusBarItem(vscode.StatusBarAlignment.Left, 100);
   status.command = "vibes.toggle";
@@ -72,6 +83,27 @@ export function activate(context: vscode.ExtensionContext) {
 }
 
 export function deactivate() {}
+
+const git = promisify(execFile);
+
+/**
+ * Makes `folder` a checkout of `commit` (fetched first, since it may be newer
+ * than the clone), then opens the window again on it. The clone, on the
+ * person's branch, is left as it is.
+ */
+async function checkOut(folder: string, commit: string) {
+  const clone = process.env.VIBES_FOLDER ?? "/home/workspace/sketch";
+  try {
+    await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `Checking out ${commit.slice(0, 7)}…` }, async () => {
+      await git("git", ["-C", clone, "fetch", "--quiet", "origin"]);
+      await git("git", ["-C", clone, "worktree", "add", "--detach", folder, commit]);
+    });
+    await vscode.commands.executeCommand("workbench.action.reloadWindow");
+  } catch (err) {
+    const stderr = (err as { stderr?: string }).stderr?.trim();
+    void vscode.window.showErrorMessage(`Couldn't check out ${commit.slice(0, 7)}: ${stderr || (err as Error).message}`);
+  }
+}
 
 /** The lights' layout from vibes, again every so often (and soon, after a failure). */
 async function keepLayout(preview: PreviewView, consoleView: ConsoleView) {

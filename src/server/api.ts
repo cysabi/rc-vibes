@@ -11,12 +11,13 @@ import { normalizeLights, type LightsResponse, type ShaderDescriptor } from "../
 import { orientationsOf } from "../shared/fixtures.ts";
 import { clampAlong, hangsOnRails, RAIL_ID, railLength } from "../shared/rails.ts";
 import { MAX_TAGS, TAG } from "../shared/tags.ts";
-import type { Lights, Spot, Status } from "../shared/vibes.ts";
+import type { Lights, SceneNode, Spot, Status } from "../shared/vibes.ts";
 import { ArclampError, type Arclamp } from "./arclamp.ts";
 import { requireUser, type AuthEnv } from "./auth.ts";
 import type { Db } from "./db.ts";
 import type { Config } from "./env.ts";
 import { applyEdits, lightsFile } from "./lights.ts";
+import { sketchOf } from "./stamp.ts";
 import type { StreamRelay } from "./stream.ts";
 
 // A browser this far behind on the light stream skips frames until it
@@ -249,7 +250,14 @@ export function apiRoutes({ config, arclamp, db, relay, origins, lights, sketche
       return c.body(`${JSON.stringify(lightsFile(await currentLights()), null, 2)}\n`, 200, { "Content-Type": "application/json" });
     })
 
-    .get("/scene", async (c) => c.json(await arclamp.scene()))
+    // With the sketch each was built from, by its stamp.
+    .get("/scene", async (c) => {
+      const scene: SceneNode[] = (await arclamp.scene()).map((n) => {
+        const sketch = n.type === "js" ? sketchOf(n.script, config.signingKey, db) : undefined;
+        return sketch ? { ...n, sketch } : n;
+      });
+      return c.json(scene);
+    })
 
     .get("/health", async (c) => c.json(await arclamp.health()))
 

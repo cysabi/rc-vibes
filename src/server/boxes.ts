@@ -46,16 +46,6 @@ export interface BoxRunner {
   remove(name: string): Promise<void>;
   /** The boxes there are now, and whether each is from `image`. */
   list(image: string): Promise<{ name: string; current: boolean }[]>;
-  /** Erases these boxes' homes, for good. */
-  removeHomes(ids: string[]): Promise<void>;
-}
-
-const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
-
-/** Erases these boxes' homes, after checking each is a box's id (and so names nothing else). */
-export async function removeHomes(runner: BoxRunner, ids: string[]) {
-  if (!ids.every((id) => UUID.test(id))) throw new Error("those aren't all boxes");
-  if (ids.length) await runner.removeHomes(ids);
 }
 
 const mac = (secret: string, purpose: string, id: string) => createHmac("sha256", secret).update(`${purpose}:${id}`).digest("base64url");

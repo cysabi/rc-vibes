@@ -81,7 +81,7 @@ export function openDb(path: string) {
       detail TEXT
     );
     -- Sketches: each is a git repo, <sketches dir>/<id>.git; its name lives here.
-    -- A deleted one keeps its row (deleted_at, deleted_by_*) until it's erased.
+    -- A deleted one keeps its row, marked (deleted_at, deleted_by_*), to restore.
     CREATE TABLE IF NOT EXISTS sketches (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -151,9 +151,7 @@ export function openDb(path: string) {
   const selectDeletedSketches = db.prepare("SELECT * FROM sketches WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC");
   const markSketchDeleted = db.prepare("UPDATE sketches SET deleted_at = ?, deleted_by_id = ?, deleted_by_name = ? WHERE id = ? AND deleted_at IS NULL");
   const unmarkSketchDeleted = db.prepare("UPDATE sketches SET deleted_at = NULL, deleted_by_id = NULL, deleted_by_name = NULL WHERE id = ?");
-  const deleteSketchRow = db.prepare("DELETE FROM sketches WHERE id = ?");
   const selectBoxesOf = db.prepare("SELECT * FROM boxes WHERE sketch_id = ?");
-  const deleteBoxesOf = db.prepare("DELETE FROM boxes WHERE sketch_id = ?");
   const selectSketch = db.prepare("SELECT * FROM sketches WHERE id = ?");
   const insertSketch = db.prepare("INSERT INTO sketches (id, name, by_id, by_name, at) VALUES (?, ?, ?, ?, ?)");
   const selectBox = db.prepare("SELECT * FROM boxes WHERE id = ?");
@@ -314,7 +312,7 @@ export function openDb(path: string) {
     /** Every sketch that isn't deleted, newest first. */
     sketches: () => selectSketches.all() as unknown as SketchRow[],
 
-    /** The deleted sketches not erased yet, the most recently deleted first. */
+    /** The deleted sketches, the most recently deleted first. */
     deletedSketches: () => selectDeletedSketches.all() as unknown as SketchRow[],
 
     /** A sketch, deleted or not. */
@@ -330,14 +328,6 @@ export function openDb(path: string) {
 
     restoreSketch(id: string) {
       unmarkSketchDeleted.run(id);
-    },
-
-    /** Forgets a sketch for good, with everyone's boxes for it. */
-    eraseSketch(id: string) {
-      transaction(() => {
-        deleteBoxesOf.run(id);
-        deleteSketchRow.run(id);
-      });
     },
 
     /** Everyone's boxes for a sketch. */

@@ -35,12 +35,13 @@ import type { Channels, LightInfo } from "../../shared/arclamp.ts";
 import { baseType, isBinary, isOn, lemtoneOf, requestedOf } from "../../shared/fixtures.ts";
 import { colorName, lemtoneCode, lumensText } from "../../shared/lemtone.ts";
 import { tagLabel } from "../../shared/tags.ts";
-import type { SceneNode } from "../../shared/vibes.ts";
+import type { SceneNode, ShaderSketch } from "../../shared/vibes.ts";
 import { useLights, useScene } from "../api.ts";
 import { drafts, layersOf, reorderWithin, templateOf, useDraft, type Layer } from "../draft.ts";
-import { ChevronUpIcon, CloseIcon, GripIcon } from "../icons.tsx";
+import { ChevronUpIcon, CloseIcon, GripIcon, OpenIcon } from "../icons.tsx";
 import { useFrames } from "../live.ts";
 import { useNarrow } from "../narrow.ts";
+import { navigate } from "../route.ts";
 import { useLayerEffects } from "../sim.ts";
 import { RoomToneEditor } from "./RoomToneEditor.tsx";
 
@@ -404,13 +405,23 @@ function RowParts({ row, n, onSwitch }: RowProps) {
         : state === "off"
           ? `${layer.name} is kept off these lights. Switch it back on for them.`
           : `${layer.name} is kept off ${row.keptOff} of the ${row.aimed} lights here it's trying to change. Switch it on for all of them.`;
+  const sketch = layer.node.sketch;
   return (
     <>
       <span className="layer-node" aria-hidden="true" />
       <span className="layer-text">
-        <span className="layer-name">{layer.name}</span>
+        <span className="layer-name">
+          {layer.name}
+          {sketch?.deleted && <span className="layer-badge">deleted</span>}
+          {sketch?.edited && (
+            <span className="layer-badge" title="Changed since vibes built it, so it isn't what its sketch's commit says">
+              edited
+            </span>
+          )}
+        </span>
         <span className="layer-meta">{layerMeta(row, n)}</span>
       </span>
+      {sketch?.name != null && <OpenSketch sketch={sketch} />}
       <button
         className={`switch ${state}`}
         role="switch"
@@ -446,8 +457,27 @@ function toneSummary(lights: LightInfo[], template: Record<string, Channels>): s
 }
 
 /** Who wrote a shader, and what it's doing to the selection: changing some of it, or what it would change if it weren't kept off. */
+/**
+ * The sketch a shader was built from, opened: at the commit it was built
+ * from, or, deleted, among the deleted ones in the library, to restore.
+ */
+function OpenSketch({ sketch }: { sketch: ShaderSketch }) {
+  const label = sketch.deleted ? `Find ${sketch.name} among the deleted sketches` : `Open ${sketch.name} at ${sketch.commit.slice(0, 7)}, the commit this was built from`;
+  return (
+    <button
+      className="icon-button layer-open"
+      aria-label={label}
+      title={label}
+      onClick={() => navigate(sketch.deleted ? `/sketches?deleted=${sketch.id}` : `/sketches/${sketch.id}?commit=${sketch.commit}`)}
+    >
+      <OpenIcon />
+    </button>
+  );
+}
+
 function layerMeta({ layer, aimed, lighting, keptOff }: Row, n: number): string {
-  const parts = [layer.by];
+  // Built from a sketch: which commit first.
+  const parts = layer.node.sketch ? [layer.node.sketch.commit.slice(0, 7), layer.by] : [layer.by];
   if (layer.muted) parts.push("muted");
   // Out of the whole selection, which the head already counts.
   const of = (k: number, verb: string) => (k === n ? (n === 1 ? `${verb} this light` : `${verb} all ${n}`) : `${verb} ${k}`);
