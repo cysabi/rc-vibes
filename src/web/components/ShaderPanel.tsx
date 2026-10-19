@@ -289,11 +289,7 @@ export function ComingBody({ instance, lights, onRetried }: { instance: Instance
         <button className="quiet shader-action" onClick={() => navigate(`/sketches/${instance.sketchId}`)}>
           <OpenIcon /> Open its sketch
         </button>
-        {instance.state === "failed" && (
-          <button className="quiet shader-action" disabled={busy} onClick={() => void retry()} title={`Build ${instance.branch}'s latest and put that in`}>
-            Try again
-          </button>
-        )}
+        {instance.state === "failed" && <Rebuild commit={instance.commit} branch={instance.branch} head={instance.head} disabled={busy} onClick={() => void retry()} />}
         <button className="quiet danger shader-action" disabled={busy} onClick={() => void act(() => request("DELETE", `/api/instances/${instance.id}`))}>
           <TrashIcon /> {instance.state === "failed" ? "Let it go" : "Stop putting it in"}
         </button>
@@ -359,11 +355,7 @@ export function AddingBody({ adding, lights, onGone }: { adding: Adding; lights:
         <button className="quiet shader-action" onClick={() => navigate(`/sketches/${adding.sketchId}`)}>
           <OpenIcon /> Open its sketch
         </button>
-        {build?.state === "failed" && (
-          <button className="quiet shader-action" onClick={() => drafts.rebuild(adding.key)} title={`Build ${adding.branch}'s latest`}>
-            Try again
-          </button>
-        )}
+        {build?.state === "failed" && <Rebuild commit={build.commit} branch={adding.branch} head={head} onClick={() => drafts.rebuild(adding.key)} />}
         <button
           className="quiet danger shader-action"
           onClick={() => {
@@ -375,6 +367,26 @@ export function AddingBody({ adding, lights, onGone }: { adding: Adding; lights:
         </button>
       </div>
     </div>
+  );
+}
+
+/**
+ * Building again, after it couldn't build or go in: always its branch's head.
+ * While that's still the commit that failed, it's "Build again" (for a
+ * hiccup: a fix needs pushing first); once the branch has moved on, "Build
+ * latest".
+ */
+function Rebuild({ commit, branch, head, disabled, onClick }: { commit: string; branch: string; head: string | null; disabled?: boolean; onClick: () => void }) {
+  const latest = head !== null && commit !== "" && head !== commit;
+  return (
+    <button
+      className="quiet shader-action"
+      disabled={disabled}
+      onClick={onClick}
+      title={latest ? `Build ${head.slice(0, 7)}, ${branch}'s latest` : `${branch} hasn't changed since: build it again (for a hiccup; a fix needs pushing first)`}
+    >
+      {latest ? "Build latest" : "Build again"}
+    </button>
   );
 }
 
