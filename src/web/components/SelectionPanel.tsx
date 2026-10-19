@@ -56,7 +56,6 @@ import { ChevronUpIcon, CloseIcon, GripIcon, OpenIcon } from "../icons.tsx";
 import { useFrames } from "../live.ts";
 import { useNarrow } from "../narrow.ts";
 import { usePendingInstances, useScene } from "../scene.ts";
-import { tryingOf, useLayerEffects } from "../sim.ts";
 import { listOf, ordinal } from "../words.ts";
 import { RoomToneEditor } from "./RoomToneEditor.tsx";
 import { ComingBody, ComingTitle, ShaderBody, ShaderTitle } from "./ShaderPanel.tsx";
@@ -88,15 +87,13 @@ interface Props {
   here: LightInfo[];
   /** The selected ones among them. */
   selected: ReadonlySet<number>;
-  /** Whether the map shows the preview of pending edits, rather than the room. */
-  previewing: boolean;
   /** The shader open in place of the selection, if one is. */
   shader: LayerKey | null;
   onShader: (key: LayerKey | null) => void;
   onClose: () => void;
 }
 
-export function SelectionPanel({ floor, here, selected, previewing, shader, onShader, onClose }: Props) {
+export function SelectionPanel({ floor, here, selected, shader, onShader, onClose }: Props) {
   const panel = useRef<HTMLElement>(null);
   const chosen = here.filter((l) => selected.has(l.id));
   const n = chosen.length;
@@ -104,14 +101,11 @@ export function SelectionPanel({ floor, here, selected, previewing, shader, onSh
   // What's on these lights, bottom of the stack first: each shader whose
   // home (or, with none, where its code has lit: reachOf) takes in any of
   // them, then any instance on its way in that's homed on any. A row only
-  // moves if you move it. Its switch is whether it's on for these lights,
-  // and a dot says it's lighting them right now (as arclamp reports, or the
-  // preview while there are pending edits).
+  // moves if you move it. Its switch is whether it's on for these lights.
   const scene = useScene();
   const pending = usePendingInstances();
   const lights = useLights();
   const draft = useDraft();
-  const previewEffects = useLayerEffects();
   const live = scene.data ?? NO_NODES;
   const template = templateOf(live, draft);
   const ids = chosen.map((l) => l.id);
@@ -120,11 +114,7 @@ export function SelectionPanel({ floor, here, selected, previewing, shader, onSh
   const rows: Row[] = [...stack]
     .reverse()
     .filter((layer) => reachOf(layer).some((id) => selected.has(id)))
-    .map((layer) => {
-      const trying = tryingOf(layer, previewing, previewEffects);
-      const mask = new Set(layer.mask);
-      return { layer, state: switchState(layer, ids), lighting: !layer.muted && ids.some((id) => trying.has(id) && !mask.has(id)) };
-    });
+    .map((layer) => ({ layer, state: switchState(layer, ids) }));
   const coming = pending.filter((i) => i.home.some((id) => selected.has(id)));
 
   // The layer whose parameters are open under it, one at a time: room tone's, to start with.
@@ -353,8 +343,6 @@ interface Row {
   layer: Layer;
   /** Its switch: on for these lights, off, or on for some of them. */
   state: SwitchState;
-  /** Whether it's lighting any of them right now. */
-  lighting: boolean;
 }
 
 interface RowProps {
@@ -383,10 +371,10 @@ function SortableRow({ row, onSwitch, onOpen }: RowProps) {
 }
 
 /**
- * A shader's stop on the rail: its name, what's become of it, whether it's
- * lighting these lights right now (the dot), its arrow to open it, and a
- * switch for whether it's on for these lights (off here leaves the rest of
- * the room as it is; on, for one that's off everywhere, is on for just these).
+ * A shader's stop on the rail: its name, what's become of it, its arrow to
+ * open it, and a switch for whether it's on for these lights (off here leaves
+ * the rest of the room as it is; on, for one that's off everywhere, is on for
+ * just these).
  */
 function RowParts({ row, onSwitch, onOpen }: RowProps) {
   const { layer, state } = row;
@@ -418,7 +406,6 @@ function RowParts({ row, onSwitch, onOpen }: RowProps) {
               edited
             </span>
           )}
-          {row.lighting && <span className="layer-live" title="Lighting these lights right now" />}
         </span>
         {meta && <span className="layer-meta">{meta}</span>}
       </span>

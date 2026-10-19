@@ -212,7 +212,6 @@ function Shell() {
           floor={floor}
           here={here}
           selected={selectedHere}
-          previewing={previewing}
           shader={open ? shader : null}
           onShader={setShader}
           onClose={() => {

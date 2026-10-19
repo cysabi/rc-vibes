@@ -369,8 +369,7 @@ ever be built from one of its commits. On while `SKETCHES=1`.
   arclamp's `changing`, kept in vibes' database). Plus instances on their way
   in, homed on any of them. Rows are in stack order and never move. A shader
   is **on**, **on for some** or **off** (muted and masked off everything are
-  one off); its switch is for these lights; a dot says it's lighting them
-  right now. Its own panel says what's become of it (building, couldn't go
+  one off); its switch is for these lights. Its own panel says what's become of it (building, couldn't go
   in, failing, updating), its home (moved to the selection with a button),
   and offers its code, an update to its sketch's latest commit, and taking it
   out.

@@ -1093,19 +1093,6 @@ kbd {
   height: 26px;
 }
 
-/* Beside its name: it's lighting these lights right now. */
-.layer-live {
-  display: inline-block;
-  width: 6px;
-  height: 6px;
-  margin-left: 7px;
-  border-radius: 50%;
-  /* Lit: a warm filament. */
-  background: #ffd08a;
-  box-shadow: 0 0 6px rgb(255 208 138 / 0.8);
-  vertical-align: 2px;
-}
-
 /* On its way in (building, or couldn't go in): above the rest, off the rail. */
 .layer.coming .layer-node {
   background: transparent;
