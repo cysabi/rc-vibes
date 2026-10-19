@@ -3,13 +3,13 @@
 // commit from vibes, builds it as src/shared/sketch-plan.ts says (installing
 // its packages first; a Vite sketch with the Vite beside it here), and sends
 // vibes the script and the log, or why it failed. vibes checks and stamps the
-// script; nothing here is trusted. It runs as uid 1000, with the internet and
-// vibes and nothing else.
+// script; nothing here is trusted. Started as root, it starts Nix's daemon
+// and then builds as uid 1000, with the internet and vibes and nothing else.
 //
 //   VIBES_BUILD_URL, VIBES_BUILD_TOKEN: where vibes is, and this build's token.
 
 import { spawn } from "node:child_process";
-import { existsSync, mkdirSync, readFileSync } from "node:fs";
+import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { planSketch, UPDATE_FOOTER, type BuildPlan } from "../src/shared/sketch-plan.ts";
@@ -52,6 +52,11 @@ async function fetchSource() {
   });
 }
 
+/** Where the script is: the output itself, or sketch.js in it if it's a folder (a Nix build's result may be). */
+function scriptAt(output: string): string {
+  return existsSync(output) && statSync(output).isDirectory() ? path.join(output, "sketch.js") : output;
+}
+
 /** The sketch built by Vite: one global script whose update() is its entry's. */
 async function viteBuild(entry: string): Promise<string> {
   const vite = await import("vite");
@@ -84,7 +89,7 @@ async function build(plan: BuildPlan): Promise<string> {
   say(`Building with ${plan.from}'s command`);
   const code = await run(plan.command);
   if (code !== 0) throw new Error(`${plan.command} failed (exit ${code})`);
-  const output = path.join(WORK, plan.output);
+  const output = scriptAt(path.join(WORK, plan.output));
   if (!existsSync(output)) throw new Error(`${plan.command} didn't write ${plan.output}`);
   return readFileSync(output, "utf8");
 }
@@ -98,23 +103,43 @@ async function report(result: { ok: true; script: string; plan: string } | { ok:
   if (!res.ok) console.error(`vibes didn't take the result (${res.status}): ${await res.text()}`);
 }
 
-let described: string | null = null;
-try {
-  if (!url || !token) throw new Error("this build doesn't know where vibes is (VIBES_BUILD_URL, VIBES_BUILD_TOKEN)");
-  await fetchSource();
-  const at = (f: string) => path.join(WORK, f);
-  const plan = planSketch({ exists: (f) => existsSync(at(f)), read: (f) => (existsSync(at(f)) ? readFileSync(at(f), "utf8") : null) });
-  if ("error" in plan) throw new Error(plan.error);
-  described = plan.build.kind === "vite" ? `vite ${plan.build.entry}` : `${plan.build.from}: ${plan.build.command}`;
-  if (plan.install) {
-    const code = await run(plan.install);
-    if (code !== 0) throw new Error(`installing its packages failed (exit ${code})`);
+async function main() {
+  let described: string | null = null;
+  try {
+    if (!url || !token) throw new Error("this build doesn't know where vibes is (VIBES_BUILD_URL, VIBES_BUILD_TOKEN)");
+    await fetchSource();
+    const at = (f: string) => path.join(WORK, f);
+    const plan = planSketch({ exists: (f) => existsSync(at(f)), read: (f) => (existsSync(at(f)) ? readFileSync(at(f), "utf8") : null) });
+    if ("error" in plan) throw new Error(plan.error);
+    described = plan.build.kind === "vite" ? `vite ${plan.build.entry}` : `${plan.build.from}: ${plan.build.command}`;
+    if (plan.install) {
+      const code = await run(plan.install);
+      if (code !== 0) throw new Error(`installing its packages failed (exit ${code})`);
+    }
+    const script = await build(plan.build);
+    say(`Built: ${script.length} bytes`);
+    await report({ ok: true, script, plan: described });
+  } catch (err) {
+    say(`Failed: ${(err as Error).message}`);
+    await report({ ok: false, error: (err as Error).message, plan: described }).catch((e: Error) => console.error(e.message));
+    process.exit(1);
   }
-  const script = await build(plan.build);
-  say(`Built: ${script.length} bytes`);
-  await report({ ok: true, script, plan: described });
-} catch (err) {
-  say(`Failed: ${(err as Error).message}`);
-  await report({ ok: false, error: (err as Error).message, plan: described }).catch((e: Error) => console.error(e.message));
-  process.exit(1);
+}
+
+const NIX_SOCKET = "/nix/var/nix/daemon-socket/socket";
+
+if (process.getuid?.() === 0) {
+  // Started as root: Nix's daemon first (the build may be a Nix one), then
+  // this again, as uid 1000, for the build itself.
+  const { NIX_REMOTE: _, ...env } = process.env;
+  const daemon = spawn("nix-daemon", [], { stdio: ["ignore", "inherit", "inherit"], env });
+  daemon.on("error", (err) => console.error("couldn't start nix-daemon:", err.message));
+  for (let i = 0; i < 50 && !existsSync(NIX_SOCKET); i++) await new Promise((r) => setTimeout(r, 100));
+  const build = spawn(process.execPath, process.argv.slice(1), { uid: 1000, gid: 1000, cwd: "/", stdio: "inherit", env: process.env });
+  build.on("exit", (code) => {
+    daemon.kill();
+    process.exit(code ?? 1);
+  });
+} else {
+  await main();
 }

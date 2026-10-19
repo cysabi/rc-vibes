@@ -33,6 +33,12 @@ const RESULT_GRACE_MS = 10_000;
 // What a build's pod runs: the builder, beside the extension in the box image.
 const BUILD_COMMAND = ["sh", "-c", 'exec node "$VIBES_EXTENSION/builder.mjs"'];
 
+/**
+ * What a build may do, as root in its VM: start Nix's daemon, then the build
+ * itself as uid 1000 (box/builder.ts). Nothing to mount with.
+ */
+export const BUILD_CAPABILITIES = ["CHOWN", "SETUID", "SETGID", "KILL", "FOWNER", "DAC_OVERRIDE"];
+
 /** Where builds run: the same runner as boxes. */
 export interface BuildRunner {
   /** Starts a build from `image`, running `command`, with no home and no privileges; it ends by itself. */

@@ -15,6 +15,9 @@ import { ESModulesEvaluator, ModuleRunner } from "vite/module-runner";
 
 const scope = self as unknown as DedicatedWorkerGlobalScope & Record<string, unknown>;
 
+/** Longer than this, an update() stops the preview: arclamp would kill it too. */
+const UPDATE_LIMIT_MS = 250;
+
 type Update = (prev: unknown, now: number, initial: number) => unknown;
 type Payload = { type: string; [key: string]: unknown };
 
@@ -139,7 +142,11 @@ scope.onmessage = (e: MessageEvent<ToSketch>) => {
     return;
   }
   try {
+    // Timed here, where it runs: the page's own busyness isn't the sketch's.
+    const started = performance.now();
     const out = update(m.prev, m.now, m.initial);
+    const took = performance.now() - started;
+    if (took > UPDATE_LIMIT_MS) throw new Error(`update() took ${Math.round(took)} ms, longer than ${UPDATE_LIMIT_MS} ms`);
     if (out === undefined || out === null) throw new Error(`update() returned ${out}`);
     reply({ type: "out", seq: m.seq, out: JSON.parse(JSON.stringify(out)) });
   } catch (err) {

@@ -277,7 +277,8 @@ function consoleHtml() {
     li.append(line.text);
     log.append(li);
     while (log.children.length > ${MAX_LINES}) log.firstChild.remove();
-    window.scrollTo(0, document.body.scrollHeight);
+    // The newest line, all of it in sight.
+    li.scrollIntoView({ block: "end" });
   }
   window.addEventListener("message", (e) => {
     const m = e.data;

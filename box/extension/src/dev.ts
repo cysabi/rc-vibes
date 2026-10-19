@@ -228,7 +228,8 @@ export class DevLoop {
     const load = () => {
       let script: string;
       try {
-        script = fs.readFileSync(output, "utf8");
+        // The output, or sketch.js in it if it's a folder (a Nix build's result may be).
+        script = fs.readFileSync(fs.statSync(output).isDirectory() ? path.join(output, "sketch.js") : output, "utf8");
       } catch {
         return;
       }
@@ -238,24 +239,21 @@ export class DevLoop {
       this.out.line("build", `Built ${dev.output}`);
       this.out.source({ kind: "script", script });
     };
-    // Whatever writes the script, it's swapped in.
-    let settle: NodeJS.Timeout | undefined;
-    const outputs = fs.watch(path.dirname(output), (_, file) => {
-      if (file && path.join(path.dirname(output), file.toString()) !== output) return;
-      clearTimeout(settle);
-      settle = setTimeout(load, 80);
-    });
     const say = (text: string) => this.out.line("build", text);
     load();
 
     if (dev.watch) {
+      // Whenever it writes a new script, it's swapped in. (Looked at a few
+      // times a second, not watched: a file rewritten in place, or a Nix
+      // result's link moved, doesn't reliably say so.)
+      const looking = setInterval(load, 300);
       say(`Running ${dev.command}`);
       const child = start(dev.command, this.root, say);
       child.on("exit", (code) => code !== null && this.out.line(code === 0 ? "build" : "error", `${dev.command} ended (exit ${code}).`));
       return {
         deliver() {},
         stop: async () => {
-          outputs.close();
+          clearInterval(looking);
           child.kill();
         },
       };
@@ -270,14 +268,16 @@ export class DevLoop {
       running = running.then(async () => {
         queued = false;
         const code = await run(dev.command, this.root, say);
-        if (code !== 0) this.out.line("error", `${dev.command} failed (exit ${code}). The preview keeps running what last built.`);
+        if (code === 0) load();
+        else this.out.line("error", `${dev.command} failed (exit ${code}). The preview keeps running what last built.`);
       });
     };
-    const skip = [path.dirname(output), path.join(this.root, "node_modules"), path.join(this.root, ".git")];
+    const skip = [output, path.join(this.root, "node_modules"), path.join(this.root, ".git")];
+    if (path.dirname(output) !== this.root) skip.push(path.dirname(output));
     const sources = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(this.root, "**/*"));
     let timer: NodeJS.Timeout | undefined;
     const later = (uri: vscode.Uri) => {
-      if (skip.some((dir) => uri.fsPath.startsWith(dir + path.sep))) return;
+      if (skip.some((p) => uri.fsPath === p || uri.fsPath.startsWith(p + path.sep))) return;
       clearTimeout(timer);
       timer = setTimeout(build, 150);
     };
@@ -286,7 +286,6 @@ export class DevLoop {
     return {
       deliver() {},
       stop: async () => {
-        outputs.close();
         for (const s of subscriptions) s.dispose();
       },
     };

@@ -2,15 +2,16 @@
 // container vibes-<name>, answering on a port of 127.0.0.1 Docker picks, with
 // everyone's homes in one volume (BOX_HOMES) at /homes, for its agent to take
 // the one it's claimed for from. Builds too, each a container from the same
-// image, as uid 1000 with no privileges.
+// image, with just what it needs to start Nix's daemon and then the build as
+// uid 1000.
 
 import { execFile } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
-import type { BoxRunner } from "./boxes.ts";
-import type { BuildRunner } from "./builds.ts";
+import { BOX_CAPABILITIES, type BoxRunner } from "./boxes.ts";
+import { BUILD_CAPABILITIES, type BuildRunner } from "./builds.ts";
 import type { SketchesConfig } from "./env.ts";
 
 const run = promisify(execFile);
@@ -62,10 +63,10 @@ export function dockerRunner(sketches: SketchesConfig): BoxRunner & BuildRunner 
           "127.0.0.1::3000",
           "--volume",
           `${sketches.homes}:/homes`,
-          // Just what its agent needs: to move a home in, and start VS Code as its person.
+          // Just what its agent needs.
           "--cap-drop",
           "ALL",
-          ...["SYS_ADMIN", "CHOWN", "SETUID", "SETGID", "KILL"].flatMap((c) => ["--cap-add", c]),
+          ...BOX_CAPABILITIES.flatMap((c) => ["--cap-add", c]),
           "--security-opt",
           "apparmor=unconfined",
           "--env-file",
@@ -93,9 +94,10 @@ export function dockerRunner(sketches: SketchesConfig): BoxRunner & BuildRunner 
           "--label",
           "vibes.build=1",
           "--user",
-          "1000:1000",
+          "0:0",
           "--cap-drop",
           "ALL",
+          ...BUILD_CAPABILITIES.flatMap((c) => ["--cap-add", c]),
           "--security-opt",
           "no-new-privileges",
           "--memory",

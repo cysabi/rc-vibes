@@ -3,11 +3,18 @@
 // the sketch:
 //
 //   1. sketch.json, if it has one: its own commands.
-//        { "build": { "command": "nix build .#sketch", "output": "result/sketch.js" },
+//        { "build": { "command": "make", "output": "out/sketch.js" },
 //          "dev": { "command": "cargo watch -s ./build.sh", "output": "dist/sketch.js", "watch": true } }
-//   2. Otherwise a "build" script in package.json, which writes dist/sketch.js.
-//   3. Otherwise its entry file (main.ts, …), built by vibes with Vite: the
+//   2. Otherwise, with a flake.nix: `nix build .#sketch`, whose output is the
+//      script (or a folder with sketch.js in it).
+//   3. Otherwise a "build" script in package.json, which writes dist/sketch.js.
+//   4. Otherwise its entry file (main.ts, …), built by vibes with Vite: the
 //      sketch's own vite.config, if it has one.
+//
+// A sketch with a flake.nix brings its own tools with it: its own commands
+// (sketch.json's, and installing its packages) run in its dev shell
+// (`nix develop`), so cargo and the rest are there. Nix sees what git does,
+// so a new file needs `git add` before a Nix build sees it.
 //
 // In the editor, a Vite sketch updates by Vite's own HMR (only what changed
 // runs again; the rest keeps its state); a command's sketch, by running its
@@ -23,10 +30,14 @@ export const ENTRIES = ["main.ts", "main.js", "src/main.ts", "src/index.ts", "in
 /** Where a package.json build script is expected to write the script. */
 export const PACKAGE_OUTPUT = "dist/sketch.js";
 
+/** A flake sketch's build, and where it leaves the script. */
+export const FLAKE_BUILD = "nix build .#sketch --print-build-logs";
+export const FLAKE_OUTPUT = "result";
+
 /** How the room's script is made. */
 export type BuildPlan =
   | { kind: "vite"; entry: string }
-  | { kind: "command"; command: string; output: string; from: "sketch.json" | "package.json" };
+  | { kind: "command"; command: string; output: string; from: "sketch.json" | "flake.nix" | "package.json" };
 
 /** How the editor keeps the preview up to date. */
 export type DevPlan =
@@ -88,11 +99,17 @@ export function planSketch(files: SketchFiles): SketchPlan | { error: string } {
     install = files.exists("package-lock.json") ? "npm ci" : files.exists("pnpm-lock.yaml") ? "pnpm install --frozen-lockfile" : "pnpm install";
   }
   const run = install?.startsWith("npm") ? "npm run" : "pnpm run";
+  const flake = files.exists("flake.nix");
+  // A flake sketch's own commands, in its dev shell.
+  const own = (command: string) => (flake ? `nix develop --command sh -c ${quote(command)}` : command);
+  if (install) install = own(install);
 
   let build: BuildPlan;
   if (json.build !== undefined) {
     const b = json.build as Command;
-    build = { kind: "command", command: b.command, output: b.output, from: "sketch.json" };
+    build = { kind: "command", command: own(b.command), output: b.output, from: "sketch.json" };
+  } else if (flake) {
+    build = { kind: "command", command: FLAKE_BUILD, output: FLAKE_OUTPUT, from: "flake.nix" };
   } else if (buildScript) {
     build = { kind: "command", command: `${run} build`, output: PACKAGE_OUTPUT, from: "package.json" };
   } else {
@@ -104,7 +121,7 @@ export function planSketch(files: SketchFiles): SketchPlan | { error: string } {
   let dev: DevPlan;
   if (json.dev !== undefined) {
     const d = json.dev as Command & { watch?: unknown };
-    dev = { kind: "command", command: d.command, output: d.output, watch: d.watch === true };
+    dev = { kind: "command", command: own(d.command), output: d.output, watch: d.watch === true };
   } else if (build.kind === "vite") {
     dev = { kind: "vite", entry: build.entry };
   } else {
@@ -112,6 +129,9 @@ export function planSketch(files: SketchFiles): SketchPlan | { error: string } {
   }
   return { build, dev, install };
 }
+
+/** One argument for sh, whatever's in it. */
+const quote = (s: string) => `'${s.replaceAll("'", `'\\''`)}'`;
 
 /** The script a Vite build makes is an IIFE (globalName __sketch); this makes its update() arclamp's global one. */
 export const UPDATE_FOOTER = "function update(prev, nowMs, initialMs) { return __sketch.update(prev, nowMs, initialMs); }";

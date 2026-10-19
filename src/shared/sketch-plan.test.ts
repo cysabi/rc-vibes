@@ -44,6 +44,20 @@ describe("how a sketch is built", () => {
     expect(planSketch(files({ "sketch.json": only }))).toMatchObject({ dev: { kind: "command", command: "make", output: "out.js", watch: false } });
   });
 
+  it("is by Nix with a flake, its own commands in its dev shell", () => {
+    expect(planSketch(files({ "flake.nix": "", "main.ts": "" }))).toEqual({
+      build: { kind: "command", command: "nix build .#sketch --print-build-logs", output: "result", from: "flake.nix" },
+      dev: { kind: "command", command: "nix build .#sketch --print-build-logs", output: "result", watch: false },
+      install: null,
+    });
+    const json = JSON.stringify({ dev: { command: "cargo watch -s 'sh build.sh'", output: "dist/sketch.js", watch: true } });
+    expect(planSketch(files({ "flake.nix": "", "sketch.json": json, "package.json": "{}", "package-lock.json": "" }))).toEqual({
+      build: { kind: "command", command: "nix build .#sketch --print-build-logs", output: "result", from: "flake.nix" },
+      dev: { kind: "command", command: `nix develop --command sh -c 'cargo watch -s '\\''sh build.sh'\\'''`, output: "dist/sketch.js", watch: true },
+      install: "nix develop --command sh -c 'npm ci'",
+    });
+  });
+
   it("says why it can't be", () => {
     expect(planSketch(files({}))).toHaveProperty("error", expect.stringContaining("nothing to build"));
     expect(planSketch(files({ "sketch.json": "{" }))).toHaveProperty("error", expect.stringContaining("isn't JSON"));

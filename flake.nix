@@ -133,12 +133,28 @@
               ];
               text = builtins.readFile ./box/start.sh;
             };
-            # The person, as uid 1000 (VS Code and git look themselves up).
+            # The person, as uid 1000 (VS Code and git look themselves up), and
+            # Nix's build users.
             users = p.runCommand "vibes-box-users" { } ''
               mkdir -p $out/etc
-              printf '%s\n' 'root:x:0:0:root:/root:/bin/sh' 'vibes:x:1000:1000:vibes:/home/workspace:/bin/bash' 'nobody:x:65534:65534:nobody:/var/empty:/bin/sh' >$out/etc/passwd
-              printf '%s\n' 'root:x:0:' 'vibes:x:1000:' 'nobody:x:65534:' >$out/etc/group
+              {
+                printf '%s\n' 'root:x:0:0:root:/root:/bin/sh' 'vibes:x:1000:1000:vibes:/home/workspace:/bin/bash' 'nobody:x:65534:65534:nobody:/var/empty:/bin/sh'
+                for i in $(seq 1 8); do echo "nixbld$i:x:$((30000 + i)):30000:Nix build user $i:/var/empty:/bin/false"; done
+              } >$out/etc/passwd
+              printf '%s\n' 'root:x:0:' 'vibes:x:1000:' 'nobody:x:65534:' "nixbld:x:30000:$(seq -s, -f 'nixbld%g' 1 8)" >$out/etc/group
               printf '%s\n' 'hosts: files dns' >$out/etc/nsswitch.conf
+            '';
+            # Nix, first-class: a sketch with a flake builds with it. Its daemon
+            # runs as root in the VM (box/agent.ts, box/builder.ts), running
+            # builds as its build users; Nix's own sandbox is off, since the VM
+            # is the sandbox. The store is the VM's own, fresh each time.
+            nixConf = p.writeText "nix.conf" ''
+              experimental-features = nix-command flakes
+              build-users-group = nixbld
+              sandbox = false
+              max-jobs = auto
+              substituters = https://cache.nixos.org/
+              trusted-public-keys = cache.nixos.org-1:6NCHdD59X431o0gWypbMrAURkbJ16ZPMQFGspcDShjY=
             '';
           in
           p.dockerTools.buildLayeredImage {
@@ -163,16 +179,20 @@
               # For builds (box/builder.ts), which unpack the commit vibes sends.
               p.gnutar
               p.gzip
+              p.nix
             ];
+            # Nix knows the store paths the image came with.
+            includeNixDB = true;
             # Where the homes are given (/homes) and where the person's goes
             # (/home/workspace). Who's who as real files, which Docker reads to
             # run commands in it.
             fakeRootCommands = ''
-              mkdir -p home/workspace homes tmp etc
+              mkdir -p home/workspace homes tmp etc/nix
               chown 1000:1000 home/workspace
               chmod 0700 homes
               chmod 1777 tmp
               cp ${users}/etc/passwd ${users}/etc/group ${users}/etc/nsswitch.conf etc/
+              cp ${nixConf} etc/nix/nix.conf
             '';
             config = {
               # Its agent, as root until it starts VS Code as the person (box/agent.ts).
@@ -186,6 +206,8 @@
                 "HOME=/home/workspace"
                 "PATH=/bin:/usr/bin"
                 "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
+                # Everyone but root reaches the store through the daemon.
+                "NIX_REMOTE=daemon"
                 "VIBES_EXTENSION=${extension}"
                 "VIBES_SETTINGS=${settings}"
               ];

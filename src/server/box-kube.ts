@@ -7,8 +7,8 @@
 
 import { readFileSync } from "node:fs";
 import https from "node:https";
-import type { BoxRunner } from "./boxes.ts";
-import type { BuildRunner } from "./builds.ts";
+import { BOX_CAPABILITIES, type BoxRunner } from "./boxes.ts";
+import { BUILD_CAPABILITIES, type BuildRunner } from "./builds.ts";
 import type { SketchesConfig } from "./env.ts";
 
 const SA = "/var/run/secrets/kubernetes.io/serviceaccount";
@@ -104,13 +104,9 @@ export function kubernetesRunner(sketches: SketchesConfig): BoxRunner & BuildRun
                 env: Object.entries(env).map(([k, v]) => ({ name: k, value: v })),
                 ports: [{ containerPort: 3000 }],
                 resources: { requests: { cpu: "100m", memory: "512Mi" }, limits: { cpu: "2", memory: "2Gi" } },
-                // Its agent starts as root, in the VM, with just what it needs to
-                // move a home in and start VS Code as its person (who has none).
-                securityContext: {
-                  runAsUser: 0,
-                  runAsGroup: 0,
-                  capabilities: { drop: ["ALL"], add: ["SYS_ADMIN", "CHOWN", "SETUID", "SETGID", "KILL"] },
-                },
+                // Its agent starts as root, in the VM, with just what it needs
+                // (BOX_CAPABILITIES); the person has none.
+                securityContext: { runAsUser: 0, runAsGroup: 0, capabilities: { drop: ["ALL"], add: BOX_CAPABILITIES } },
                 volumeMounts: [{ name: "homes", mountPath: "/homes" }],
               },
             ],
@@ -133,8 +129,9 @@ export function kubernetesRunner(sketches: SketchesConfig): BoxRunner & BuildRun
       await check("removing the box", kube("DELETE", `${pods}/${name}`), [200, 202, 404]);
     },
 
-    // Builds: a pod each, as uid 1000 with nothing it can raise itself to,
-    // gone by itself after 15 minutes at most.
+    // Builds: a pod each, starting as root with just enough to start Nix's
+    // daemon (BUILD_CAPABILITIES), then building as uid 1000; gone by itself
+    // after 15 minutes at most.
     async startBuild(name, image, command, env) {
       await check(
         "starting the build",
@@ -146,7 +143,6 @@ export function kubernetesRunner(sketches: SketchesConfig): BoxRunner & BuildRun
             enableServiceLinks: false,
             restartPolicy: "Never",
             activeDeadlineSeconds: 900,
-            securityContext: { runAsUser: 1000, runAsGroup: 1000, runAsNonRoot: true },
             containers: [
               {
                 name: "build",
@@ -155,7 +151,7 @@ export function kubernetesRunner(sketches: SketchesConfig): BoxRunner & BuildRun
                 command,
                 env: Object.entries(env).map(([k, v]) => ({ name: k, value: v })),
                 resources: { requests: { cpu: "250m", memory: "512Mi" }, limits: { cpu: "2", memory: "2Gi" } },
-                securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: ["ALL"] } },
+                securityContext: { runAsUser: 0, runAsGroup: 0, allowPrivilegeEscalation: false, capabilities: { drop: ["ALL"], add: BUILD_CAPABILITIES } },
               },
             ],
           },

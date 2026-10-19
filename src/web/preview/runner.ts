@@ -26,8 +26,10 @@ import type { FromSketch, ToSketch } from "./sketch.worker.ts";
 import type { LogLine, SketchSource } from "./protocol.ts";
 
 const TICK_MS = 33;
-// A sketch that hasn't answered by then is stuck; arclamp would kill it too.
-const DEADLINE_MS = 250;
+// A sketch that hasn't answered by then is stuck (an endless loop). How long
+// update() itself may take, the worker times, where it runs; this is only
+// for one that never answers, generous so a busy page isn't taken for it.
+const DEADLINE_MS = 2000;
 const MAX_LINES = 200;
 
 export class SketchRunner implements FrameSource {
@@ -186,7 +188,7 @@ export class SketchRunner implements FrameSource {
       const timer = window.setTimeout(() => {
         if (!this.waiting.delete(seq)) return;
         resolve(null);
-        this.fail(`update() took longer than ${DEADLINE_MS} ms`);
+        this.fail(`update() didn't answer within ${DEADLINE_MS / 1000} s`);
       }, DEADLINE_MS);
       this.waiting.set(seq, (out) => {
         window.clearTimeout(timer);

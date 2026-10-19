@@ -2,9 +2,9 @@
 // keeps a pool of them, booted and waiting). It waits, as root, for vibes to
 // claim the box for one person's box; then it puts that box's home (from the
 // homes every box is given, at /homes) at /home/workspace, takes the rest of
-// the homes away, and starts their VS Code (box/start.sh) as them: uid 1000,
-// with no privileges left. From then on it only waits for VS Code to end, and
-// ends with it.
+// the homes away, starts Nix's daemon (which can't mount anything), and
+// starts their VS Code (box/start.sh) as them: uid 1000, with no privileges
+// left. From then on it only waits for VS Code to end, and ends with it.
 //
 // It answers on VS Code's port, 3000, until it's claimed: GET /claim says it's
 // waiting (204), and POST /claim, with the claim token vibes booted it with,
@@ -54,6 +54,18 @@ function moveIn(box: string) {
   execFileSync("umount", [HOMES]);
 }
 
+/**
+ * Nix's daemon, for the person's Nix: root in the VM (it runs builds as its
+ * own build users), but unable to mount anything, so never able to bring
+ * back the homes taken away.
+ */
+function startNix() {
+  const { NIX_REMOTE: _, ...env } = process.env;
+  const daemon = spawn("setpriv", ["--bounding-set=-sys_admin", "--inh-caps=-all", "--", "nix-daemon"], { stdio: ["ignore", "inherit", "inherit"], env });
+  daemon.on("error", (err) => console.error("couldn't start nix-daemon:", err.message));
+  daemon.on("exit", (code) => console.error(`nix-daemon ended (${code})`));
+}
+
 function startVsCode(env: Record<string, string>) {
   const settings = Object.fromEntries(Object.entries(env).filter(([k, v]) => SETTING.test(k) && typeof v === "string"));
   // Started as them, which leaves it no capabilities, and nothing in the image
@@ -99,6 +111,7 @@ const server = http.createServer((req, res) => {
       const { box, env } = JSON.parse(Buffer.concat(chunks).toString()) as { box: string; env: Record<string, string> };
       if (typeof box !== "string" || !BOX.test(box)) throw new Error("that isn't a box");
       moveIn(box);
+      startNix();
       // VS Code answers on this port from here on.
       server.close();
       startVsCode(env ?? {});

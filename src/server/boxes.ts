@@ -36,6 +36,15 @@ const CLAIM_TIMEOUT_MS = 2 * 60_000;
 const BOOT_RETRY_MS = 30_000;
 const IDLE_CHECK_MS = 60_000;
 
+/**
+ * What a box's agent may do, as root in its VM: move a home in (SYS_ADMIN, to
+ * mount), start VS Code as its person (SETUID, SETGID; KILL, to stop it), and
+ * start Nix's daemon (which manages its build users' files: CHOWN, FOWNER,
+ * DAC_OVERRIDE; it's started without SYS_ADMIN, which takes SETPCAP to
+ * drop). The person has none of them.
+ */
+export const BOX_CAPABILITIES = ["SYS_ADMIN", "SETPCAP", "CHOWN", "SETUID", "SETGID", "KILL", "FOWNER", "DAC_OVERRIDE"];
+
 /** Where boxes run. Each box is one container (or pod); homes are kept apart from them. */
 export interface BoxRunner {
   /** Boots a box that's no one's yet, from `image`, and says where it answers (an http origin). */
