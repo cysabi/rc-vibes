@@ -247,7 +247,10 @@ ever be built from one of its commits. On while `SKETCHES=1`.
   whose it is (`boxes.pod`), and boots another for the pool. A box is never
   anyone else's after, and is removed when done with; homes are kept. The
   trade-off: every box's VM has every home shared into it, so code that
-  escaped to root in its VM could reach other homes (not just its own).
+  escaped to root in its VM could reach other homes (not just its own). In
+  a home, the clone is at `/home/workspace/sketches/<sketch id>/sketch`: a
+  path of its own for each sketch, since VS Code keeps a folder's open tabs
+  in the browser by its path.
 - **Lifetime: while your page is in sight.** The sketch page checks in every
   30 s while it's visible (and at once when it becomes visible again); a box
   nothing's checked in on for `BOX_IDLE_MINUTES` is removed. A page that

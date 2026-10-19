@@ -81,8 +81,13 @@ export const claimToken = (secret: string, name: string) => mac(secret, "claim",
 /** Where a box's VS Code is: the path vibes proxies to it, which is also its base path. */
 export const boxPath = (id: string) => `/box/${id}`;
 
-/** The folder a box's clone of its sketch is in. */
-export const SKETCH_FOLDER = "/home/workspace/sketch";
+/**
+ * The folder a box's clone of its sketch is in: one of its own for each
+ * sketch, since VS Code keeps a folder's open tabs in the browser by its path
+ * (one path for every sketch, and one sketch's tabs open in the next). Itself
+ * named "sketch", which is what VS Code shows.
+ */
+export const sketchFolder = (sketchId: string) => `/home/workspace/sketches/${sketchId}/sketch`;
 
 // What VS Code's page is told as it opens (it reads these from its address):
 // no welcome page.
@@ -142,7 +147,7 @@ export function createBoxes(config: Config, sketches: SketchesConfig, db: Db, ru
       VIBES_USER_NAME: box.user_name,
       VIBES_USER_EMAIL: `${box.user_id.replace(/[^a-z0-9]+/gi, "-")}@users.vibes.invalid`,
       VIBES_BASE_PATH: boxPath(box.id),
-      VIBES_FOLDER: SKETCH_FOLDER,
+      VIBES_FOLDER: sketchFolder(box.sketch_id),
     };
   }
 
@@ -263,9 +268,9 @@ export function createBoxes(config: Config, sketches: SketchesConfig, db: Db, ru
     }
   }
 
-  const view = (l: Live): BoxState =>
+  const view = (l: Live, sketchId: string): BoxState =>
     l.state === "ready"
-      ? { state: "ready", run: l.pod!, url: `${boxPath(l.id)}/?folder=${encodeURIComponent(SKETCH_FOLDER)}&payload=${encodeURIComponent(PAYLOAD)}` }
+      ? { state: "ready", run: l.pod!, url: `${boxPath(l.id)}/?folder=${encodeURIComponent(sketchFolder(sketchId))}&payload=${encodeURIComponent(PAYLOAD)}` }
       : l.state === "failed"
         ? { state: "failed", error: l.error ?? "it failed" }
         : { state: "starting" };
@@ -328,7 +333,7 @@ export function createBoxes(config: Config, sketches: SketchesConfig, db: Db, ru
         void start(box, l);
       }
       l.seen = Date.now();
-      return view(l);
+      return view(l, sketchId);
     },
 
     /** Removes everyone's boxes for a sketch, running or starting (their homes are kept). */

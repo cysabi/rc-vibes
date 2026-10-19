@@ -17,6 +17,14 @@ git config --global init.defaultBranch main
 # shellcheck disable=SC2016
 git config --global credential.helper '!f() { echo username=box; echo "password=$VIBES_BOX_TOKEN"; }; f'
 
+# Clones used to be at /home/workspace/sketch, before each sketch had a folder
+# of its own: moved, with any checkouts of single commits told where it went.
+if [ ! -e "$VIBES_FOLDER" ] && [ -d /home/workspace/sketch/.git ]; then
+  mkdir -p "$(dirname "$VIBES_FOLDER")"
+  mv /home/workspace/sketch "$VIBES_FOLDER"
+  git -C "$VIBES_FOLDER" worktree repair >/dev/null 2>&1 || true
+fi
+
 if [ ! -d "$VIBES_FOLDER/.git" ]; then
   git clone --quiet "$VIBES_GIT_URL" "$VIBES_FOLDER"
   # Their branch: carried on from vibes, if they've pushed it before.

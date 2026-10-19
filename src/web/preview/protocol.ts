@@ -17,8 +17,12 @@ export interface LogLine {
   count: number;
 }
 
-/** What the preview runs. */
-export type SketchSource = { kind: "script"; script: string } | { kind: "modules"; entry: string };
+/**
+ * What the preview runs. Modules come from one Vite server, which only sends
+ * updates for the modules it served: `server` says which, and the preview
+ * loads them afresh from a new one.
+ */
+export type SketchSource = { kind: "script"; script: string } | { kind: "modules"; entry: string; server: number };
 
 export type ToPreview =
   | { type: "layout"; layout: Lights }

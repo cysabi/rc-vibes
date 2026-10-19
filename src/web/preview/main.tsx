@@ -50,12 +50,14 @@ function Preview() {
 
   // The first source starts it; each one after swaps in on the same clock
   // (modules are updated in place instead, and only swapped for another
-  // entry). A new layout (lights moved) starts it afresh on that.
+  // entry, or another Vite server). A new layout (lights moved) starts it
+  // afresh on that.
   useEffect(() => {
     if (!layout || source === null) return;
     const r = current.current;
     if (r && r.lights === layout.lights) {
-      if (!(source.kind === "modules" && r.source.kind === "modules" && source.entry === r.source.entry)) r.swap(source);
+      const same = source.kind === "modules" && r.source.kind === "modules" && source.entry === r.source.entry && source.server === r.source.server;
+      if (!same) r.swap(source);
       return;
     }
     r?.dispose();

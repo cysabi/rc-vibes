@@ -52,6 +52,8 @@ export class DevLoop {
   private readonly out: DevOut;
   private running: Running | null = null;
   private starting: Promise<void> = Promise.resolve();
+  /** How many Vite servers it's started: the preview loads afresh from each. */
+  private servers = 0;
 
   constructor(root: string, out: DevOut) {
     this.root = root;
@@ -176,7 +178,7 @@ export class DevLoop {
     });
     server.watcher.on("change", (file: string) => (changed = path.relative(root, file)));
     this.out.problems.clear();
-    this.out.source({ kind: "modules", entry: `/${entry}` });
+    this.out.source({ kind: "modules", entry: `/${entry}`, server: ++this.servers });
     return {
       deliver: (payload) => {
         const p = payload as HotPayload;

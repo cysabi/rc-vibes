@@ -96,7 +96,11 @@ const git = promisify(execFile);
  * person's branch, is left as it is.
  */
 async function checkOut(folder: string, commit: string) {
-  const clone = process.env.VIBES_FOLDER ?? "/home/workspace/sketch";
+  const clone = process.env.VIBES_FOLDER;
+  if (!clone) {
+    void vscode.window.showErrorMessage("This box doesn't know where its clone is (VIBES_FOLDER).");
+    return;
+  }
   try {
     await vscode.window.withProgress({ location: vscode.ProgressLocation.Notification, title: `Checking out ${commit.slice(0, 7)}…` }, async () => {
       await git("git", ["-C", clone, "fetch", "--quiet", "origin"]);
