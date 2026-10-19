@@ -7,14 +7,15 @@
 // to its sketch's latest commit, and, for vibes' own, taking it out. On, off
 // and taking it out are pending edits like any other; moving home and
 // updating happen at once. One on its way in (an instance building, or that
-// couldn't go in) has a panel of its own (ComingTitle, ComingBody).
+// couldn't go in) has a panel of its own (ComingTitle, ComingBody), and so
+// does one you're adding, not yet applied (AddingTitle, AddingBody).
 
 import { useState } from "react";
 import type { LightInfo } from "../../shared/arclamp.ts";
 import { tagLabel } from "../../shared/tags.ts";
 import type { Instance, ShaderSketch } from "../../shared/vibes.ts";
 import { request, useSketch } from "../api.ts";
-import { drafts, reachOf, switchEverywhere, switchState, type Layer } from "../draft.ts";
+import { drafts, reachOf, switchEverywhere, switchState, type Adding, type Layer } from "../draft.ts";
 import { ChevronLeftIcon, OpenIcon, TrashIcon } from "../icons.tsx";
 import { navigate } from "../route.ts";
 import { invalidateScene } from "../scene.ts";
@@ -284,6 +285,74 @@ export function ComingBody({ instance, lights }: { instance: Instance; lights: L
         )}
         <button className="quiet danger shader-action" disabled={busy} onClick={() => void act(() => request("DELETE", `/api/instances/${instance.id}`))}>
           <TrashIcon /> {instance.state === "failed" ? "Let it go" : "Stop putting it in"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+/** The head of one you're adding: back to the selection, its sketch's name, and how its build's going. */
+export function AddingTitle({ adding, onBack }: { adding: Adding; onBack: () => void }) {
+  const build = adding.build;
+  return (
+    <>
+      <BackButton onBack={onBack} />
+      <div className="selection-title">
+        <h2>{adding.sketchName}</h2>
+        <p className="muted">
+          {build?.state === "built" ? `@ ${build.commit.slice(0, 7)}` : "main"}
+          {build?.state === "failed" ? (
+            <span className="layer-badge">couldn't build</span>
+          ) : (
+            <span className="layer-badge previewing">{build?.state === "built" ? "new here" : "building"}</span>
+          )}
+        </p>
+      </div>
+    </>
+  );
+}
+
+/**
+ * One you're adding (a pending edit): its main building on the server, then
+ * previewed on the map until you apply, or why it couldn't build, and trying
+ * again or not adding it after all.
+ */
+export function AddingBody({ adding, lights, onGone }: { adding: Adding; lights: LightInfo[]; onGone: () => void }) {
+  const build = adding.build;
+  return (
+    <div className="shader-body">
+      {build?.state === "failed" ? (
+        <Failure what="Couldn't build main" error={build.error} />
+      ) : build?.state === "built" ? (
+        <p className="shader-status">The map shows {build.commit.slice(0, 7)}, main's latest. It goes in, on top, when you apply.</p>
+      ) : (
+        <p className="shader-status">Building main. The map shows it once it's built, before it goes in.</p>
+      )}
+      <ul className="shader-facts">
+        <li>
+          <span className="fact">
+            <span className="fact-name">Home: {homeName(adding.home, lights)}</span>
+            <span className="fact-meta">The lights it goes on, and all it can light</span>
+          </span>
+        </li>
+      </ul>
+      <div className="shader-actions">
+        <button className="quiet shader-action" onClick={() => navigate(`/sketches/${adding.sketchId}`)}>
+          <OpenIcon /> Open its sketch
+        </button>
+        {build?.state === "failed" && (
+          <button className="quiet shader-action" onClick={() => drafts.rebuild(adding.key)}>
+            Try again
+          </button>
+        )}
+        <button
+          className="quiet danger shader-action"
+          onClick={() => {
+            drafts.unadd(adding.key);
+            onGone();
+          }}
+        >
+          <TrashIcon /> Don't add it
         </button>
       </div>
     </div>

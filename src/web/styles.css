@@ -1090,10 +1090,22 @@ kbd {
   color: var(--mute);
 }
 
+/* Nor one you're adding: it's the preview's. */
+.layer-badge.previewing {
+  color: var(--sim);
+}
+
 /* And it, opened in the panel. */
 .layer-open {
   width: 26px;
   height: 26px;
+}
+
+/* Where a switch would be, on one that has none yet (on its way in, or
+   being added), so its arrow lines up with the rest. */
+.layer-no-switch {
+  flex: none;
+  width: 36px;
 }
 
 /* On its way in (building, or couldn't go in): above the rest, off the rail. */
@@ -1108,6 +1120,262 @@ kbd {
 
 .layer-meta.bad {
   color: var(--bad);
+}
+
+/* One you're adding, built: the map shows it (in the preview's own color), until you apply. */
+.layer.adding.built .layer-node {
+  background: var(--sim);
+  box-shadow: none;
+}
+
+.layer.adding.built .layer-name {
+  color: var(--ink);
+}
+
+/* Last, room for another: a plus at the end of the rail, the rail dashed up
+   from it to the row above (and on through that row, unless it's opened, when
+   the rail runs on solid beside what it shows). */
+.layer.add-row {
+  min-height: 0;
+  padding: 0;
+}
+
+.layer.add-row:hover {
+  background: none;
+}
+
+.add-row-button {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  width: 100%;
+  min-height: 48px;
+  padding: 8px 14px 8px 6px;
+  color: var(--mute);
+  text-align: left;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+.add-row-button:hover {
+  background: var(--fill);
+  color: var(--ink);
+}
+
+.add-row .layer-grip {
+  visibility: hidden;
+}
+
+.add-row .layer-name {
+  font-weight: 600;
+}
+
+/* As wide as a stop with its margins, so the rail stays straight. */
+.add-row .layer-node {
+  display: grid;
+  place-items: center;
+  width: 13px;
+  height: 13px;
+  margin: 0 6px 0 0;
+  background: none;
+}
+
+.add-row .layer-node svg {
+  width: 13px;
+  height: 13px;
+}
+
+.add-row .layer-node::before {
+  background: repeating-linear-gradient(to top, var(--line-2) 0 3px, transparent 3px 6px);
+}
+
+.layer:not(.open):has(+ .add-row) .layer-node::after {
+  background: repeating-linear-gradient(to bottom, var(--line-2) 0 3px, transparent 3px 6px);
+}
+
+/* Adding a sketch (AddSketch.tsx): a card over everything, the map dimmed
+   behind it. Its list scrolls; the rest stays put. Hung from near the top,
+   not centered, so it doesn't jump as a search shortens the list. */
+.add-sketch {
+  --hang: min(12vh, 96px);
+  width: min(440px, calc(100vw - 32px));
+  max-width: none;
+  max-height: none;
+  margin: var(--hang) auto auto;
+  padding: 0;
+  overflow: visible;
+  border: 0;
+  background: none;
+  color: var(--ink);
+}
+
+.add-sketch::backdrop {
+  background: rgb(0 0 0 / 0.45);
+}
+
+.add-sketch-card {
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+  max-height: min(620px, calc(100dvh - var(--hang) - 24px));
+  padding: 16px 16px 10px;
+  border-radius: var(--radius);
+  background: var(--glass-strong);
+  -webkit-backdrop-filter: var(--blur);
+  backdrop-filter: var(--blur);
+  box-shadow:
+    inset 0 0 0 1px var(--edge),
+    var(--float);
+}
+
+.add-sketch[open] .add-sketch-card {
+  animation: add-sketch-in 0.2s var(--ease-out);
+}
+
+.add-sketch[open]::backdrop {
+  animation: add-sketch-dim 0.2s var(--ease-out);
+}
+
+@keyframes add-sketch-in {
+  from {
+    opacity: 0;
+    transform: translateY(8px) scale(0.98);
+  }
+}
+
+@keyframes add-sketch-dim {
+  from {
+    opacity: 0;
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  .add-sketch[open] .add-sketch-card,
+  .add-sketch[open]::backdrop {
+    animation: none;
+  }
+}
+
+.add-sketch-head {
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 12px;
+}
+
+.add-sketch-head h2 {
+  font-size: 16px;
+  font-weight: 650;
+}
+
+.add-sketch-head p {
+  font-size: 12.5px;
+}
+
+.add-sketch-head .icon-button {
+  margin: -4px -6px 0 0;
+}
+
+.add-sketch-search {
+  flex: none;
+  width: 100%;
+}
+
+.add-sketch-list {
+  display: grid;
+  align-content: start;
+  gap: 2px;
+  min-height: 0;
+  margin: 0 -8px;
+  padding: 0 0 6px;
+  overflow-y: auto;
+  list-style: none;
+  scrollbar-width: thin;
+  scrollbar-color: var(--line-2) transparent;
+}
+
+.add-sketch-item {
+  display: grid;
+  width: 100%;
+  padding: 8px 10px;
+  border-radius: 10px;
+  text-align: left;
+  transition: background 0.15s;
+}
+
+.add-sketch-item:hover {
+  background: var(--fill-2);
+}
+
+.add-sketch-name {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  overflow: hidden;
+  font-size: 13.5px;
+  font-weight: 650;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.add-sketch-meta {
+  color: var(--mute);
+  font-size: 12px;
+}
+
+/* The new one: a skeleton of an item, dashed where the others are filled in. */
+.add-sketch-new {
+  margin-top: 4px;
+  border: 1px dashed var(--line-2);
+  color: var(--ink-2);
+}
+
+.add-sketch-new:hover {
+  border-color: var(--faint);
+  color: var(--ink);
+}
+
+.add-sketch-new.naming {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 8px;
+  border-color: var(--faint);
+}
+
+.add-sketch-new.naming:hover {
+  background: none;
+}
+
+.add-sketch-new.naming input {
+  flex: 1;
+  min-width: 0;
+}
+
+/* A search that found nothing: make one by that name. */
+.add-sketch-none {
+  display: grid;
+  justify-items: center;
+  gap: 10px;
+  margin-bottom: 6px;
+  padding: 26px 16px 20px;
+  border: 1px dashed var(--line-2);
+  border-radius: 12px;
+  text-align: center;
+}
+
+.add-sketch-none .muted {
+  font-size: 12px;
+}
+
+.add-sketch-quiet {
+  padding: 18px 2px;
+  font-size: 12.5px;
+}
+
+.add-sketch .error-text {
+  margin: 0 0 6px;
 }
 
 /* One shader, in the panel in place of the selection (ShaderPanel.tsx). */
@@ -1290,7 +1558,9 @@ button.layer-chevron:hover {
 /* What it shows, lined up with its name, the rail running on down beside it. */
 .layer-details {
   margin: 2px 14px 16px 64px;
-}/* In a chevron's place, on a shader with nothing to show: the row ends here. */
+}
+
+/* In a chevron's place, on a shader with nothing to show: the row ends here. */
 .layer-end::before {
   content: "";
   width: 3px;

@@ -206,6 +206,53 @@ describe("apply", () => {
   });
 });
 
+describe("adding a sketch", () => {
+  const aurora = () => drafts.add({ sketchId: "s1", sketchName: "Aurora", home: [1, 2], mask: [64] });
+  const built = { id: "b1", commit: "abc1234def", state: "built" as const, error: null };
+
+  it("goes on top, the latest topmost, each counted once", () => {
+    const first = aurora();
+    const second = drafts.add({ sketchId: "s2", sketchName: "Rain", home: [1], mask: [2, 64] });
+    expect(keys()).toEqual([second, first, "#12", "#11"]);
+    expect(pendingCount(live, currentDraft())).toBe(2);
+    const [top] = layersOf(live, currentDraft());
+    expect(top).toMatchObject({ name: "Rain", mask: [2, 64], script: "", adding: { sketchId: "s2" } });
+    expect(reachOf(top!)).toEqual([1]);
+  });
+
+  it("is previewed once it's built, with its script", () => {
+    const key = aurora();
+    drafts.built(key, { ...built, state: "building" });
+    expect(layersOf(live, currentDraft())[0]!.script).toBe("");
+    drafts.built(key, built, "function update() {}");
+    expect(layersOf(live, currentDraft())[0]).toMatchObject({ script: "function update() {}", node: { sketch: { commit: "abc1234def" } } });
+  });
+
+  it("isn't counted as a reorder, and isn't added after all once let go", () => {
+    const key = aurora();
+    drafts.reorder(keys());
+    expect(pendingCount(live, currentDraft())).toBe(1);
+    drafts.unadd(key);
+    expect(keys()).toEqual(["#12", "#11"]);
+    expect(pendingCount(live, currentDraft())).toBe(0);
+  });
+
+  it("goes in on its home, at the commit previewed, or main's latest if it wasn't built yet", async () => {
+    drafts.built(aurora(), built, "function update() {}");
+    drafts.add({ sketchId: "s2", sketchName: "Rain", home: [1], mask: [2, 64] });
+    await applyDraft(live);
+    expect(calls).toEqual(['POST /api/instances {"sketch":"s1","commit":"abc1234def","home":[1,2]}', 'POST /api/instances {"sketch":"s2","home":[1]}']);
+    expect(currentDraft()).toBe(EMPTY);
+  });
+
+  it("stays pending if it couldn't go in", async () => {
+    aurora();
+    failOn = "POST /api/instances";
+    await expect(applyDraft(live)).rejects.toThrow("arclamp said no");
+    expect(currentDraft().added).toMatchObject([{ sketchId: "s1" }]);
+  });
+});
+
 describe("switching a shader on and off", () => {
   const ALL = [1, 2, 3, 4, 5, 6];
   const instance = { id: "i", sketchId: "s", sketchName: "Wave", commit: "c", buildId: "b", home: [1, 2, 3], shaderId: 9, state: "live", error: null, next: null, by: { id: "u", name: "U" }, at: 0 } as const;

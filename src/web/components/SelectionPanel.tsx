@@ -36,7 +36,7 @@ import { baseType, isBinary, isOn, lemtoneOf, requestedOf } from "../../shared/f
 import { colorName, lemtoneCode, lumensText } from "../../shared/lemtone.ts";
 import { tagLabel } from "../../shared/tags.ts";
 import type { Instance, SceneNode } from "../../shared/vibes.ts";
-import { useLights } from "../api.ts";
+import { useLights, useStatus } from "../api.ts";
 import {
   drafts,
   layerOf,
@@ -48,18 +48,20 @@ import {
   switchState,
   templateOf,
   useDraft,
+  type Adding,
   type Layer,
   type LayerKey,
   type SwitchState,
 } from "../draft.ts";
-import { ChevronUpIcon, CloseIcon, GripIcon, OpenIcon } from "../icons.tsx";
+import { ChevronUpIcon, CloseIcon, GripIcon, OpenIcon, PlusIcon } from "../icons.tsx";
 import { useFrames } from "../live.ts";
 import { useNarrow } from "../narrow.ts";
 import { usePendingInstances, useScene } from "../scene.ts";
 import { listOf, ordinal } from "../words.ts";
+import { AddSketch } from "./AddSketch.tsx";
 import { Reveal } from "./Reveal.tsx";
 import { RoomToneEditor } from "./RoomToneEditor.tsx";
-import { ComingBody, ComingTitle, ShaderBody, ShaderTitle } from "./ShaderPanel.tsx";
+import { AddingBody, AddingTitle, ComingBody, ComingTitle, ShaderBody, ShaderTitle } from "./ShaderPanel.tsx";
 
 const NO_NODES: SceneNode[] = [];
 
@@ -112,19 +114,28 @@ export function SelectionPanel({ floor, here, selected, shader, onShader, onClos
   const ids = chosen.map((l) => l.id);
   const all = (lights.data?.lights ?? []).map((l) => l.id);
   const stack = layersOf(live, draft);
-  const rows: Row[] = [...stack]
-    .reverse()
-    .filter((layer) => reachOf(layer).some((id) => selected.has(id)))
-    .map((layer) => ({ layer, state: switchState(layer, ids) }));
+  const onThese = [...stack].reverse().filter((layer) => reachOf(layer).some((id) => selected.has(id)));
+  const rows: Row[] = onThese.filter((layer) => !layer.adding).map((layer) => ({ layer, state: switchState(layer, ids) }));
   const coming = pending.filter((i) => i.home.some((id) => selected.has(id)));
+  // Sketches you're adding (pending edits), on top.
+  const adding = onThese.flatMap((layer) => (layer.adding ? [layer.adding] : []));
 
   // The layer whose parameters are open under it, one at a time: room tone's, to start with.
   const [opened, setOpened] = useState<string | null>("roomtone");
+  // Picking a sketch to add to these lights.
+  const [picking, setPicking] = useState(false);
+  const status = useStatus();
+  const add = (sketch: { id: string; name: string }) => {
+    setPicking(false);
+    const home = new Set(ids);
+    drafts.add({ sketchId: sketch.id, sketchName: sketch.name, home: ids, mask: all.filter((id) => !home.has(id)) });
+  };
 
-  // The shader open in place of the selection: one in the room, or one on its way in.
+  // The shader open in place of the selection: one in the room, one on its way in, or one you're adding.
   const openLayer = shader?.startsWith("#") ? layerOf(live, draft, shader) : null;
   const openComing = shader?.startsWith("i:") ? (pending.find((i) => `i:${i.id}` === shader) ?? null) : null;
-  const open = openLayer !== null || openComing !== null;
+  const openAdding = shader?.startsWith("+") ? (draft.added.find((a) => a.key === shader) ?? null) : null;
+  const open = openLayer !== null || openComing !== null || openAdding !== null;
 
   /** A shader switched off for these lights, or on: pending edits, like a mute. */
   const setOn = (row: Row, on: boolean) => drafts.patchShader(row.layer.key, switchFor(row.layer, ids, on, all));
@@ -272,6 +283,8 @@ export function SelectionPanel({ floor, here, selected, shader, onShader, onClos
           <ShaderTitle layer={openLayer} onBack={() => onShader(null)} />
         ) : openComing ? (
           <ComingTitle instance={openComing} onBack={() => onShader(null)} />
+        ) : openAdding ? (
+          <AddingTitle adding={openAdding} onBack={() => onShader(null)} />
         ) : (
           <div className="selection-title">
             <h2>{title}</h2>
@@ -294,6 +307,8 @@ export function SelectionPanel({ floor, here, selected, shader, onShader, onClos
           />
         ) : openComing ? (
           <ComingBody instance={openComing} lights={lights.data?.lights ?? []} />
+        ) : openAdding ? (
+          <AddingBody adding={openAdding} lights={lights.data?.lights ?? []} onGone={() => onShader(null)} />
         ) : (
           <>
             <section className="selection-section">
@@ -332,14 +347,30 @@ export function SelectionPanel({ floor, here, selected, shader, onShader, onClos
                         onToggle={() => setOpened(opened === row.layer.key ? null : row.layer.key)}
                       />
                     ))}
-                    {/* On their way in, on top. */}
+                    {/* On their way in, on top; then the ones you're adding. */}
                     {coming.map((instance) => (
                       <ComingRow key={instance.id} instance={instance} onOpen={() => onShader(`i:${instance.id}`)} />
                     ))}
+                    {adding.map((a) => (
+                      <AddingRow key={a.key} adding={a} onOpen={() => onShader(a.key)} />
+                    ))}
+                    {/* And, last, room for another (while sketches are on). */}
+                    {status.data?.sketches && (
+                      <li className="layer add-row">
+                        <button className="add-row-button" onClick={() => setPicking(true)}>
+                          <span className="layer-grip" aria-hidden="true" />
+                          <span className="layer-node" aria-hidden="true">
+                            <PlusIcon />
+                          </span>
+                          <span className="layer-name">Add sketch</span>
+                        </button>
+                      </li>
+                    )}
                   </ol>
                 </SortableContext>
               </DndContext>
             </section>
+            <AddSketch open={picking} lights={n} onPick={add} onClose={() => setPicking(false)} />
           </>
         )}
       </div>
@@ -507,6 +538,36 @@ function ComingRow({ instance, onOpen }: { instance: Instance; onOpen: () => voi
       <button className="icon-button layer-open" aria-label={`Open ${name}`} title={`Open ${name}`} onClick={onOpen}>
         <OpenIcon />
       </button>
+      <RowEnd />
+    </li>
+  );
+}
+
+/** A row's end with no switch yet: room for one, then the quiet dot. */
+const RowEnd = () => (
+  <>
+    <span className="layer-no-switch" aria-hidden="true" />
+    <span className="layer-chevron layer-end" aria-hidden="true" />
+  </>
+);
+
+/** A sketch you're adding to these lights (a pending edit): building on the server, built (and previewed), or why it couldn't. */
+function AddingRow({ adding, onOpen }: { adding: Adding; onOpen: () => void }) {
+  const build = adding.build;
+  const meta =
+    build?.state === "failed" ? "couldn't build" : build?.state === "built" ? `${build.commit.slice(0, 7)} · new here` : "building main…";
+  return (
+    <li className={build?.state === "built" ? "layer coming adding built" : "layer coming adding"}>
+      <span className="layer-grip" aria-hidden="true" />
+      <span className="layer-node" aria-hidden="true" />
+      <span className="layer-text">
+        <span className="layer-name">{adding.sketchName}</span>
+        <span className={build?.state === "failed" ? "layer-meta bad" : "layer-meta"}>{meta}</span>
+      </span>
+      <button className="icon-button layer-open" aria-label={`Open ${adding.sketchName}`} title={`Open ${adding.sketchName}`} onClick={onOpen}>
+        <OpenIcon />
+      </button>
+      <RowEnd />
     </li>
   );
 }

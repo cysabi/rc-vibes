@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Rail } from "../shared/arclamp.ts";
 import type { SceneNode } from "../shared/vibes.ts";
+import { useAddingBuilds } from "./adding.ts";
 import { useLights, useMe } from "./api.ts";
 import { usePendingInstances, useScene } from "./scene.ts";
 import { applyDraft, layerOf, layersOf, pendingCount, reachOf, templateOf, useDraft, type LayerKey } from "./draft.ts";
@@ -75,9 +76,12 @@ function Shell() {
   const previewing = pending > 0 && (!liveMode || liveError !== null);
   const simulated = previewing || peeking;
   const simInputs = useMemo(() => {
-    const layers = layersOf(live, draft);
+    // A sketch being added is previewed once it's built (its script here).
+    const layers = layersOf(live, draft).filter((l) => !l.adding || l.script !== "");
     return { lights: all, layers: peeking ? layers.map((l) => ({ ...l, muted: true })) : layers, template: templateOf(live, draft) };
   }, [all, live, draft, peeking]);
+  // Their builds, asked for and watched.
+  useAddingBuilds();
   useSimulation(simulated, simInputs);
   useEffect(() => {
     document.documentElement.toggleAttribute("data-simulated", simulated);
@@ -94,14 +98,16 @@ function Shell() {
   }, [here, selected]);
 
   // A shader opened from the selection panel, in its place: one in the room
-  // ("#12"), or one on its way in ("i:" and its instance's id). The map rings
-  // where it's on (of its home, or where its code's lit) instead of the
-  // selection, which is kept, to go back to. Anything selected on the map
-  // goes back to selecting lights. Gone (taken out, by you or anyone), it closes.
+  // ("#12"), one on its way in ("i:" and its instance's id), or one you're
+  // adding ("+…"). The map rings where it's on (of its home, or where its
+  // code's lit) instead of the selection, which is kept, to go back to.
+  // Anything selected on the map goes back to selecting lights. Gone (taken
+  // out, by you or anyone), it closes.
   const [shader, setShader] = useState<LayerKey | null>(null);
   const pendingInstances = usePendingInstances();
   const openLayer = shader?.startsWith("#") && selectedHere.size > 0 ? layerOf(live, draft, shader) : null;
   const openComing = shader?.startsWith("i:") && selectedHere.size > 0 ? (pendingInstances.find((i) => `i:${i.id}` === shader) ?? null) : null;
+  const openAdding = shader?.startsWith("+") && selectedHere.size > 0 ? (draft.added.find((a) => a.key === shader) ?? null) : null;
   const reach = useMemo(() => {
     let on: Set<number> | null = null;
     if (openLayer) {
@@ -109,9 +115,11 @@ function Shell() {
       on = new Set(reachOf(openLayer).filter((id) => !masked.has(id)));
     } else if (openComing) {
       on = new Set(openComing.home);
+    } else if (openAdding) {
+      on = new Set(openAdding.home);
     }
     return on && new Set(here.filter((l) => on.has(l.id)).map((l) => l.id));
-  }, [openLayer, openComing, here]);
+  }, [openLayer, openComing, openAdding, here]);
 
   const showFloor = (id: number) => {
     setFloor(id);
@@ -144,7 +152,7 @@ function Shell() {
   );
 
   // With a shader open, picking on the map starts a new selection.
-  const open = openLayer !== null || openComing !== null;
+  const open = openLayer !== null || openComing !== null || openAdding !== null;
   const selectOnMap = useCallback((ids: number[], mode: SelectMode) => select(ids, open ? "replace" : mode), [select, open]);
 
   // Escape goes back from a shader to the selection, then lets go of it.

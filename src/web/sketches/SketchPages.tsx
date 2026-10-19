@@ -21,6 +21,7 @@ import { Brand } from "../components/Brand.tsx";
 import { UserMenu } from "../components/UserMenu.tsx";
 import { ChevronUpIcon, PlusIcon, TrashIcon } from "../icons.tsx";
 import { navigate, useQueryParam } from "../route.ts";
+import { ago } from "../words.ts";
 import "./sketches.css";
 
 /** A link that moves within the app rather than loading the page again. */
@@ -334,24 +335,6 @@ function Notice({ children, starting }: { children: ReactNode; starting?: boolea
       <p>{children}</p>
     </div>
   );
-}
-
-/** How long ago, roughly: "just now", "5 minutes ago", "yesterday", "3 weeks ago". */
-function ago(ms: number): string {
-  const s = Math.max(0, (Date.now() - ms) / 1000);
-  const units: [number, string][] = [
-    [60 * 60 * 24 * 365, "year"],
-    [60 * 60 * 24 * 30, "month"],
-    [60 * 60 * 24 * 7, "week"],
-    [60 * 60 * 24, "day"],
-    [60 * 60, "hour"],
-    [60, "minute"],
-  ];
-  for (const [size, unit] of units) {
-    const n = Math.floor(s / size);
-    if (n >= 1) return unit === "day" && n === 1 ? "yesterday" : `${n} ${unit}${n === 1 ? "" : "s"} ago`;
-  }
-  return "just now";
 }
 
 const CodeIcon = () => (
