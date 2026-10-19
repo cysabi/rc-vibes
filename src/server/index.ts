@@ -15,7 +15,7 @@ const arclamp = createArclamp(config.arclamp.baseUrl, config.arclamp.key);
 const db = openDb(config.databasePath);
 const relay = createStreamRelay(arclamp.streamUrl(), arclamp.key);
 
-const origins = [config.publicUrl.origin];
+const origins = config.publicUrls.map((u) => u.origin);
 if (!config.production) origins.push("http://localhost:5173", "http://127.0.0.1:5173");
 
 const app = new Hono();

@@ -40,8 +40,8 @@ lighting system at the Recurse Center, served at `vibes.recurse.com`.
 | `ARCLAMP_BASE_URL` | yes | e.g. `http://127.0.0.1:8080` |
 | `ARCLAMP_KEY` | yes | arclamp service token for vibes |
 | `SESSION_SECRET` | yes | ≥ 32 chars; signs login cookies |
-| `PUBLIC_URL` | prod | where people reach vibes, e.g. `https://vibes.recurse.com` |
-| `RC_CLIENT_ID`, `RC_CLIENT_SECRET` | prod | RC OAuth app; callback is `$PUBLIC_URL/auth/callback` |
+| `PUBLIC_URL` | prod | where people reach vibes, comma-separated, main one first, e.g. `https://vibes.hall.ly,https://vibes.recurse.com` |
+| `RC_CLIENT_ID`, `RC_CLIENT_SECRET` | prod | RC OAuth app; each address's callback is `<address>/auth/callback` |
 | `VIBES_DEV_LOGIN` | no | `1` allows logging in as any name; refused when `NODE_ENV=production` |
 | `DATABASE_PATH` | no | SQLite file, default `vibes.db` |
 | `PORT` | no | default `8787` |
@@ -184,8 +184,9 @@ lights where they are, as free lights. vibes keeps its rail changes in the
    pannable and zoomable map with a scale bar and grid, panels at real size,
    moving and turning lights with undo, rails to hang lights on, and a
    `lights.json` export.
-6. **RC OAuth and deploy.** vibes runs on kokuzo's k3s at `vibes.hall.ly`.
-   Each push to `main` runs `.github/workflows/deploy.yaml`: typecheck and
+6. **RC OAuth and deploy.** vibes runs on kokuzo's k3s at `vibes.hall.ly`,
+   and at `vibes.recurse.com`, RC's proxy in front of it. Each address logs
+   in on its own, so both are registered callbacks in the RC OAuth app. Each push to `main` runs `.github/workflows/deploy.yaml`: typecheck and
    tests, then the flake's image (`kokuzo.tailc38f.ts.net/vibes:<sha>`) is
    pushed and `.kube/version.yaml` pinned to it on the `cd` branch, which
    Argo CD (`deploy/argocd-application.yaml`) syncs. Secrets live in the
@@ -232,6 +233,3 @@ production's channel; every bulb in range follows it.
 
 - RC OAuth endpoints: `https://www.recurse.com/oauth/authorize`,
   `/oauth/token`, and `/api/v1/profiles/me` for the profile.
-- Whether `vibes.recurse.com` can be a DNS record (CNAME) pointing at the vibes
-  host rather than an HTTP redirect; OAuth callbacks and cookies need one
-  stable domain.

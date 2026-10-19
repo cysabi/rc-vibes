@@ -26,7 +26,7 @@ function cookieOptions(config: Config, maxAgeSeconds: number) {
     path: "/",
     httpOnly: true,
     sameSite: "Lax" as const,
-    secure: config.publicUrl.protocol === "https:",
+    secure: config.publicUrls[0]!.protocol === "https:",
     maxAge: maxAgeSeconds,
   };
 }
@@ -64,28 +64,35 @@ export function requireUser(config: Config): MiddlewareHandler<AuthEnv> {
 
 export function authRoutes(config: Config) {
   const auth = new Hono();
-  const callbackUrl = new URL("/auth/callback", config.publicUrl).toString();
+  // Each of vibes' addresses logs in on its own, since cookies stay with the
+  // address that set them: RC returns to the address the login started from.
+  // The page names it, since a proxy in front (vibes.recurse.com's) may not.
+  const origins = config.publicUrls.map((u) => u.origin);
+  const callbackUrl = (origin: string) => new URL("/auth/callback", origin).toString();
 
   auth.get("/options", (c) => c.json<LoginOptions>({ rc: config.rc !== null, dev: config.devLogin }));
 
   auth.get("/login", async (c) => {
     if (!config.rc) return c.redirect("/");
+    const asked = c.req.query("origin");
+    const origin = origins.find((o) => o === asked) ?? origins[0]!;
     const state = randomBytes(16).toString("hex");
-    await setSignedCookie(c, STATE_COOKIE, state, config.sessionSecret, cookieOptions(config, 600));
+    await setSignedCookie(c, STATE_COOKIE, `${state} ${origin}`, config.sessionSecret, cookieOptions(config, 600));
     const url = new URL(RC_AUTHORIZE);
     url.searchParams.set("response_type", "code");
     url.searchParams.set("client_id", config.rc.clientId);
-    url.searchParams.set("redirect_uri", callbackUrl);
+    url.searchParams.set("redirect_uri", callbackUrl(origin));
     url.searchParams.set("state", state);
     return c.redirect(url.toString());
   });
 
   auth.get("/callback", async (c) => {
     if (!config.rc) return c.redirect("/");
-    const expected = await getSignedCookie(c, config.sessionSecret, STATE_COOKIE);
+    const saved = await getSignedCookie(c, config.sessionSecret, STATE_COOKIE);
     deleteCookie(c, STATE_COOKIE, { path: "/" });
+    const [expected, origin] = saved ? saved.split(" ") : [];
     const code = c.req.query("code");
-    if (!expected || !code || c.req.query("state") !== expected) {
+    if (!expected || !origin || !code || c.req.query("state") !== expected) {
       return c.text("Login failed: the request didn't match. Try logging in again.", 400);
     }
 
@@ -95,7 +102,7 @@ export function authRoutes(config: Config) {
       body: new URLSearchParams({
         grant_type: "authorization_code",
         code,
-        redirect_uri: callbackUrl,
+        redirect_uri: callbackUrl(origin),
         client_id: config.rc.clientId,
         client_secret: config.rc.clientSecret,
       }),

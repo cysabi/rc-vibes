@@ -41,7 +41,7 @@ export function Login() {
         <h1 className="wordmark">vibes</h1>
         <p>The lights at the Recurse Center.</p>
         {options.data?.rc && (
-          <a className="button primary" href="/auth/login">
+          <a className="button primary" href={`/auth/login?origin=${encodeURIComponent(location.origin)}`}>
             Log in with your RC account
           </a>
         )}
