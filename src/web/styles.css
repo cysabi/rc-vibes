@@ -1270,16 +1270,20 @@ button.layer-chevron:hover {
   color: var(--ink);
 }
 
-/* Opened, what it shows goes under its row, lined up with its name. */
+/* Opened, what it shows goes under its row, lined up with its name, the
+   rail running on down beside it (as room tone's). */
 .layer.open {
   flex-wrap: wrap;
+}
+
+.layer.open .layer-node::after {
+  height: 2000px;
 }
 
 .layer-details {
   flex-basis: 100%;
   margin: 4px 0 12px 58px;
 }
-
 .layer.base {
   flex-wrap: wrap;
   padding: 0;
