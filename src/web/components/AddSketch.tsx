@@ -1,13 +1,15 @@
 // Adding a sketch to the selected lights: a dialog over everything, with
-// every sketch as a card, the latest changed first, searchable by name. The
-// last card is a new sketch, made here (named, then added: it starts as the
-// starter's wave); a search that finds nothing offers to make one by that
-// name. Picking one hands it back (onPick); the selection panel adds it as a
-// pending edit, built and previewed before it goes in.
+// every sketch as a card, the latest changed first, searchable by name.
+// Picking one hands it back (onPick); the selection panel adds it as a
+// pending edit, built and previewed before it goes in. The last card makes a
+// new sketch instead, as the library's New sketch does: named, then opened
+// in its editor, not added (it's the starter's wave until it's made into
+// something); so does a search that finds nothing, by that name.
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
 import { useCreateSketch, useSketches } from "../api.ts";
 import { CloseIcon, PlusIcon } from "../icons.tsx";
+import { navigate } from "../route.ts";
 import { ago, count } from "../words.ts";
 
 interface Props {
@@ -44,7 +46,7 @@ export function AddSketch({ open, lights, onPick, onClose }: Props) {
 
   const wanted = query.trim().toLowerCase();
   const list = [...(sketches.data ?? [])].sort((a, b) => b.updatedAt - a.updatedAt).filter((s) => s.name.toLowerCase().includes(wanted));
-  const make = (name: string) => create.mutate(name, { onSuccess: (s) => onPick({ id: s.id, name: s.name }) });
+  const make = (name: string) => create.mutate(name, { onSuccess: (s) => navigate(`/sketches/${s.id}`) });
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (naming?.trim()) make(naming.trim());
@@ -87,7 +89,7 @@ export function AddSketch({ open, lights, onPick, onClose }: Props) {
               <button className="primary" disabled={create.isPending} onClick={() => make(query.trim())}>
                 <PlusIcon /> Make “{query.trim()}”
               </button>
-              <p className="muted">It starts as a slow wave; open its code to make it yours.</p>
+              <p className="muted">It starts as a slow wave, in its editor, to make it yours. Add it here once it is.</p>
             </div>
           ) : (
             <ul className="add-sketch-grid">
