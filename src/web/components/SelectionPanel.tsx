@@ -306,7 +306,7 @@ export function SelectionPanel({ floor, here, selected, shader, onShader, onClos
             selected={ids}
           />
         ) : openComing ? (
-          <ComingBody instance={openComing} lights={lights.data?.lights ?? []} />
+          <ComingBody instance={openComing} lights={lights.data?.lights ?? []} onRetried={onShader} />
         ) : openAdding ? (
           <AddingBody adding={openAdding} lights={lights.data?.lights ?? []} onGone={() => onShader(null)} />
         ) : (

@@ -241,24 +241,32 @@ export function ComingTitle({ instance, onBack }: { instance: Instance; onBack: 
   );
 }
 
-/** One on its way in: building, or why it couldn't go in, and trying again or letting it go. */
-export function ComingBody({ instance, lights }: { instance: Instance; lights: LightInfo[] }) {
+/**
+ * One on its way in: building, or why it couldn't go in, and trying again or
+ * letting it go. Tried again, it's a new instance, which the panel goes on
+ * showing (onRetried, with its key).
+ */
+export function ComingBody({ instance, lights, onRetried }: { instance: Instance; lights: LightInfo[]; onRetried: (key: string) => void }) {
   const [busy, setBusy] = useState(false);
-  const act = async (fn: () => Promise<unknown>) => {
+  const act = async <T,>(fn: () => Promise<T>): Promise<T> => {
     setBusy(true);
     try {
-      await fn();
+      const done = await fn();
       await invalidateScene();
+      return done;
     } finally {
       setBusy(false);
     }
   };
   // Put in afresh, on the same lights, then this one let go.
-  const retry = () =>
-    act(async () => {
-      await request("POST", "/api/instances", { sketch: instance.sketchId, commit: instance.commit, home: instance.home });
+  const retry = async () => {
+    const made = await act(async () => {
+      const again = await request<Instance>("POST", "/api/instances", { sketch: instance.sketchId, commit: instance.commit, home: instance.home });
       await request("DELETE", `/api/instances/${instance.id}`);
+      return again;
     });
+    onRetried(`i:${made.id}`);
+  };
   return (
     <div className="shader-body">
       {instance.state === "failed" ? (
