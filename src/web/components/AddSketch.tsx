@@ -1,6 +1,6 @@
 // Adding a sketch to the selected lights: a dialog over everything, with
-// every sketch, the latest changed first, searchable by name. The last in the
-// list is a new sketch, made here (named, then added: it starts as the
+// every sketch as a card, the latest changed first, searchable by name. The
+// last card is a new sketch, made here (named, then added: it starts as the
 // starter's wave); a search that finds nothing offers to make one by that
 // name. Picking one hands it back (onPick); the selection panel adds it as a
 // pending edit, built and previewed before it goes in.
@@ -75,54 +75,58 @@ export function AddSketch({ open, lights, onPick, onClose }: Props) {
         </header>
         <input ref={search} className="add-sketch-search" type="search" placeholder="Search sketches" value={query} onChange={(e) => setQuery(e.target.value)} />
 
-        {sketches.isPending ? (
-          <p className="add-sketch-quiet muted">Getting the sketches…</p>
-        ) : list.length === 0 && wanted ? (
-          // Nothing by that name: make it.
-          <div className="add-sketch-none">
-            <p>
-              No sketch called <b>“{query.trim()}”</b> yet.
-            </p>
-            <button className="primary" disabled={create.isPending} onClick={() => make(query.trim())}>
-              <PlusIcon /> Make “{query.trim()}”
-            </button>
-            <p className="muted">It starts as a slow wave; open its code to make it yours.</p>
-          </div>
-        ) : (
-          <ul className="add-sketch-list">
-            {list.map((s) => (
-              <li key={s.id}>
-                <button className="add-sketch-item" onClick={() => onPick({ id: s.id, name: s.name })}>
-                  <span className="add-sketch-name">{s.name}</span>
-                  <span className="add-sketch-meta">
-                    changed {ago(s.updatedAt)} by {s.updatedBy}
-                  </span>
-                </button>
+        <div className="add-sketch-scroll">
+          {sketches.isPending ? (
+            <p className="add-sketch-quiet muted">Getting the sketches…</p>
+          ) : list.length === 0 && wanted ? (
+            // Nothing by that name: make it.
+            <div className="add-sketch-none">
+              <p>
+                No sketch called <b>“{query.trim()}”</b> yet.
+              </p>
+              <button className="primary" disabled={create.isPending} onClick={() => make(query.trim())}>
+                <PlusIcon /> Make “{query.trim()}”
+              </button>
+              <p className="muted">It starts as a slow wave; open its code to make it yours.</p>
+            </div>
+          ) : (
+            <ul className="add-sketch-grid">
+              {list.map((s) => (
+                <li key={s.id}>
+                  <button className="add-sketch-item" onClick={() => onPick({ id: s.id, name: s.name })}>
+                    <span className="add-sketch-name">{s.name}</span>
+                    <span className="add-sketch-meta">by {s.createdBy.name}</span>
+                    <span className="add-sketch-meta">
+                      changed {ago(s.updatedAt)} by {s.updatedBy}
+                    </span>
+                  </button>
+                </li>
+              ))}
+              {/* A new one, last: a skeleton of a card, named here. */}
+              <li>
+                {naming === null ? (
+                  <button className="add-sketch-item add-sketch-new" onClick={() => setNaming(query.trim())}>
+                    <PlusIcon />
+                    <span className="add-sketch-name">New sketch</span>
+                    <span className="add-sketch-meta">A slow wave to start from</span>
+                  </button>
+                ) : (
+                  <form className="add-sketch-item add-sketch-new naming" onSubmit={submit}>
+                    <input autoFocus placeholder="Its name" value={naming} maxLength={80} onChange={(e) => setNaming(e.target.value)} />
+                    <div className="add-sketch-naming-actions">
+                      <button className="quiet" type="button" onClick={() => setNaming(null)}>
+                        Cancel
+                      </button>
+                      <button className="primary" type="submit" disabled={!naming.trim() || create.isPending}>
+                        Make it
+                      </button>
+                    </div>
+                  </form>
+                )}
               </li>
-            ))}
-            {/* A new one, last: a skeleton of an item, named here. */}
-            <li>
-              {naming === null ? (
-                <button className="add-sketch-item add-sketch-new" onClick={() => setNaming(query.trim())}>
-                  <span className="add-sketch-name">
-                    <PlusIcon /> New sketch
-                  </span>
-                  <span className="add-sketch-meta">A slow wave to start from</span>
-                </button>
-              ) : (
-                <form className="add-sketch-item add-sketch-new naming" onSubmit={submit}>
-                  <input autoFocus placeholder="Its name" value={naming} maxLength={80} onChange={(e) => setNaming(e.target.value)} />
-                  <button className="primary" type="submit" disabled={!naming.trim() || create.isPending}>
-                    Make it
-                  </button>
-                  <button className="quiet" type="button" onClick={() => setNaming(null)}>
-                    Cancel
-                  </button>
-                </form>
-              )}
-            </li>
-          </ul>
-        )}
+            </ul>
+          )}
+        </div>
         {create.isError && <p className="error-text">{create.error.message}</p>}
       </div>
     </dialog>

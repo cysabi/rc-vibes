@@ -1194,15 +1194,14 @@ kbd {
   background: repeating-linear-gradient(to bottom, var(--line-2) 0 3px, transparent 3px 6px);
 }
 
-/* Adding a sketch (AddSketch.tsx): a card over everything, the map dimmed
-   behind it. Its list scrolls; the rest stays put. Hung from near the top,
-   not centered, so it doesn't jump as a search shortens the list. */
+/* Adding a sketch (AddSketch.tsx): a big card in the middle of everything,
+   the map dimmed behind it, the sketches a grid of cards in it that scrolls
+   while the rest stays put. Its height is set, not its content's, so it
+   doesn't jump as a search thins the grid. */
 .add-sketch {
-  --hang: min(12vh, 96px);
-  width: min(440px, calc(100vw - 32px));
+  width: min(820px, calc(100vw - 32px));
   max-width: none;
   max-height: none;
-  margin: var(--hang) auto auto;
   padding: 0;
   overflow: visible;
   border: 0;
@@ -1211,15 +1210,15 @@ kbd {
 }
 
 .add-sketch::backdrop {
-  background: rgb(0 0 0 / 0.45);
+  background: rgb(0 0 0 / 0.5);
 }
 
 .add-sketch-card {
   display: flex;
   flex-direction: column;
-  gap: 12px;
-  max-height: min(620px, calc(100dvh - var(--hang) - 24px));
-  padding: 16px 16px 10px;
+  gap: 14px;
+  height: min(640px, calc(100dvh - 48px));
+  padding: 20px 20px 0;
   border-radius: var(--radius);
   background: var(--glass-strong);
   -webkit-backdrop-filter: var(--blur);
@@ -1265,8 +1264,9 @@ kbd {
 }
 
 .add-sketch-head h2 {
-  font-size: 16px;
-  font-weight: 650;
+  font-size: 18px;
+  font-weight: 700;
+  font-variation-settings: "CASL" 1;
 }
 
 .add-sketch-head p {
@@ -1282,41 +1282,58 @@ kbd {
   width: 100%;
 }
 
-.add-sketch-list {
-  display: grid;
-  align-content: start;
-  gap: 2px;
+/* All that scrolls: the grid, or the offer to make one. Its padding keeps a
+   lifted card's shadow from being cut off at its edges. */
+.add-sketch-scroll {
+  flex: 1;
   min-height: 0;
-  margin: 0 -8px;
-  padding: 0 0 6px;
+  margin: 0 -20px;
+  padding: 4px 20px 20px;
   overflow-y: auto;
-  list-style: none;
   scrollbar-width: thin;
   scrollbar-color: var(--line-2) transparent;
 }
 
-.add-sketch-item {
+/* Like the library's cards (sketches.css), a little smaller. */
+.add-sketch-grid {
   display: grid;
+  grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
+  gap: 12px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.add-sketch-item {
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
   width: 100%;
-  padding: 8px 10px;
-  border-radius: 10px;
+  height: 100%;
+  min-height: 104px;
+  padding: 14px 16px 16px;
+  border-radius: 14px;
+  background: var(--solid);
+  box-shadow: inset 0 0 0 1px var(--line);
   text-align: left;
-  transition: background 0.15s;
+  transition:
+    transform 0.2s var(--ease-out),
+    box-shadow 0.2s;
 }
 
 .add-sketch-item:hover {
-  background: var(--fill-2);
+  transform: translateY(-2px);
+  box-shadow:
+    inset 0 0 0 1px var(--line-2),
+    var(--float);
 }
 
 .add-sketch-name {
-  display: inline-flex;
-  align-items: center;
-  gap: 6px;
-  overflow: hidden;
-  font-size: 13.5px;
-  font-weight: 650;
-  text-overflow: ellipsis;
-  white-space: nowrap;
+  margin-bottom: 4px;
+  font-size: 15px;
+  font-weight: 700;
+  font-variation-settings: "CASL" 1;
+  overflow-wrap: anywhere;
 }
 
 .add-sketch-meta {
@@ -1324,44 +1341,63 @@ kbd {
   font-size: 12px;
 }
 
-/* The new one: a skeleton of an item, dashed where the others are filled in. */
+/* The new one: a skeleton of a card, dashed where the others are filled in. */
 .add-sketch-new {
-  margin-top: 4px;
-  border: 1px dashed var(--line-2);
+  align-items: center;
+  justify-content: center;
+  background: none;
+  box-shadow: none;
+  outline: 1px dashed var(--line-2);
+  outline-offset: -1px;
   color: var(--ink-2);
+  text-align: center;
+}
+
+.add-sketch-new svg {
+  margin-bottom: 4px;
+}
+
+.add-sketch-new .add-sketch-name {
+  margin-bottom: 0;
 }
 
 .add-sketch-new:hover {
-  border-color: var(--faint);
+  transform: none;
+  box-shadow: none;
+  outline-color: var(--faint);
   color: var(--ink);
 }
 
 .add-sketch-new.naming {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  padding: 8px;
-  border-color: var(--faint);
-}
-
-.add-sketch-new.naming:hover {
-  background: none;
+  justify-content: space-between;
+  gap: 10px;
+  padding: 12px;
+  outline-color: var(--faint);
+  text-align: left;
 }
 
 .add-sketch-new.naming input {
-  flex: 1;
-  min-width: 0;
+  width: 100%;
 }
 
-/* A search that found nothing: make one by that name. */
+.add-sketch-naming-actions {
+  display: flex;
+  justify-content: flex-end;
+  gap: 8px;
+  width: 100%;
+}
+
+/* A search that found nothing: make one by that name, in the middle of where the cards would be. */
 .add-sketch-none {
   display: grid;
+  place-content: center;
   justify-items: center;
   gap: 10px;
-  margin-bottom: 6px;
-  padding: 26px 16px 20px;
+  height: 100%;
+  min-height: 180px;
+  padding: 16px;
   border: 1px dashed var(--line-2);
-  border-radius: 12px;
+  border-radius: 14px;
   text-align: center;
 }
 
@@ -1375,7 +1411,7 @@ kbd {
 }
 
 .add-sketch .error-text {
-  margin: 0 0 6px;
+  margin: -6px 0 14px;
 }
 
 /* One shader, in the panel in place of the selection (ShaderPanel.tsx). */
