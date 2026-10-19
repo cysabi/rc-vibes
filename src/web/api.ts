@@ -10,7 +10,6 @@ import type {
   Me,
   Placement,
   RailChange,
-  SceneNode,
   Sketch,
   Status,
   TagChange,
@@ -78,14 +77,10 @@ export const useStatus = () =>
 export const useLights = () =>
   useQuery({ queryKey: ["lights"], queryFn: () => request<Lights>("GET", "/api/lights"), staleTime: 60_000 });
 
-// arclamp has no change notifications, so the scene is polled.
-export const useScene = () =>
-  useQuery({ queryKey: ["scene"], queryFn: () => request<SceneNode[]>("GET", "/api/scene"), refetchInterval: 1000 });
+// The scene: scene.ts (pushed by vibes, not polled).
 
 export const useHealth = () =>
   useQuery({ queryKey: ["health"], queryFn: () => request<HealthResponse>("GET", "/api/health"), refetchInterval: 2000 });
-
-export const invalidateScene = () => queryClient.invalidateQueries({ queryKey: ["scene"] });
 
 export function useDevLogin() {
   return useMutation({

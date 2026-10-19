@@ -20,10 +20,11 @@ vi.mock("./api.ts", () => ({
     if (failOn && call.startsWith(failOn)) throw new Error("arclamp said no");
     return {};
   }),
-  invalidateScene: vi.fn(async () => {}),
 }));
+vi.mock("./scene.ts", () => ({ invalidateScene: vi.fn(async () => {}) }));
 
-const { applyDraft, currentDraft, drafts, EMPTY, layerOf, layersOf, pendingCount, reorderWithin, roomtoneChanges, templateOf } = await import("./draft.ts");
+const { applyDraft, currentDraft, drafts, EMPTY, layerOf, layersOf, pendingCount, reachOf, reorderWithin, roomtoneChanges, switchEverywhere, switchFor, switchState, templateOf } =
+  await import("./draft.ts");
 
 function shader(id: number, position: number, extra: Partial<SceneNode> = {}): SceneNode {
   return {
@@ -202,5 +203,45 @@ describe("apply", () => {
     const left = currentDraft();
     expect(left.roomtone).toEqual({});
     expect(left.edits).toEqual({ "#12": { muted: true } });
+  });
+});
+
+describe("switching a shader on and off", () => {
+  const ALL = [1, 2, 3, 4, 5, 6];
+  const instance = { id: "i", sketchId: "s", sketchName: "Wave", commit: "c", buildId: "b", home: [1, 2, 3], shaderId: 9, state: "live", error: null, next: null, by: { id: "u", name: "U" }, at: 0 } as const;
+  // An instance homed on 1–3 (masked off 4–6), and a shader from elsewhere that's lit 1 and 2.
+  const homed = () => layerOf([roomtone, shader(9, 1, { instance: { ...instance, home: [1, 2, 3] }, mask: [4, 5, 6] })], EMPTY, "#9")!;
+  const other = () => layerOf([roomtone, shader(8, 1, { footprint: [1, 2] })], EMPTY, "#8")!;
+
+  it("is about its home, or with none, where it's lit", () => {
+    expect(reachOf(homed())).toEqual([1, 2, 3]);
+    expect(reachOf(other())).toEqual([1, 2]);
+  });
+
+  it("is on for lights whatever its mask outside its home", () => {
+    expect(switchState(homed(), [1, 2])).toBe("on");
+    expect(switchState(homed())).toBe("on");
+    expect(switchState({ ...homed(), mask: [1, 4, 5, 6] }, [1, 2])).toBe("mixed");
+    expect(switchState({ ...homed(), muted: true }, [1])).toBe("off");
+  });
+
+  it("switches only lights in its home", () => {
+    expect(switchFor(homed(), [1, 4], false, ALL)).toEqual({ mask: [1, 4, 5, 6] });
+    expect(switchFor({ ...homed(), mask: [1, 2, 4, 5, 6] }, [2, 6], true, ALL)).toEqual({ mask: [1, 4, 5, 6] });
+  });
+
+  it("is off, muted, once it's off on everything it's about", () => {
+    expect(switchFor(homed(), [1, 2, 3], false, ALL)).toEqual({ muted: true });
+    expect(switchFor({ ...other(), mask: [1] }, [2], false, ALL)).toEqual({ muted: true });
+  });
+
+  it("switched on while muted, is on for just these lights", () => {
+    expect(switchFor({ ...homed(), muted: true }, [2], true, ALL)).toEqual({ muted: false, mask: [1, 3, 4, 5, 6] });
+  });
+
+  it("on everywhere is all of its home", () => {
+    expect(switchEverywhere({ ...homed(), muted: true, mask: [1, 4, 5, 6] }, true, ALL)).toEqual({ muted: false, mask: [4, 5, 6] });
+    expect(switchEverywhere(other(), true, ALL)).toEqual({ muted: false, mask: [] });
+    expect(switchEverywhere(other(), false, ALL)).toEqual({ muted: true });
   });
 });

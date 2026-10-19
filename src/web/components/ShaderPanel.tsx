@@ -1,18 +1,24 @@
 // One shader, in the selection panel in place of the selection: opened from
-// its row there (its arrow), and back to the selection with ‹. Where it's
-// from, whether it's on, what it's changing (ringed on the map meanwhile, in
-// place of the selection), where it sits in the stack, and for vibes' own
-// shaders, taking it out of the room. Muting it, switching it back on where
-// it's kept off, and taking it out are pending edits like any other.
+// its row there (its arrow), and back to the selection with ‹. Whether it's
+// on (on everywhere it can light, or off: muted or masked, it's all off),
+// anything that's become of it (failing, updating), where it's about (its
+// home, which it can move to the selection, or where its code's lit; ringed
+// on the map meanwhile), where it sits in the stack, its code, updating it
+// to its sketch's latest commit, and, for vibes' own, taking it out. On, off
+// and taking it out are pending edits like any other; moving home and
+// updating happen at once. One on its way in (an instance building, or that
+// couldn't go in) has a panel of its own (ComingTitle, ComingBody).
 
 import { useState } from "react";
 import type { LightInfo } from "../../shared/arclamp.ts";
-import type { ShaderSketch } from "../../shared/vibes.ts";
-import { drafts, type Layer } from "../draft.ts";
+import { tagLabel } from "../../shared/tags.ts";
+import type { Instance, ShaderSketch } from "../../shared/vibes.ts";
+import { request, useSketch } from "../api.ts";
+import { drafts, reachOf, switchEverywhere, switchState, type Layer } from "../draft.ts";
 import { ChevronLeftIcon, OpenIcon, TrashIcon } from "../icons.tsx";
 import { navigate } from "../route.ts";
+import { invalidateScene } from "../scene.ts";
 import { useLiveMode } from "../settings.ts";
-import { reachOf } from "../sim.ts";
 import { count, listOf, ordinal } from "../words.ts";
 
 /** Its head: back to the selection, its name, and where it's from. */
@@ -20,9 +26,7 @@ export function ShaderTitle({ layer, onBack }: { layer: Layer; onBack: () => voi
   const sketch = layer.node.sketch;
   return (
     <>
-      <button className="icon-button shader-back" onClick={onBack} aria-label="Back to the selection" title="Back to the selection">
-        <ChevronLeftIcon />
-      </button>
+      <BackButton onBack={onBack} />
       <div className="selection-title">
         <h2>{layer.name}</h2>
         <p className="muted">
@@ -46,15 +50,20 @@ interface BodyProps {
   stack: Layer[];
   /** Whether the draft takes it out. */
   removing: boolean;
-  trying: ReadonlySet<number>;
-  /** Every light, for where it is. */
+  /** Every light, for where they are. */
   lights: LightInfo[];
+  /** The selection behind the panel: a home it can move to. */
+  selected: number[];
 }
 
-export function ShaderBody({ layer, stack, removing, trying, lights }: BodyProps) {
-  const { key, node, muted } = layer;
+export function ShaderBody({ layer, stack, removing, lights, selected }: BodyProps) {
+  const { key, node, instance } = layer;
   const sketch = node.sketch;
-  const reach = reachOf(layer, trying);
+  const reach = reachOf(layer);
+  const state = switchState(layer);
+  const masked = new Set(layer.mask);
+  const onFor = layer.muted ? 0 : reach.filter((id) => !masked.has(id)).length;
+  const all = lights.map((l) => l.id);
   const at = stack.findIndex((l) => l.key === key);
   return (
     <div className="shader-body">
@@ -66,48 +75,40 @@ export function ShaderBody({ layer, stack, removing, trying, lights }: BodyProps
           </button>
         </div>
       )}
-      {node.state !== "running" && (
-        <p className="shader-error">
-          {node.state === "restarting" ? "Restarting" : "Failing"}
-          {node.error ? `: ${node.error}` : ""}
-        </p>
-      )}
+      <Status layer={layer} />
       <ul className="shader-facts">
         <li>
           <span className="fact">
-            <span className="fact-name">{muted ? "Muted" : "On"}</span>
+            <span className="fact-name">{state === "on" ? "On" : state === "off" ? "Off" : "On for some of its lights"}</span>
             <span className="fact-meta">
-              {muted ? "Off everywhere" : layer.mask.length > 0 ? "Everywhere it isn't switched off" : "Everywhere"}
+              {state === "off"
+                ? "Off everywhere"
+                : state === "mixed"
+                  ? `On for ${onFor} of its ${count(reach.length, "light")}`
+                  : instance
+                    ? "On for all of its home"
+                    : "On everywhere its code lights"}
             </span>
           </span>
           <button
-            className={`switch ${muted ? "off" : "on"}`}
+            className={`switch ${state}`}
             role="switch"
-            aria-checked={!muted}
+            aria-checked={state === "on" ? true : state === "off" ? false : "mixed"}
             aria-label={`${layer.name}, everywhere`}
-            title={muted ? `Unmute ${layer.name}` : `Mute ${layer.name} everywhere`}
-            onClick={() => drafts.patchShader(key, { muted: !muted })}
+            title={state === "on" ? `Switch ${layer.name} off everywhere` : `Switch ${layer.name} on everywhere it can light`}
+            onClick={() => drafts.patchShader(key, switchEverywhere(layer, state !== "on", all))}
           >
             <span className="switch-knob" />
           </button>
         </li>
-        <li>
-          <span className="fact">
-            <span className="fact-name">
-              {reach.length === 0 ? "Not changing any lights" : `${muted ? "Would change" : "Changing"} ${count(reach.length, "light")}`}
-            </span>
-            <span className="fact-meta">{reach.length === 0 ? "Nothing it's put out lately differs from what's under it" : placesOf(reach, lights)}</span>
-          </span>
-        </li>
-        {layer.mask.length > 0 && (
+        {instance ? (
+          <Home instance={instance} lights={lights} selected={selected} />
+        ) : (
           <li>
             <span className="fact">
-              <span className="fact-name">Switched off on {count(layer.mask.length, "light")}</span>
-              <span className="fact-meta">{placesOf(layer.mask, lights)}</span>
+              <span className="fact-name">{reach.length === 0 ? "Hasn't lit anything yet" : `Lights ${count(reach.length, "light")}`}</span>
+              <span className="fact-meta">{reach.length === 0 ? "Where its code lights shows here once it has" : `${placesOf(reach, lights)}, where its code has lit`}</span>
             </span>
-            <button className="quiet" onClick={() => drafts.patchShader(key, { mask: [] })} title={`Switch ${layer.name} back on everywhere it's switched off`}>
-              Switch on
-            </button>
           </li>
         )}
         {at >= 0 && (
@@ -124,14 +125,190 @@ export function ShaderBody({ layer, stack, removing, trying, lights }: BodyProps
       </ul>
       <div className="shader-actions">
         {sketch?.name != null && <OpenCode sketch={sketch} />}
+        {instance && <Update instance={instance} />}
         {sketch ? (
           !removing && <RemoveShader layer={layer} />
         ) : (
-          <p className="muted">Made outside vibes, so only whoever made it can take it out. Mute it to keep it off.</p>
+          <p className="muted">Made outside vibes, so only whoever made it can take it out. Switch it off to keep it off.</p>
         )}
       </div>
     </div>
   );
+}
+
+/** Anything that's become of it: failing, restarting, updating, or couldn't. */
+function Status({ layer }: { layer: Layer }) {
+  const { node, instance } = layer;
+  if (node.state !== "running") {
+    return (
+      <p className="shader-error">
+        {node.state === "restarting" ? "Restarting" : "Failing"}
+        {node.error ? `: ${node.error}` : ""}
+      </p>
+    );
+  }
+  if (instance?.next?.state === "building") {
+    return <p className="shader-status">Updating to {instance.next.commit.slice(0, 7)}: building it, while this one keeps running.</p>;
+  }
+  if (instance?.next?.state === "failed") return <Failure what={`Couldn't update to ${instance.next.commit.slice(0, 7)}`} error={instance.next.error} />;
+  if (instance?.error) return <Failure what={capitalized(instance.error)} error={null} />;
+  return null;
+}
+
+/**
+ * Something that went wrong: what, and why: the first line of the error, with
+ * the rest (a compiler's picture of the line it choked on, say) below it as
+ * it was written, scrolling if it's long.
+ */
+function Failure({ what, error }: { what: string; error: string | null }) {
+  const [first, ...rest] = (error ?? "").trim().split("\n");
+  const more = rest.join("\n").trim();
+  return (
+    <div className="shader-failure">
+      <p className="shader-error">
+        {what}
+        {first ? `: ${first}` : ""}
+      </p>
+      {more && <pre className="shader-log">{more}</pre>}
+    </div>
+  );
+}
+
+/** An instance's home, and moving it to the selection. */
+function Home({ instance, lights, selected }: { instance: Instance; lights: LightInfo[]; selected: number[] }) {
+  const [moving, setMoving] = useState(false);
+  const same = selected.length === instance.home.length && selected.every((id) => instance.home.includes(id));
+  const move = async () => {
+    setMoving(true);
+    try {
+      await request("PUT", `/api/instances/${instance.id}/home`, { home: selected });
+      await invalidateScene();
+    } finally {
+      setMoving(false);
+    }
+  };
+  return (
+    <li>
+      <span className="fact">
+        <span className="fact-name">Home: {homeName(instance.home, lights)}</span>
+        <span className="fact-meta">The lights it was put on, and all it can light</span>
+      </span>
+      {!same && selected.length > 0 && (
+        <button className="quiet" disabled={moving} onClick={() => void move()} title={`Make its home the ${count(selected.length, "selected light")}`}>
+          Move here
+        </button>
+      )}
+    </li>
+  );
+}
+
+/** Its sketch's latest commit, when that's not what it runs: built, then swapped in. */
+function Update({ instance }: { instance: Instance }) {
+  const sketch = useSketch(instance.sketchId);
+  const [asked, setAsked] = useState(false);
+  const head = sketch.data?.head;
+  if (!head || head === instance.commit || instance.next?.state === "building") return null;
+  const update = async () => {
+    setAsked(true);
+    try {
+      await request("POST", `/api/instances/${instance.id}/update`, {});
+      await invalidateScene();
+    } finally {
+      setAsked(false);
+    }
+  };
+  return (
+    <button className="quiet shader-action" disabled={asked} onClick={() => void update()} title={`Build ${head.slice(0, 7)}, main's latest, and swap it in`}>
+      Update to {head.slice(0, 7)}
+    </button>
+  );
+}
+
+/** The head of one on its way in: back to the selection, its sketch's name, and its commit. */
+export function ComingTitle({ instance, onBack }: { instance: Instance; onBack: () => void }) {
+  return (
+    <>
+      <BackButton onBack={onBack} />
+      <div className="selection-title">
+        <h2>{instance.sketchName ?? "Unknown sketch"}</h2>
+        <p className="muted">
+          @ {instance.commit.slice(0, 7)}
+          <span className="layer-badge">{instance.state === "failed" ? "couldn't go in" : "building"}</span>
+        </p>
+      </div>
+    </>
+  );
+}
+
+/** One on its way in: building, or why it couldn't go in, and trying again or letting it go. */
+export function ComingBody({ instance, lights }: { instance: Instance; lights: LightInfo[] }) {
+  const [busy, setBusy] = useState(false);
+  const act = async (fn: () => Promise<unknown>) => {
+    setBusy(true);
+    try {
+      await fn();
+      await invalidateScene();
+    } finally {
+      setBusy(false);
+    }
+  };
+  // Put in afresh, on the same lights, then this one let go.
+  const retry = () =>
+    act(async () => {
+      await request("POST", "/api/instances", { sketch: instance.sketchId, commit: instance.commit, home: instance.home });
+      await request("DELETE", `/api/instances/${instance.id}`);
+    });
+  return (
+    <div className="shader-body">
+      {instance.state === "failed" ? (
+        <Failure what="Couldn't go in" error={instance.error} />
+      ) : (
+        <p className="shader-status">Building {instance.commit.slice(0, 7)}. It goes in on top once it's built.</p>
+      )}
+      <ul className="shader-facts">
+        <li>
+          <span className="fact">
+            <span className="fact-name">Home: {homeName(instance.home, lights)}</span>
+            <span className="fact-meta">Put in by {instance.by.name}</span>
+          </span>
+        </li>
+      </ul>
+      <div className="shader-actions">
+        <button className="quiet shader-action" onClick={() => navigate(`/sketches/${instance.sketchId}`)}>
+          <OpenIcon /> Open its sketch
+        </button>
+        {instance.state === "failed" && (
+          <button className="quiet shader-action" disabled={busy} onClick={() => void retry()}>
+            Try again
+          </button>
+        )}
+        <button className="quiet danger shader-action" disabled={busy} onClick={() => void act(() => request("DELETE", `/api/instances/${instance.id}`))}>
+          <TrashIcon /> {instance.state === "failed" ? "Let it go" : "Stop putting it in"}
+        </button>
+      </div>
+    </div>
+  );
+}
+
+function BackButton({ onBack }: { onBack: () => void }) {
+  return (
+    <button className="icon-button shader-back" onClick={onBack} aria-label="Back to the selection" title="Back to the selection">
+      <ChevronLeftIcon />
+    </button>
+  );
+}
+
+/** A home, by the tags it's exactly made of, else how many lights where: "Couches & Kitchen", "12 lights on the 4th floor". */
+function homeName(home: readonly number[], lights: LightInfo[]): string {
+  const inHome = new Set(home);
+  const byTag = new Map<string, number[]>();
+  for (const l of lights) for (const t of l.tags ?? []) byTag.set(t, [...(byTag.get(t) ?? []), l.id]);
+  const whole = [...byTag].filter(([, ids]) => ids.every((id) => inHome.has(id)));
+  const covered = new Set(whole.flatMap(([, ids]) => ids));
+  if (whole.length > 0 && home.every((id) => covered.has(id))) {
+    return listOf(whole.map(([t]) => tagLabel(t)).sort((a, b) => a.localeCompare(b)));
+  }
+  return `${count(home.length, "light")} ${placesOf(home, lights)}`;
 }
 
 /** Where some lights are: "on the 4th floor", "on the 4th & 5th floors". */
@@ -149,6 +326,8 @@ function placesOf(ids: readonly number[], lights: LightInfo[]): string {
   if (off > 0) parts.push(`${off} not on the map`);
   return parts.join(" · ");
 }
+
+const capitalized = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
 
 /** The sketch it was built from: at the commit it was built from, or, deleted, among the deleted ones in the library, to restore. */
 function OpenCode({ sketch }: { sketch: ShaderSketch }) {

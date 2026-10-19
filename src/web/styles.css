@@ -1093,21 +1093,31 @@ kbd {
   height: 26px;
 }
 
-/* The rest of the stack, folded away under its heading. */
-.others-toggle {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-  text-align: left;
+/* Beside its name: it's lighting these lights right now. */
+.layer-live {
+  display: inline-block;
+  width: 6px;
+  height: 6px;
+  margin-left: 7px;
+  border-radius: 50%;
+  /* Lit: a warm filament. */
+  background: #ffd08a;
+  box-shadow: 0 0 6px rgb(255 208 138 / 0.8);
+  vertical-align: 2px;
 }
 
-.others-count {
-  color: var(--mute);
-  font-weight: 550;
+/* On its way in (building, or couldn't go in): above the rest, off the rail. */
+.layer.coming .layer-node {
+  background: transparent;
+  box-shadow: inset 0 0 0 1.5px var(--faint);
 }
 
-.layer-chevron.open {
-  transform: none;
+.layer.coming .layer-name {
+  color: var(--ink-2);
+}
+
+.layer-meta.bad {
+  color: var(--bad);
 }
 
 /* One shader, in the panel in place of the selection (ShaderPanel.tsx). */
@@ -1149,6 +1159,33 @@ kbd {
   color: var(--bad);
   font-size: 12.5px;
   overflow-wrap: anywhere;
+}
+
+.shader-status {
+  margin: 0 18px;
+  color: var(--ink-2);
+  font-size: 12.5px;
+}
+
+.shader-failure {
+  display: grid;
+  gap: 8px;
+}
+
+/* The rest of an error, as the tool wrote it (a code frame lines up). */
+.shader-log {
+  max-height: 12em;
+  margin: 0 14px;
+  padding: 10px 12px;
+  overflow: auto;
+  border-radius: 10px;
+  background: var(--fill);
+  color: var(--ink-2);
+  font-family: var(--mono-font);
+  font-size: 11.5px;
+  line-height: 1.45;
+  white-space: pre;
+  scrollbar-width: thin;
 }
 
 /* What it's doing, a row each, between hairlines like the layers. */

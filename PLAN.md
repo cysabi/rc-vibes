@@ -349,7 +349,41 @@ ever be built from one of its commits. On while `SKETCHES=1`.
   build's stamped script), `PUT /api/shaders/<id>/build { build }` and
   `DELETE /api/shaders/<id>`, both for vibes' own shaders only (stamped). A
   build goes in only if it built, its sketch isn't deleted, and its stamp
-  checks out with vibes' key. The UI for it (and the draft) is to come.
+  checks out with vibes' key.
+- **Instances: a sketch is a class, a shader in the room an instance**
+  (`src/server/instances.ts`). An instance is put in from a selection on the
+  map, which is its *home*: `POST /api/instances { sketch, commit?, home }`.
+  It's in vibes from that moment, building its commit (or using the build
+  there is); once built it's a shader in arclamp, on top, masked off every
+  light outside its home, so its home is all it can light (its code still
+  picks which of those it does; made from the whole floor, the code decides).
+  Its home is vibes' own, kept apart from arclamp's mask, so switching lights
+  on and off never moves it (`PUT …/home` does). `POST …/update` builds main's
+  latest (or a commit) and swaps it in once built, the old one running
+  meanwhile; `DELETE /api/instances/<id>` takes it out, as does its shader
+  going any other way.
+- **What a selection lists** (`SelectionPanel.tsx`): every shader whose home
+  takes in any of its lights, or, for one with no home (made outside vibes, or
+  before instances), whose *footprint* does: every light its code has changed,
+  before its mask or mute, since its script last changed (learned from
+  arclamp's `changing`, kept in vibes' database). Plus instances on their way
+  in, homed on any of them. Rows are in stack order and never move. A shader
+  is **on**, **on for some** or **off** (muted and masked off everything are
+  one off); its switch is for these lights; a dot says it's lighting them
+  right now. Its own panel says what's become of it (building, couldn't go
+  in, failing, updating), its home (moved to the selection with a button),
+  and offers its code, an update to its sketch's latest commit, and taking it
+  out.
+- **The scene is pushed** (`src/server/scene-feed.ts`, `src/web/scene.ts`).
+  vibes looks at arclamp's scene twice a second (learning footprints as it
+  goes) and pushes it to browsers as Server-Sent Events
+  (`/api/scene/events`) whenever it's different: each shader with its
+  sketch, footprint and instance, but not its script (a hash says which;
+  the preview fetches scripts it hasn't got, `/api/scene/scripts`), and the
+  instances not in arclamp yet. Anything changed through vibes is looked at
+  again at once. A ping every 10 s lets a page tell a quiet stream from a
+  dead one and open it again (a restarting vibes, behind a proxy that keeps
+  the connection, never says).
 
 Still to come: VS Code's own defaults that only its product configuration
 sets (no AI chat; the welcome page is skipped from VS Code's address), its
@@ -365,7 +399,9 @@ sketches in the room.
 1. **Shader logs.** `console.log` from a running shader only reaches arclamp's
    server log (`internal/scene/worker.go:493`); `/v1/scene/log` from the design
    doc was never built. The editor needs this.
-2. **Change notifications**, so vibes can stop polling the scene.
+2. **Change notifications**, so vibes can stop polling the scene: proposed as
+   JCLemme/rclamp#17 (event streams for the scene, health and logs, and each
+   frame's `touched` section on the websocket).
 3. **Non-cascading revoke**, so rotating vibes' key doesn't revoke every key it
    minted.
 4. **Errors are never cleared.** A shader's `error` stays set after a later

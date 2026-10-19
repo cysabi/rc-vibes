@@ -9,8 +9,9 @@
 
 import { useSyncExternalStore } from "react";
 import type { Channels } from "../shared/arclamp.ts";
-import type { SceneNode } from "../shared/vibes.ts";
-import { invalidateScene, request } from "./api.ts";
+import type { Instance, SceneNode } from "../shared/vibes.ts";
+import { request } from "./api.ts";
+import { invalidateScene } from "./scene.ts";
 
 /** A shader in the stack: "#12" for arclamp's shader 12. */
 export type LayerKey = string;
@@ -52,6 +53,72 @@ export interface Layer {
   mask: number[];
   /** Who made it, as arclamp has it (the name of the key it was made with). */
   by: string;
+  /** The instance it is, if it was put in from a sketch in vibes: its home is all it can light. */
+  instance: Instance | null;
+  /** Where its code has lit: every light it's changed, before its mask or mute. */
+  footprint: number[];
+}
+
+/**
+ * The lights a shader is about: its instance's home, or, with none (put in
+ * some other way), where its code has lit. A selection lists the shaders it
+ * shares a light with.
+ */
+export const reachOf = (layer: Layer): readonly number[] => layer.instance?.home ?? layer.footprint;
+
+/** What's become of a shader, if anything has: failing, restarting, updating, or couldn't update. */
+export function statusOf(layer: Layer): string | null {
+  const { node, instance } = layer;
+  if (node.state === "error") return "failing";
+  if (node.state === "restarting") return "restarting";
+  if (instance?.next?.state === "building") return `updating to ${instance.next.commit.slice(0, 7)}`;
+  if (instance?.next?.state === "failed") return "couldn't update";
+  return null;
+}
+
+/** Whether a shader's on for some lights: for all of them, none (or it's muted), or some. */
+export type SwitchState = "on" | "off" | "mixed";
+
+const sortedIds = (ids: Iterable<number>) => [...new Set(ids)].sort((a, b) => a - b);
+
+/** Whether a shader's on for the lights in `ids` it's about (all of its reach, if none are given). */
+export function switchState(layer: Layer, ids?: readonly number[]): SwitchState {
+  const reach = new Set(reachOf(layer));
+  const here = (ids ?? [...reach]).filter((id) => reach.has(id));
+  if (layer.muted || here.length === 0) return "off";
+  const mask = new Set(layer.mask);
+  const off = here.filter((id) => mask.has(id)).length;
+  return off === 0 ? "on" : off === here.length ? "off" : "mixed";
+}
+
+/**
+ * A shader switched on or off for some lights (of the ones it can light: its
+ * home's, for an instance), as a draft edit. Off on everything it's about is
+ * off, so that's a mute, its mask left as it was; on, when it's muted, is on
+ * for just these.
+ */
+export function switchFor(layer: Layer, ids: readonly number[], on: boolean, all: readonly number[]): ShaderPatch {
+  const home = layer.instance ? new Set(layer.instance.home) : null;
+  const these = home ? ids.filter((id) => home.has(id)) : [...ids];
+  const mask = new Set(layer.mask);
+  if (on) {
+    if (layer.muted) {
+      const chosen = new Set(these);
+      return { muted: false, mask: sortedIds(all.filter((id) => !chosen.has(id))) };
+    }
+    for (const id of these) mask.delete(id);
+    return { mask: sortedIds(mask) };
+  }
+  for (const id of these) mask.add(id);
+  if (reachOf(layer).every((id) => mask.has(id))) return { muted: true };
+  return { mask: sortedIds(mask) };
+}
+
+/** A shader on for everything it can light (all of its home, for an instance), or off. */
+export function switchEverywhere(layer: Layer, on: boolean, all: readonly number[]): ShaderPatch {
+  if (!on) return { muted: true };
+  const home = layer.instance ? new Set(layer.instance.home) : null;
+  return { muted: false, mask: home ? all.filter((id) => !home.has(id)) : [] };
 }
 
 /** Whether two masks name the same lights. */
@@ -84,6 +151,8 @@ function layerOfNode(node: SceneNode, d: Draft): Layer {
     muted: patch.muted ?? node.muted,
     mask: patch.mask ?? node.mask ?? [],
     by: node.created_by,
+    instance: node.instance ?? null,
+    footprint: node.footprint ?? [],
   };
 }
 
