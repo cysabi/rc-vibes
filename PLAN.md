@@ -60,8 +60,15 @@ and revoking a key revokes every key minted with it.
 ## How vibes relates to arclamp
 
 - **Light stream.** vibes keeps one connection to arclamp's live stream and
-  relays it to every browser at up to 30 frames a second, unchanged (packed
-  binary; decoded in the browser using the channel order from `/v1/lights`).
+  relays every frame to every browser as it arrives (100 a second while the
+  lights change), unchanged (packed binary; decoded in the browser using the
+  channel order from `/v1/lights`). A frame that only repeats the last one is
+  skipped, with one sent at least every second regardless. Networks deliver
+  frames in clumps, so the browser doesn't show them as they come: it plays
+  each at its own beat (`initial_time`) plus a delay, which follows how late
+  frames have been arriving (just above nearly all of them, 40–400 ms, changed
+  gradually). Frames are never blended, so a strobe stays a strobe. Admin
+  mode shows the delay, and how many frames came too late, beside the scale.
 - **Scene changes.** arclamp has no change notifications, so browsers poll the
   scene through vibes about once a second.
 - **Authorship.** arclamp records every vibes action as `vibes`, so vibes keeps
@@ -197,6 +204,48 @@ lights where they are, as free lights. vibes keeps its rail changes in the
 
 Later: key minting (keys handed out must not include `mint`, since any `mint`
 key can revoke every token, including vibes').
+
+## Sketches (in design)
+
+Code made in vibes is a **sketch**; rclamp's word stays "shader". A sketch is
+a git repo, and what runs in the room will only ever be built from one of its
+commits. Agreed so far, shaped with a clickable mock (the `editor-mock`
+branch):
+
+- **Pages, not over the map.** `/sketches` lists them; `/sketches/<id>` edits
+  one: the code on top, and along the bottom the preview (the building is
+  wider than it's tall) beside the console.
+- **Simple first: no tie to the room yet.** No copies in the room, no
+  versions, nothing to put in the room. Those come later.
+- **The editor is a real VS Code** (openvscode-server or code-server), one per
+  person per sketch, each in its own sandbox: a Kata VM on kokuzo behind the
+  same network rules as builds (internet, but not the LAN, the tailnet or the
+  cluster). Its terminal is hidden, but the sandbox is the boundary: tasks and
+  extensions can run anything. vibes puts it behind its login and embeds it.
+- **Sync is git.** The sketch is `main`, kept on vibes. Each person's VS Code
+  has its own clone and branch, and plain VS Code source control brings
+  changes together. Anyone can change `main`. Saving's semantics (what
+  becomes a commit) come later.
+- **The preview runs in the browser, on its own**: the sketch in its own
+  worker, on its own clock, making its own frames, drawn on its own map. It
+  never touches the room, other pages or other tabs. Play, pause (which stops
+  calling `update()`) and restart; lights select as on the map, with what
+  they look like in the corner; and a console of what the sketch logs.
+  Later, the sketch's own build, watching in its VS Code's sandbox, hot-swaps
+  `update()` in the preview.
+
+Phases, each laid out for agreement before it's built:
+
+1. **Spike:** a VS Code in Docker on OrbStack with its own clone of a sketch,
+   embedded in the mock, to try embedding, proxying, start-up and git.
+2. **Sketches on the server:** the canonical repos, and git over HTTP for the
+   VS Codes to clone from and push to.
+3. **Dev boxes:** a sandboxed VS Code per person per sketch, started when
+   opened and stopped when idle, proxied through vibes.
+4. **The preview,** from the mock's runner, then hot-swapping from the box.
+5. **Later, the room:** the trusted builder, the stamp (an HMAC over the
+   built script, so an edited copy shows as edited), and putting sketches in
+   the room.
 
 ## Gaps in arclamp (PRs to rclamp)
 
