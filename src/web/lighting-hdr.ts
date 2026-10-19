@@ -307,7 +307,12 @@ export class HdrLighting implements Renderer {
     this.noWalls = [this.storage(new Float32Array(4)), this.storage(new Int32Array(2)), this.storage(new Int32Array(1))];
   }
 
+  // A canvas has one WebGPU context, whoever asks for it, so another renderer
+  // on this canvas (React makes and drops one in development) may have
+  // configured it since: whoever draws configures it for itself.
   private configure() {
+    const now = this.context.getConfiguration();
+    if (now?.device === this.device && now.colorSpace === this.gamut) return;
     this.context.configure({ device: this.device, format: "rgba16float", colorSpace: this.gamut, toneMapping: { mode: "extended" }, alphaMode: "opaque" });
   }
 
@@ -380,12 +385,20 @@ export class HdrLighting implements Renderer {
    * per source, in the order setSources had them.
    */
   render(view: View, width: number, height: number, flux: Float32Array, gamut: Gamut) {
-    const device = this.device;
     if (this.lost) return;
-    if (gamut !== this.gamut) {
-      this.gamut = gamut;
-      this.configure();
+    try {
+      this.draw(view, width, height, flux, gamut);
+    } catch (err) {
+      // As if the context were lost: the map draws glows instead.
+      console.warn("HDR light stopped:", err);
+      this.lost = true;
     }
+  }
+
+  private draw(view: View, width: number, height: number, flux: Float32Array, gamut: Gamut) {
+    const device = this.device;
+    this.gamut = gamut;
+    this.configure();
     const { width: w, height: h } = this.canvas;
     if (!this.direct || this.direct.width !== w || this.direct.height !== h) {
       this.direct?.destroy();
@@ -524,8 +537,7 @@ export class HdrLighting implements Renderer {
   }
 
   dispose() {
-    this.context.unconfigure();
-    // Everything it made goes with it.
+    // Everything it made goes with it. The context stays as it is: by now it may be another's.
     this.device.destroy();
   }
 }
