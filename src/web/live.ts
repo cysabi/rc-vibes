@@ -1,13 +1,22 @@
 // The room's light state: live from arclamp's stream (relayed by vibes), or,
 // while there are pending edits, the browser's preview of them (sim.ts).
-// Frames arrive up to 30 times a second, so they live outside React: the map
-// draws straight from the store, and React only hears about connection
-// changes.
+// Live frames arrive as arclamp makes them, up to 100 a second, and are played
+// out at a steady pace by their timestamps (playout.ts), one per screen
+// refresh at most. They live outside React: the map draws straight from the
+// store, and React only hears about connection changes.
 
 import { useEffect, useSyncExternalStore } from "react";
-import { decodeFrame, type Frame, type LightsResponse } from "../shared/arclamp.ts";
+import { decodeFrame, frameTime, type Frame, type LightsResponse } from "../shared/arclamp.ts";
+import { Playout, type PlayoutStats } from "./playout.ts";
 
 const RETRY_MS = 1000;
+
+const playout = new Playout<ArrayBuffer>();
+/** This browser's clock in ms, on a steady timeline (rAF times are on it too). */
+const clock = (t = performance.now()) => performance.timeOrigin + t;
+
+/** How the live stream's timing has gone since the last call, for admin mode's readout. */
+export const liveTiming = (): PlayoutStats => playout.stats();
 
 let liveFrame: Frame | null = null;
 let simFrame: Frame | null = null;
@@ -67,21 +76,43 @@ export function useLiveStream(layout: LightsResponse | undefined) {
     let socket: WebSocket | null = null;
     let retry: number | undefined;
     let stopped = false;
+    let shown: ArrayBuffer | null = null;
+
+    // Only frames that reach the screen are decoded.
+    const show = (data: ArrayBuffer) => {
+      if (data === shown) return;
+      shown = data;
+      try {
+        liveFrame = decodeFrame(data, layout);
+      } catch (err) {
+        console.warn("bad light frame", err);
+        return;
+      }
+      if (!simulated) notify(liveFrame);
+    };
 
     const connect = () => {
       const scheme = location.protocol === "https:" ? "wss" : "ws";
       const ws = new WebSocket(`${scheme}://${location.host}/api/stream`);
       socket = ws;
       ws.binaryType = "arraybuffer";
+      let first = true;
       ws.onopen = () => setConnected(true);
       ws.onmessage = (event) => {
-        try {
-          liveFrame = decodeFrame(event.data as ArrayBuffer, layout);
-        } catch (err) {
-          console.warn("bad light frame", err);
+        const data = event.data as ArrayBuffer;
+        if (first) {
+          // vibes greets each connection with the last frame it had, which is
+          // old if arclamp has gone quiet: shown at once, but not timed.
+          first = false;
+          playout.reset();
+          show(data);
           return;
         }
-        if (!simulated) notify(liveFrame);
+        try {
+          playout.push(frameTime(data), data, clock());
+        } catch (err) {
+          console.warn("bad light frame", err);
+        }
       };
       ws.onclose = () => {
         setConnected(false);
@@ -89,10 +120,17 @@ export function useLiveStream(layout: LightsResponse | undefined) {
       };
     };
 
+    let raf = requestAnimationFrame(function step(t) {
+      const data = playout.at(clock(t));
+      if (data) show(data);
+      raf = requestAnimationFrame(step);
+    });
+
     connect();
     return () => {
       stopped = true;
       window.clearTimeout(retry);
+      cancelAnimationFrame(raf);
       socket?.close();
     };
   }, [layout]);

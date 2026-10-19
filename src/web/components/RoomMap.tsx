@@ -66,6 +66,7 @@ import {
   type View,
 } from "../viewport.ts";
 import { Drawer } from "./Drawer.tsx";
+import { Latency } from "./Latency.tsx";
 import { Segmented } from "./Segmented.tsx";
 import { TagEditor } from "./TagEditor.tsx";
 
@@ -1163,6 +1164,7 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
       <Drawer lights={unplaced} onDrop={dropFromDrawer} lead={corner}>
         {view && (
           <div className="map-corner">
+            {admin && <Latency />}
             <ScaleBar scale={view.scale} />
             <div className="zoom">
               {/* Floors stacked as they are in the building, the top one first. */}

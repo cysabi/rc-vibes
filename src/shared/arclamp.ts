@@ -153,8 +153,15 @@ export interface Frame {
   lights: Map<number, Channels>;
 }
 
-const HEADER_BYTES = 12;
+/** A frame's header (see decodeFrame); the lights follow it. */
+export const FRAME_HEADER_BYTES = 12;
 const FORMAT_REV = 1;
+
+/** The beat a frame was made on (initial_time, in ms on arclamp's clock), read from its header alone. */
+export function frameTime(data: ArrayBuffer): number {
+  if (data.byteLength < FRAME_HEADER_BYTES) throw new Error("frame shorter than header");
+  return Number(new DataView(data).getBigUint64(0, true));
+}
 
 /**
  * Decode one binary frame from arclamp's live stream (format_rev 1):
@@ -167,7 +174,7 @@ const FORMAT_REV = 1;
 export function decodeFrame(data: ArrayBuffer | Uint8Array, layout: LightsResponse): Frame {
   const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
   const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
-  if (bytes.byteLength < HEADER_BYTES) throw new Error("frame shorter than header");
+  if (bytes.byteLength < FRAME_HEADER_BYTES) throw new Error("frame shorter than header");
   const initialTime = Number(view.getBigUint64(0, true));
   const count = view.getUint16(8, true);
   const rev = view.getUint16(10, true);
@@ -175,7 +182,7 @@ export function decodeFrame(data: ArrayBuffer | Uint8Array, layout: LightsRespon
 
   const names = channelNames(layout);
   const lights = new Map<number, Channels>();
-  let at = HEADER_BYTES;
+  let at = FRAME_HEADER_BYTES;
   const need = (n: number) => {
     if (at + n > bytes.byteLength) throw new Error("truncated frame");
   };

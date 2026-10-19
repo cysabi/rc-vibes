@@ -130,6 +130,7 @@ p {
 .floor-switch,
 .zoom-group,
 .zoom-fit,
+.latency,
 .drawer-tab,
 .drawer-sheet.open,
 .map-note,
@@ -2368,6 +2369,52 @@ button.tag-name:hover {
   paint-order: stroke;
   stroke: var(--void);
   stroke-width: 3px;
+}
+
+/* Admin mode's live timing: the delay over the last half minute, beside the scale. */
+.latency {
+  display: grid;
+  grid-template-columns: auto auto;
+  align-items: center;
+  gap: 4px 12px;
+  margin-bottom: 2px;
+  padding: 8px 11px 9px;
+  border-radius: 12px;
+}
+
+.latency-value {
+  justify-self: end;
+  color: var(--ink);
+  font-size: 12px;
+}
+
+.latency svg {
+  display: block;
+  overflow: visible;
+}
+
+.latency rect {
+  fill: var(--faint);
+}
+
+.latency rect.late {
+  fill: var(--warn);
+}
+
+.latency path {
+  fill: none;
+  stroke: var(--ink-2);
+  stroke-width: 1.25;
+}
+
+.latency-late {
+  justify-self: end;
+  color: var(--mute);
+  font-size: 10.5px;
+}
+
+.latency-late.late {
+  color: var(--warn);
 }
 
 /* Floors, then zoom in and out as one group, then fit on its own. */
