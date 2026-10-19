@@ -48,24 +48,25 @@ the console, so one slip doesn't stop the sketch.
 ## Old bulbs
 
 The old bulbs only switch, and look nothing like the color lights, so they
-have a look of their own, apart from color's:
+have a look of their own, apart from color's. Each look is named for the
+kind of light it's for, as `light.kind` names them:
 
 ```ts
 export const update = sketch({
   color: osc(3).color(palettes.dusk),   // the color bulbs and panels
-  on: osc(1, 0.25).thresh(),            // the old bulbs: on or off
+  switch: osc(1, 0.25).thresh(),        // the old bulbs: on or off
 });
 ```
 
 `sketch(look)` is `sketch({ color: look })`: a color look is never asked
-about old bulbs, and never switches them. Without an `on` look they're left
-as they are; `sketch(look, { on })` gives one beside a color look.
+about old bulbs, and never switches them. Without a `switch` look they're
+left as they are; `sketch(look, { switch })` gives one beside a color look.
 
-An `on` look gives `true` or `false`, a number (on at 0.5 or more, as
+A `switch` look gives `true` or `false`, a number (on at 0.5 or more, as
 arclamp's own `on` channel: a field from 0 to 1 works, like
 `noise(4).thresh(0.6)` or `clock(96).every(1).env()`), `"on"` or `"off"`, or
 `null` to leave the bulb as it is. It can be a function of `here`, a field,
-or one answer for every old bulb: `sketch({ on: true })`.
+or one answer for every old bulb: `sketch({ switch: true })`.
 
 ## Colors
 

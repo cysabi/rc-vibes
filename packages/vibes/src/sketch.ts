@@ -1,8 +1,9 @@
 // sketch(): your looks as arclamp's update().
 //
-// Color lights and old bulbs are controlled apart, each by a look of its own:
+// Color lights and old bulbs are controlled apart, each by a look of its own,
+// named for the kind of light it's for (light.kind):
 //
-//   sketch({ color: osc(3).color(palettes.dusk), on: osc(1, 0.25).thresh() })
+//   sketch({ color: osc(3).color(palettes.dusk), switch: osc(1, 0.25).thresh() })
 //
 // The color look is asked about the color bulbs and panels only: a function
 // of here (your own, or a field) giving a color, one color for every light,
@@ -10,7 +11,7 @@
 // Color, "#f80", "2700K", { r, g, b }, …). sketch(look) is
 // sketch({ color: look }).
 //
-// The on look is asked about the old bulbs only, which just switch: true or
+// The switch look is asked about the old bulbs only, which just switch: true or
 // false, a number (on at 0.5 or more, as arclamp's own `on` channel), "on" or
 // "off", or a function of here (a field too) giving one. Without one, the old
 // bulbs are left as they are; a color never switches them.
@@ -34,37 +35,38 @@ export type LookResult = ColorInput | null | undefined | false | void;
 export type Look = ((here: Here) => LookResult) | ColorInput;
 
 /** Whether an old bulb should be on: true or false, a number (on at 0.5 or more), "on" or "off"; null or undefined leaves it as it is. */
-export type OnResult = boolean | number | string | null | undefined | void;
+export type SwitchResult = boolean | number | string | null | undefined | void;
 
 /** The old bulbs' look: a function of here (a field too) saying whether each is on, or one answer for them all. */
-export type OnLook = ((here: Here) => OnResult) | boolean | number | string;
+export type SwitchLook = ((here: Here) => SwitchResult) | boolean | number | string;
 
-/** A look for each kind of light; either may be left out, and its lights are left as they are. */
+/** A look for each kind of light (light.kind); either may be left out, and its lights are left as they are. */
 export interface Looks {
   /** For the color bulbs and panels. */
   color?: Look;
   /** For the old bulbs, which only switch. */
-  on?: OnLook;
+  switch?: SwitchLook;
 }
 
 export interface SketchOptions {
   /** The old bulbs' look, beside a color look given on its own. */
-  on?: OnLook;
+  switch?: SwitchLook;
 }
 
 // A tick after a long gap (the sketch paused, or held up) counts as at most this long.
 const MAX_DT = 0.25;
 
-/** Your color look (a function of here, or a field) as arclamp's update(); old bulbs are left alone, unless given `on`. */
+/** Your color look (a function of here, or a field) as arclamp's update(); old bulbs are left alone, unless given `switch`. */
 export function sketch(look: (here: Here) => LookResult, options?: SketchOptions): Update;
-/** A look for each kind of light: { color, on }. */
+/** A look for each kind of light: { color, switch }. */
 export function sketch(looks: Looks): Update;
 /** One color for every color light, or a palette laid across the room, as arclamp's update(). */
 export function sketch(look: ColorInput, options?: SketchOptions): Update;
 export function sketch(given: Looks | Look, options: SketchOptions = {}): Update {
-  const looks: Looks = isLooks(given) ? { on: options.on, ...given } : { color: given as Look, on: options.on };
+  if (options && typeof options === "object" && "on" in options) throw new Error(ON_KEY);
+  const looks: Looks = isLooks(given) ? { switch: options.switch, ...given } : { color: given as Look, switch: options.switch };
   const askColor = looks.color === undefined ? null : lookOf(looks.color);
-  const askOn = looks.on === undefined ? null : onLookOf(looks.on);
+  const askSwitch = looks.switch === undefined ? null : switchLookOf(looks.switch);
   let room: Room | null = null;
   let last: number | null = null;
   const warned = new Set<string>();
@@ -87,7 +89,7 @@ export function sketch(given: Looks | Look, options: SketchOptions = {}): Update
       const light = room.lights[i]!;
       light.below = colorOf(list[i]!, light.kind);
       light.belowOn = light.below.lm > 0;
-      const ask = light.kind === "switch" ? askOn : askColor;
+      const ask = light.kind === "switch" ? askSwitch : askColor;
       if (!ask) continue;
       const v = ask(new Here(light.x, light.y, t, dt, nowMs, light, room));
 
@@ -96,7 +98,7 @@ export function sketch(given: Looks | Look, options: SketchOptions = {}): Update
         if (on === "unreadable") {
           warn(
             "on",
-            `light ${light.id} is an old bulb, which only switches: its look gives true or false, a number (on at 0.5 or more), or "on" or "off", not ${describe(v)}; give old bulbs a look of their own, sketch({ color, on })`,
+            `light ${light.id} is an old bulb, which only switches: its look gives true or false, a number (on at 0.5 or more), or "on" or "off", not ${describe(v)}; give old bulbs a look of their own, sketch({ color, switch })`,
           );
         } else if (on !== null) lights.push({ id: light.id, channels: { on: on ? 1 : 0 } });
         continue;
@@ -125,11 +127,15 @@ export function sketch(given: Looks | Look, options: SketchOptions = {}): Update
   };
 }
 
-/** Whether a sketch was given a look for each kind of light ({ color, on }) rather than one look. */
+const ON_KEY = 'old bulbs\' look is `switch`, for the kind of light it\'s for: sketch({ color, switch }), or sketch(look, { switch })';
+
+/** Whether a sketch was given a look for each kind of light ({ color, switch }) rather than one look. */
 function isLooks(v: unknown): v is Looks {
   if (!v || typeof v !== "object" || v instanceof Color || Array.isArray(v)) return false;
   const keys = Object.keys(v);
-  return keys.length > 0 && keys.every((k) => k === "color" || k === "on");
+  // { on } would read as an old bulb's channels, a color: say what's meant instead.
+  if (keys.includes("on")) throw new Error(ON_KEY);
+  return keys.length > 0 && keys.every((k) => k === "color" || k === "switch");
 }
 
 /** The color look as a function of here. One color is the same everywhere (and said wrong, an error now, not each tick). */
@@ -140,8 +146,8 @@ function lookOf(look: Look): (here: Here) => unknown {
   return () => c;
 }
 
-/** The on look as a function of here. One answer is the same everywhere (and said wrong, an error now). */
-function onLookOf(look: OnLook): (here: Here) => unknown {
+/** The switch look as a function of here. One answer is the same everywhere (and said wrong, an error now). */
+function switchLookOf(look: SwitchLook): (here: Here) => unknown {
   if (typeof look === "function") return look as (here: Here) => unknown;
   const on = readOn(look);
   if (on === "unreadable") throw new Error(`${describe(look)} isn't on or off: give true or false, a number (on at 0.5 or more), or "on" or "off"`);

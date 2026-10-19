@@ -33,7 +33,7 @@ const prevOf = (list = lights()): Prev => ({ initial_time: 0, lights: list });
 /** Runs a look once, at nowMs, and says what each light saw and was given. */
 function once(look: (here: Here) => ColorInput | null | undefined, list = lights()) {
   const seen = new Map<number, Here>();
-  const update = sketch({ color: (here) => (seen.set(here.light.id, here), look(here)), on: (here) => (seen.set(here.light.id, here), null) });
+  const update = sketch({ color: (here) => (seen.set(here.light.id, here), look(here)), switch: (here) => (seen.set(here.light.id, here), null) });
   const out = update(prevOf(list), 5000, 1000);
   return { seen, out };
 }
@@ -55,9 +55,9 @@ describe("sketch()", () => {
     expect(sketch(palettes.dusk)(prevOf(), 0, 0).lights.map((l) => l.id)).not.toContain(3);
   });
 
-  it("switches old bulbs by their on look, however it says it", () => {
+  it("switches old bulbs by their switch look, however it says it", () => {
     const onOf = (on: unknown) => {
-      const lights = sketch({ on: () => on as never })(prevOf(), 0, 0).lights;
+      const lights = sketch({ switch: () => on as never })(prevOf(), 0, 0).lights;
       return lights.find((l) => l.id === 3)?.channels.on;
     };
     expect([true, false, 1, 0, 0.5, 0.49, "on", "off", " ON ", "yes", "no", "1", "0", { on: 1 }, { on: false }].map(onOf)).toEqual([1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 0]);
@@ -65,27 +65,33 @@ describe("sketch()", () => {
     expect(onOf(undefined)).toBeUndefined();
   });
 
-  it("takes the on look as a function, a field, or one answer for every old bulb", () => {
+  it("takes the switch look as a function, a field, or one answer for every old bulb", () => {
     const onOfThree = (update: ReturnType<typeof sketch>, now = 0) => update(prevOf(), now, 0).lights.find((l) => l.id === 3)?.channels.on;
-    expect(onOfThree(sketch({ on: true }))).toBe(1);
-    expect(onOfThree(sketch({ on: "off" }))).toBe(0);
-    expect(onOfThree(sketch("#f80", { on: 1 }))).toBe(1);
-    expect(onOfThree(sketch({ on: ({ light }) => light.rail?.index === 1 }))).toBe(1);
+    expect(onOfThree(sketch({ switch: true }))).toBe(1);
+    expect(onOfThree(sketch({ switch: "off" }))).toBe(0);
+    expect(onOfThree(sketch("#f80", { switch: 1 }))).toBe(1);
+    expect(onOfThree(sketch({ switch: ({ light }) => light.rail?.index === 1 }))).toBe(1);
     // A field: on for the first half of every two seconds.
-    const blink = sketch({ on: field(({ t }) => square(t / 2)) });
+    const blink = sketch({ switch: field(({ t }) => square(t / 2)) });
     expect([0, 500, 1500, 2500].map((now) => onOfThree(blink, now))).toEqual([1, 1, 0, 1]);
     // Only the old bulbs are touched.
-    expect(sketch({ on: true })(prevOf(), 0, 0).lights.map((l) => l.id)).toEqual([3]);
-    expect(() => sketch({ on: "sometimes" })).toThrow(/isn't on or off/);
+    expect(sketch({ switch: true })(prevOf(), 0, 0).lights.map((l) => l.id)).toEqual([3]);
+    expect(() => sketch({ switch: "sometimes" })).toThrow(/isn't on or off/);
+  });
+
+  it("calls the old bulbs' look switch, and says so when given on", () => {
+    expect(() => sketch({ on: true } as never)).toThrow(/sketch\(\{ color, switch \}\)/);
+    expect(() => sketch({ color: "#f80", on: true } as never)).toThrow(/switch/);
+    expect(() => sketch("#f80", { on: true } as never)).toThrow(/switch/);
   });
 
   it("says once when an old bulb is given something it can't switch by", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const update = sketch({ on: () => white(2700, 800) as never });
+    const update = sketch({ switch: () => white(2700, 800) as never });
     expect(update(prevOf(), 0, 0).lights).toEqual([]);
     update(prevOf(), 10, 0);
     expect(warn).toHaveBeenCalledTimes(1);
-    expect(String(warn.mock.calls[0]![0])).toMatch(/old bulb.*sketch\(\{ color, on \}\)/);
+    expect(String(warn.mock.calls[0]![0])).toMatch(/old bulb.*sketch\(\{ color, switch \}\)/);
   });
 
   it("takes anything that says a color, from the look or as the look", () => {
