@@ -1530,22 +1530,18 @@ kbd {
   display: grid;
 }
 
-/* Shaders draw over them: say so, the words the note's whole width (round
-   the icon, in its top left), and offer a look at the room tone alone, in
-   its bottom right. */
+/* Shaders draw over them: say so (the icon in a gutter of its own, the words
+   the rest of the width), and offer a look at the room tone alone, under
+   the words, in the note's bottom right. */
 .note.tone-over {
-  display: block;
-}
-
-.note.tone-over svg {
-  float: left;
-  margin: 2px 8px 0 0;
+  display: grid;
+  grid-template-columns: auto 1fr;
+  gap: 10px;
 }
 
 .note.tone-over .peek {
-  display: block;
-  clear: both;
-  margin: 10px 0 0 auto;
+  grid-column: 2;
+  justify-self: end;
 }
 
 .peek {
