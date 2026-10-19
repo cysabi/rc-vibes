@@ -187,6 +187,20 @@ export function useLayerEffects(): Effects {
   );
 }
 
+/**
+ * The lights a shader is trying to change, before its mask or mute: as the
+ * preview runs it while previewing (once it has), else as arclamp reports.
+ */
+export function tryingOf(layer: Layer, previewing: boolean, effects: Effects): ReadonlySet<number> {
+  return (previewing ? effects.get(layer.key) : undefined) ?? new Set(layer.node.changing ?? []);
+}
+
+/** Where a shader reaches: the lights it's trying to change that it isn't kept off. */
+export function reachOf(layer: Layer, trying: ReadonlySet<number>): number[] {
+  const mask = new Set(layer.mask);
+  return [...trying].filter((id) => !mask.has(id));
+}
+
 // ---- the engine ---------------------------------------------------------------
 
 interface Inputs {

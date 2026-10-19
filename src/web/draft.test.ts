@@ -23,7 +23,7 @@ vi.mock("./api.ts", () => ({
   invalidateScene: vi.fn(async () => {}),
 }));
 
-const { applyDraft, currentDraft, drafts, EMPTY, layersOf, pendingCount, reorderWithin, roomtoneChanges, templateOf } = await import("./draft.ts");
+const { applyDraft, currentDraft, drafts, EMPTY, layerOf, layersOf, pendingCount, reorderWithin, roomtoneChanges, templateOf } = await import("./draft.ts");
 
 function shader(id: number, position: number, extra: Partial<SceneNode> = {}): SceneNode {
   return {
@@ -104,6 +104,21 @@ describe("the stack with pending edits", () => {
     expect(layersOf(later, currentDraft()).map((l) => l.key)).toEqual(["#13", "#11", "#12"]);
   });
 
+  it("takes a shader out of the stack, counted once, and keeps it again", () => {
+    drafts.remove("#11");
+    expect(keys()).toEqual(["#12"]);
+    expect(pendingCount(live, currentDraft())).toBe(1);
+    expect(layerOf(live, currentDraft(), "#11")).toMatchObject({ key: "#11" });
+    drafts.keep("#11");
+    expect(keys()).toEqual(["#12", "#11"]);
+    expect(pendingCount(live, currentDraft())).toBe(0);
+  });
+
+  it("doesn't count taking out a shader that's already gone", () => {
+    drafts.remove("#13");
+    expect(pendingCount(live, currentDraft())).toBe(0);
+  });
+
   it("names shaders by id, and credits whoever arclamp says made them", () => {
     const [top] = layersOf(live, currentDraft());
     expect(top).toMatchObject({ name: "Shader #12", by: "rc:1" });
@@ -147,6 +162,22 @@ describe("apply", () => {
     drafts.patchShader("#11", { muted: false, mask: [64] });
     await applyDraft(muted);
     expect(calls).toEqual(['POST /api/shaders/11/mask {"mask":[64]}', 'POST /api/shaders/11/muted {"muted":false}']);
+  });
+
+  it("takes shaders out, without sending what else was pending for them", async () => {
+    drafts.patchShader("#12", { muted: true });
+    drafts.patchShader("#11", { muted: true });
+    drafts.remove("#12");
+    await applyDraft(live);
+    expect(calls).toEqual(["DELETE /api/shaders/12", 'POST /api/shaders/11/muted {"muted":true}']);
+    expect(currentDraft()).toBe(EMPTY);
+  });
+
+  it("leaves a shader it couldn't take out pending", async () => {
+    drafts.remove("#12");
+    failOn = "DELETE /api/shaders/12";
+    await expect(applyDraft(live)).rejects.toThrow("arclamp said no");
+    expect(currentDraft().removed).toEqual(["#12"]);
   });
 
   it("moves shaders bottom first when the order changed", async () => {

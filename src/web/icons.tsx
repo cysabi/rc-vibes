@@ -60,6 +60,13 @@ export const ChevronUpIcon = () => (
   </Svg>
 );
 
+/** Back. */
+export const ChevronLeftIcon = () => (
+  <Svg>
+    <path d="M10 3.5 5.5 8l4.5 4.5" />
+  </Svg>
+);
+
 /** A pencil, for editing. */
 export const PencilIcon = () => (
   <Svg>

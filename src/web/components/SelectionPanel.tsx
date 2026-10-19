@@ -11,7 +11,9 @@
 // through them. Each has a switch for whether it's on for these lights (off
 // masks it from them) and a handle to drag it to another place among them;
 // both are pending edits. Below, off the rail, the shaders that are trying
-// to change them but are switched off here (masked, or muted).
+// to change them but are switched off here (masked, or muted), and, folded
+// away, the rest of the stack. Each shader's arrow opens it in the panel in
+// place of the selection (ShaderPanel.tsx).
 
 import {
   closestCenter,
@@ -35,15 +37,16 @@ import type { Channels, LightInfo } from "../../shared/arclamp.ts";
 import { baseType, isBinary, isOn, lemtoneOf, requestedOf } from "../../shared/fixtures.ts";
 import { colorName, lemtoneCode, lumensText } from "../../shared/lemtone.ts";
 import { tagLabel } from "../../shared/tags.ts";
-import type { SceneNode, ShaderSketch } from "../../shared/vibes.ts";
+import type { SceneNode } from "../../shared/vibes.ts";
 import { useLights, useScene } from "../api.ts";
-import { drafts, layersOf, reorderWithin, templateOf, useDraft, type Layer } from "../draft.ts";
+import { drafts, layerOf, layersOf, reorderWithin, templateOf, useDraft, type Layer, type LayerKey } from "../draft.ts";
 import { ChevronUpIcon, CloseIcon, GripIcon, OpenIcon } from "../icons.tsx";
 import { useFrames } from "../live.ts";
 import { useNarrow } from "../narrow.ts";
-import { navigate } from "../route.ts";
-import { useLayerEffects } from "../sim.ts";
+import { tryingOf, useLayerEffects } from "../sim.ts";
+import { listOf, ordinal } from "../words.ts";
 import { RoomToneEditor } from "./RoomToneEditor.tsx";
+import { ShaderBody, ShaderTitle } from "./ShaderPanel.tsx";
 
 const NO_NODES: SceneNode[] = [];
 
@@ -74,10 +77,13 @@ interface Props {
   selected: ReadonlySet<number>;
   /** Whether the map shows the preview of pending edits, rather than the room. */
   previewing: boolean;
+  /** The shader open in place of the selection, if one is. */
+  shader: LayerKey | null;
+  onShader: (key: LayerKey | null) => void;
   onClose: () => void;
 }
 
-export function SelectionPanel({ floor, here, selected, previewing, onClose }: Props) {
+export function SelectionPanel({ floor, here, selected, previewing, shader, onShader, onClose }: Props) {
   const panel = useRef<HTMLElement>(null);
   const chosen = here.filter((l) => selected.has(l.id));
   const n = chosen.length;
@@ -87,7 +93,7 @@ export function SelectionPanel({ floor, here, selected, previewing, onClose }: P
   // is masked from everything). Among the selected lights, what it's
   // actually lighting is that less its mask, and the rest is kept off.
   // Lighting any of them, it's in "Lit by"; trying but kept off them all,
-  // it's in "Switched off here"; otherwise it isn't listed.
+  // it's in "Switched off here"; otherwise it's with the rest of the stack.
   const scene = useScene();
   const lights = useLights();
   const draft = useDraft();
@@ -99,10 +105,10 @@ export function SelectionPanel({ floor, here, selected, previewing, onClose }: P
   const rows: Row[] = [...stack]
     .reverse()
     .map((layer) => {
-      const trying = previewing ? previewEffects.get(layer.key) : new Set(layer.node?.changing ?? []);
+      const trying = tryingOf(layer, previewing, previewEffects);
       const mask = new Set(layer.mask);
       const kept = (id: number) => layer.muted || mask.has(id);
-      const aimed = ids.filter((id) => trying?.has(id));
+      const aimed = ids.filter((id) => trying.has(id));
       const lighting = aimed.filter((id) => !kept(id)).length;
       const keptOff = aimed.length - lighting;
       const allKept = ids.every(kept);
@@ -129,6 +135,12 @@ export function SelectionPanel({ floor, here, selected, previewing, onClose }: P
   const [opened, setOpened] = useState<string | null>("roomtone");
   const lit = placed.filter((r) => r.section === "lit");
   const off = placed.filter((r) => r.section === "off");
+  // Not trying to change any of these lights: the rest of the stack, folded away.
+  const others = placed.filter((r) => r.section === null);
+  const [othersOpen, setOthersOpen] = useState(false);
+
+  // The shader open in place of the selection.
+  const open = shader ? layerOf(live, draft, shader) : null;
 
   /**
    * Switch a shader off for the selected lights (mask them), or back on
@@ -290,59 +302,97 @@ export function SelectionPanel({ floor, here, selected, previewing, onClose }: P
     >
       <div className="selection-head" ref={head} {...grab}>
         <span className="selection-grabber" aria-hidden="true" />
-        <div className="selection-title">
-          <h2>{title}</h2>
-          {/* One light: its title already says what it is, so here, its tags and what it's showing. */}
-          <p className="muted">{n === 1 ? <LightNow light={chosen[0]!} /> : breakdown.join(" · ")}</p>
-        </div>
+        {open ? (
+          <ShaderTitle layer={open} onBack={() => onShader(null)} />
+        ) : (
+          <div className="selection-title">
+            <h2>{title}</h2>
+            {/* One light: its title already says what it is, so here, its tags and what it's showing. */}
+            <p className="muted">{n === 1 ? <LightNow light={chosen[0]!} /> : breakdown.join(" · ")}</p>
+          </div>
+        )}
         <button className="icon-button" onClick={onClose} aria-label="Let go of the selection" title="Let go of the selection">
           <CloseIcon />
         </button>
       </div>
       <div className="selection-body" ref={body}>
-        <section className="selection-section">
-          {/* The rows read in the order light builds up: room tone, then each shader over what's above it. */}
-          <h3 className="lit-by">Lit by</h3>
-          <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-            <SortableContext items={listed} strategy={verticalListSortingStrategy}>
-              <ol className="layers">
-                {/* Always the base, the rail's source: it can't move or be switched off. Its
-                    parameter, the color, opens under it (open to start with). */}
-                <li className={opened === "roomtone" ? "layer base open" : "layer base"}>
-                  {/* All of its head (what lights up) opens and closes it; the button's for the keyboard. */}
-                  <div className="layer-head" onClick={() => setOpened(opened === "roomtone" ? null : "roomtone")}>
-                    <span className="layer-grip" aria-hidden="true" />
-                    <span className="layer-node" aria-hidden="true" />
-                    <button className="layer-text layer-toggle" aria-expanded={opened === "roomtone"}>
-                      <span className="layer-name">Room tone</span>
-                      <span className="layer-meta">{toneSummary(chosen, template)}</span>
-                    </button>
-                    <span className="layer-chevron" aria-hidden="true">
-                      <ChevronUpIcon />
-                    </span>
-                  </div>
-                  {opened === "roomtone" && <RoomToneEditor lights={chosen} template={template} over={lit.map((r) => r.layer.name)} />}
-                </li>
-                {lit.map((row) => (
-                  <SortableRow key={row.layer.key} row={row} n={n} onSwitch={(on) => setOn(row, on)} />
-                ))}
-              </ol>
-            </SortableContext>
-          </DndContext>
-        </section>
-        {off.length > 0 && (
-          // Bypassed for these lights, so off the rail.
-          <section className="selection-section">
-            <h3 className="lit-by">Switched off here</h3>
-            <ol className="layers bypassed">
-              {off.map((row) => (
-                <li key={row.layer.key} className={row.state === "off" ? "layer off" : "layer"}>
-                  <span className="layer-grip" aria-hidden="true" />
-                  <RowParts row={row} n={n} onSwitch={(on) => setOn(row, on)} />
-                </li>
-              ))}
-            </ol>
-          </section>
+        {open ? (
+          <ShaderBody
+            layer={open}
+            stack={stack}
+            removing={draft.removed.includes(open.key)}
+            trying={tryingOf(open, previewing, previewEffects)}
+            lights={lights.data?.lights ?? []}
+          />
+        ) : (
+          <>
+            <section className="selection-section">
+              {/* The rows read in the order light builds up: room tone, then each shader over what's above it. */}
+              <h3 className="lit-by">Lit by</h3>
+              <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
+                <SortableContext items={listed} strategy={verticalListSortingStrategy}>
+                  <ol className="layers">
+                    {/* Always the base, the rail's source: it can't move or be switched off. Its
+                        parameter, the color, opens under it (open to start with). */}
+                    <li className={opened === "roomtone" ? "layer base open" : "layer base"}>
+                      {/* All of its head (what lights up) opens and closes it; the button's for the keyboard. */}
+                      <div className="layer-head" onClick={() => setOpened(opened === "roomtone" ? null : "roomtone")}>
+                        <span className="layer-grip" aria-hidden="true" />
+                        <span className="layer-node" aria-hidden="true" />
+                        <button className="layer-text layer-toggle" aria-expanded={opened === "roomtone"}>
+                          <span className="layer-name">Room tone</span>
+                          <span className="layer-meta">{toneSummary(chosen, template)}</span>
+                        </button>
+                        <span className="layer-chevron" aria-hidden="true">
+                          <ChevronUpIcon />
+                        </span>
+                      </div>
+                      {opened === "roomtone" && <RoomToneEditor lights={chosen} template={template} over={lit.map((r) => r.layer.name)} />}
+                    </li>
+                    {lit.map((row) => (
+                      <SortableRow key={row.layer.key} row={row} n={n} onSwitch={(on) => setOn(row, on)} onOpen={() => onShader(row.layer.key)} />
+                    ))}
+                  </ol>
+                </SortableContext>
+              </DndContext>
+            </section>
+            {off.length > 0 && (
+              // Bypassed for these lights, so off the rail.
+              <section className="selection-section">
+                <h3 className="lit-by">Switched off here</h3>
+                <ol className="layers bypassed">
+                  {off.map((row) => (
+                    <li key={row.layer.key} className={row.state === "off" ? "layer off" : "layer"}>
+                      <span className="layer-grip" aria-hidden="true" />
+                      <RowParts row={row} n={n} onSwitch={(on) => setOn(row, on)} onOpen={() => onShader(row.layer.key)} />
+                    </li>
+                  ))}
+                </ol>
+              </section>
+            )}
+            {others.length > 0 && (
+              // Nothing to do with these lights; there to be opened (one
+              // that's failing, say, or lighting nothing at all).
+              <section className="selection-section">
+                <button className="lit-by others-toggle" aria-expanded={othersOpen} onClick={() => setOthersOpen(!othersOpen)}>
+                  Not lighting these <span className="others-count">{others.length}</span>
+                  <span className={othersOpen ? "layer-chevron open" : "layer-chevron"} aria-hidden="true">
+                    <ChevronUpIcon />
+                  </span>
+                </button>
+                {othersOpen && (
+                  <ol className="layers bypassed">
+                    {others.map((row) => (
+                      <li key={row.layer.key} className="layer off">
+                        <span className="layer-grip" aria-hidden="true" />
+                        <RowParts row={row} n={n} onOpen={() => onShader(row.layer.key)} />
+                      </li>
+                    ))}
+                  </ol>
+                )}
+              </section>
+            )}
+          </>
         )}
       </div>
     </section>
@@ -369,11 +419,14 @@ interface RowProps {
   row: Row;
   /** How many lights are selected. */
   n: number;
-  onSwitch: (on: boolean) => void;
+  /** Its switch, for these lights (none for a shader that isn't trying to change them). */
+  onSwitch?: (on: boolean) => void;
+  /** Open it, in place of the selection. */
+  onOpen: () => void;
 }
 
 /** A shader lighting the selection: draggable by its handle to another place among them. */
-function SortableRow({ row, n, onSwitch }: RowProps) {
+function SortableRow({ row, n, onSwitch, onOpen }: RowProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: row.layer.key });
   return (
     <li
@@ -384,18 +437,18 @@ function SortableRow({ row, n, onSwitch }: RowProps) {
       <button className="layer-grip" aria-label={`Move ${row.layer.name}`} {...attributes} {...listeners}>
         <GripIcon />
       </button>
-      <RowParts row={row} n={n} onSwitch={onSwitch} />
+      <RowParts row={row} n={n} onSwitch={onSwitch} onOpen={onOpen} />
     </li>
   );
 }
 
 /**
- * A shader's stop on the rail, who wrote it and what it's doing here, and a
- * switch for whether it's on for these lights: off masks it from them (the
- * rest of the room is untouched); on unmasks them, or for a muted shader,
- * unmutes it and masks it from everywhere else.
+ * A shader's stop on the rail, who wrote it and what it's doing here, a
+ * switch for whether it's on for these lights (off masks it from them, the
+ * rest of the room untouched; on unmasks them, or for a muted shader,
+ * unmutes it and masks it from everywhere else), and its arrow, to open it.
  */
-function RowParts({ row, n, onSwitch }: RowProps) {
+function RowParts({ row, n, onSwitch, onOpen }: RowProps) {
   const { layer, state } = row;
   const tip =
     state === "on"
@@ -427,17 +480,21 @@ function RowParts({ row, n, onSwitch }: RowProps) {
         </span>
         {sketch && <span className="layer-meta">{layerMeta(row, n)}</span>}
       </span>
-      {sketch?.name != null && <OpenSketch sketch={sketch} />}
-      <button
-        className={`switch ${state}`}
-        role="switch"
-        aria-checked={state === "on" ? true : state === "off" ? false : "mixed"}
-        aria-label={`${layer.name}, on these lights`}
-        title={tip}
-        onClick={() => onSwitch(state !== "on")}
-      >
-        <span className="switch-knob" />
+      <button className="icon-button layer-open" aria-label={`Open ${layer.name}`} title={`Open ${layer.name}`} onClick={onOpen}>
+        <OpenIcon />
       </button>
+      {onSwitch && (
+        <button
+          className={`switch ${state}`}
+          role="switch"
+          aria-checked={state === "on" ? true : state === "off" ? false : "mixed"}
+          aria-label={`${layer.name}, on these lights`}
+          title={tip}
+          onClick={() => onSwitch(state !== "on")}
+        >
+          <span className="switch-knob" />
+        </button>
+      )}
     </>
   );
 }
@@ -462,32 +519,18 @@ function toneSummary(lights: LightInfo[], template: Record<string, Channels>): s
   return parts.join(" · ");
 }
 
-/** Who wrote a shader, and what it's doing to the selection: changing some of it, or what it would change if it weren't kept off. */
 /**
- * The sketch a shader was built from, opened: at the commit it was built
- * from, or, deleted, among the deleted ones in the library, to restore.
+ * Under a sketch's shader: its commit and what it's doing here. (Not who
+ * arclamp says made it: vibes makes them all, with its own key.)
  */
-function OpenSketch({ sketch }: { sketch: ShaderSketch }) {
-  const label = sketch.deleted ? `Find ${sketch.name} among the deleted sketches` : `Open ${sketch.name} at ${sketch.commit.slice(0, 7)}, the commit this was built from`;
-  return (
-    <button
-      className="icon-button layer-open"
-      aria-label={label}
-      title={label}
-      onClick={() => navigate(sketch.deleted ? `/sketches?deleted=${sketch.id}` : `/sketches/${sketch.id}?commit=${sketch.commit}`)}
-    >
-      <OpenIcon />
-    </button>
-  );
-}
-
-/** Under a sketch's shader: its commit, who put it in, and what it's doing here. */
-function layerMeta({ layer, aimed, lighting, keptOff }: Row, n: number): string {
-  const parts = [layer.node.sketch!.commit.slice(0, 7), layer.by];
+function layerMeta({ layer, aimed, lighting, keptOff, section }: Row, n: number): string {
+  const parts = [layer.node.sketch!.commit.slice(0, 7)];
   if (layer.muted) parts.push("muted");
   // Out of the whole selection, which the head already counts.
   const of = (k: number, verb: string) => (k === n ? (n === 1 ? `${verb} this light` : `${verb} all ${n}`) : `${verb} ${k}`);
-  if (lighting > 0) {
+  if (section === null) {
+    // With the rest of the stack, whose heading says it.
+  } else if (lighting > 0) {
     parts.push(of(lighting, "changing"));
     if (keptOff > 0) parts.push(`kept off ${keptOff}`);
   } else if (aimed > 0) {
@@ -521,17 +564,3 @@ function kindOf(l: LightInfo) {
 }
 
 const capitalized = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);
-
-/** 1st, 2nd, 3rd, 4th … 11th, 12th, 13th … 21st. */
-function ordinal(n: number): string {
-  const tens = n % 100;
-  const suffix = tens >= 11 && tens <= 13 ? "th" : (["th", "st", "nd", "rd"][n % 10] ?? "th");
-  return `${n}${suffix}`;
-}
-
-/** "Couches", "Couches & Lobby", "Couches, Kitchen & Lobby", "Couches, Kitchen & 3 more". */
-function listOf(names: string[]): string {
-  if (names.length <= 1) return names[0] ?? "";
-  if (names.length <= 3) return `${names.slice(0, -1).join(", ")} & ${names[names.length - 1]}`;
-  return `${names.slice(0, 2).join(", ")} & ${names.length - 2} more`;
-}

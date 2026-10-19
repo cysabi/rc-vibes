@@ -4,8 +4,8 @@
 // them away. Each browser has its own; others keep seeing the live room.
 //
 // A draft records only what you changed, on top of whatever is live, so
-// changes others make meanwhile still show through: room tone, and each
-// shader's mute, mask and place in the stack.
+// changes others make meanwhile still show through: room tone, each shader's
+// mute, mask and place in the stack, and the shaders taken out of it.
 
 import { useSyncExternalStore } from "react";
 import type { Channels } from "../shared/arclamp.ts";
@@ -29,9 +29,11 @@ export interface Draft {
   edits: Record<LayerKey, ShaderPatch>;
   /** The stack's order, top first, once you've reordered it. */
   order: LayerKey[] | null;
+  /** Shaders to take out of the room (only vibes' own can be). */
+  removed: LayerKey[];
 }
 
-export const EMPTY: Draft = { roomtone: {}, roomtoneCode: null, edits: {}, order: null };
+export const EMPTY: Draft = { roomtone: {}, roomtoneCode: null, edits: {}, order: null, removed: [] };
 
 export const keyOf = (id: number): LayerKey => `#${id}`;
 export const idOf = (key: LayerKey): number => Number(key.slice(1));
@@ -69,23 +71,35 @@ export function templateOf(live: SceneNode[], d: Draft): Record<string, Channels
   return out;
 }
 
-/** The stack with the draft applied, top first. */
+function layerOfNode(node: SceneNode, d: Draft): Layer {
+  const key = keyOf(node.id);
+  const patch = d.edits[key] ?? {};
+  return {
+    key,
+    id: node.id,
+    node,
+    // Built from a sketch: the sketch's name (by the shader's stamp).
+    name: node.sketch ? (node.sketch.name ?? "Unknown sketch") : `Shader #${node.id}`,
+    script: node.script ?? "",
+    muted: patch.muted ?? node.muted,
+    mask: patch.mask ?? node.mask ?? [],
+    by: node.created_by,
+  };
+}
+
+/** One live shader with the draft's edits, even one the draft takes out; null if it isn't live. */
+export function layerOf(live: SceneNode[], d: Draft, key: LayerKey): Layer | null {
+  const node = liveShaders(live).find((n) => keyOf(n.id) === key);
+  return node ? layerOfNode(node, d) : null;
+}
+
+/** The stack with the draft applied, top first: without the shaders it takes out. */
 export function layersOf(live: SceneNode[], d: Draft): Layer[] {
   const layers = new Map<LayerKey, Layer>();
+  const removed = new Set(d.removed);
   for (const node of liveShaders(live)) {
     const key = keyOf(node.id);
-    const patch = d.edits[key] ?? {};
-    layers.set(key, {
-      key,
-      id: node.id,
-      node,
-      // Built from a sketch: the sketch's name (by the shader's stamp).
-      name: node.sketch ? (node.sketch.name ?? "Unknown sketch") : `Shader #${node.id}`,
-      script: node.script ?? "",
-      muted: patch.muted ?? node.muted,
-      mask: patch.mask ?? node.mask ?? [],
-      by: node.created_by,
-    });
+    if (!removed.has(key)) layers.set(key, layerOfNode(node, d));
   }
   // Your order where you set one; anything that turned up live since keeps
   // its live place relative to the top.
@@ -109,12 +123,21 @@ export function reorderWithin(all: LayerKey[], some: LayerKey[]): LayerKey[] {
 export function pendingCount(live: SceneNode[], d: Draft): number {
   const layers = layersOf(live, d);
   let n = Object.keys(roomtoneChanges(live, d)).length > 0 ? 1 : 0;
+  n += removedOf(live, d).length;
   for (const l of layers) {
     if (l.muted !== l.node.muted || !sameMask(l.mask, l.node.mask ?? [])) n++;
   }
-  const liveOrder = liveShaders(live).map((n) => keyOf(n.id));
+  const liveOrder = liveShaders(live)
+    .map((n) => keyOf(n.id))
+    .filter((k) => !d.removed.includes(k));
   if (layers.map((l) => l.key).join() !== liveOrder.join()) n++;
   return n;
+}
+
+/** The shaders the draft takes out that are still in the room. */
+export function removedOf(live: SceneNode[], d: Draft): LayerKey[] {
+  const here = new Set(liveShaders(live).map((n) => keyOf(n.id)));
+  return d.removed.filter((k) => here.has(k));
 }
 
 // arclamp keeps channels as float32, so that's as close as a value can match.
@@ -182,6 +205,14 @@ export const drafts = {
   reorder(keysTopFirst: LayerKey[]) {
     set({ ...draft, order: keysTopFirst });
   },
+  /** Take a shader out of the room. */
+  remove(key: LayerKey) {
+    if (!draft.removed.includes(key)) set({ ...draft, removed: [...draft.removed, key] });
+  },
+  /** Keep a shader you were taking out. */
+  keep(key: LayerKey) {
+    set({ ...draft, removed: draft.removed.filter((k) => k !== key) });
+  },
   discard() {
     set(EMPTY);
   },
@@ -205,9 +236,9 @@ const ignoreMissing = async (p: Promise<unknown>) => {
 };
 
 /**
- * Make the room match the draft: room tone, then each shader's mute and
- * mask, then the stack's order. A failure part way leaves just the rest
- * pending, and is thrown.
+ * Make the room match the draft: room tone, then the shaders it takes out,
+ * then each other shader's mute and mask, then the stack's order. A failure
+ * part way leaves just the rest pending, and is thrown.
  */
 export async function applyDraft(live: SceneNode[]): Promise<void> {
   const start = draft;
@@ -240,6 +271,12 @@ async function sendDraft(live: SceneNode[], d: Draft, onStep: (next: Draft) => v
   step({ ...d, roomtone: {}, roomtoneCode: null });
 
   const order = layersOf(live, d).map((l) => l.key);
+
+  // Out, with whatever else was pending for them.
+  for (const key of d.removed) {
+    if (live.some((n) => keyOf(n.id) === key)) await ignoreMissing(request("DELETE", `/api/shaders/${idOf(key)}`));
+    step({ ...d, removed: d.removed.filter((k) => k !== key), edits: omit(d.edits, key) });
+  }
 
   for (const [key, patch] of Object.entries(d.edits)) {
     const id = idOf(key);

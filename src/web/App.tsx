@@ -2,7 +2,7 @@ import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } fr
 import type { Rail } from "../shared/arclamp.ts";
 import type { SceneNode } from "../shared/vibes.ts";
 import { useLights, useMe, useScene } from "./api.ts";
-import { applyDraft, layersOf, pendingCount, templateOf, useDraft } from "./draft.ts";
+import { applyDraft, layerOf, layersOf, pendingCount, templateOf, useDraft, type LayerKey } from "./draft.ts";
 import { Banners } from "./components/Banners.tsx";
 import { ColorPreview } from "./components/ColorPreview.tsx";
 import { Login } from "./components/Login.tsx";
@@ -16,7 +16,7 @@ import { useLiveStream } from "./live.ts";
 import { useNarrow } from "./narrow.ts";
 import { usePeek } from "./peek.ts";
 import { savedFloor, saveFloor, useLiveMode } from "./settings.ts";
-import { useSimulation } from "./sim.ts";
+import { reachOf, tryingOf, useLayerEffects, useSimulation } from "./sim.ts";
 import { usePath } from "./route.ts";
 import { SketchesLink, SketchPages } from "./sketches/SketchPages.tsx";
 
@@ -92,13 +92,28 @@ function Shell() {
     return new Set([...selected].filter((id) => ids.has(id)));
   }, [here, selected]);
 
+  // A shader opened from the selection panel, in its place: the map rings
+  // what it's changing instead of the selection (which is kept, to go back
+  // to). Anything selected on the map goes back to selecting lights. Gone
+  // from the room (taken out, by you or anyone), it closes.
+  const [shader, setShader] = useState<LayerKey | null>(null);
+  const effects = useLayerEffects();
+  const openLayer = shader && selectedHere.size > 0 ? layerOf(live, draft, shader) : null;
+  const reach = useMemo(() => {
+    if (!openLayer) return null;
+    const ids = new Set(reachOf(openLayer, tryingOf(openLayer, previewing, effects)));
+    return new Set(here.filter((l) => ids.has(l.id)).map((l) => l.id));
+  }, [openLayer, previewing, effects, here]);
+
   const showFloor = (id: number) => {
     setFloor(id);
     setSelected(new Set());
+    setShader(null);
     saveFloor(String(id));
   };
 
   const select = useCallback((ids: number[], mode: SelectMode) => {
+    setShader(null);
     setSelected((prev) => {
       if (mode === "replace") return new Set(ids);
       const next = new Set(prev);
@@ -120,13 +135,20 @@ function Shell() {
     [select],
   );
 
+  // With a shader open, picking on the map starts a new selection.
+  const open = openLayer !== null;
+  const selectOnMap = useCallback((ids: number[], mode: SelectMode) => select(ids, open ? "replace" : mode), [select, open]);
+
+  // Escape goes back from a shader to the selection, then lets go of it.
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setSelected(new Set());
+      if (e.key !== "Escape") return;
+      if (open) setShader(null);
+      else setSelected(new Set());
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
-  }, []);
+  }, [open]);
 
   // The map's own overlays (Move lights, the pending changes) sit under the
   // HUD, so it hands them its height as --hud-h; the selection panel sits
@@ -169,16 +191,27 @@ function Shell() {
             floor={floor}
             onFloor={showFloor}
             changed={lights.data?.changed ?? 0}
-            selected={selectedHere}
-            onSelect={select}
+            selected={reach ?? selectedHere}
+            onSelect={selectOnMap}
             dock={previewing && <Pending live={live} pending={pending} />}
             framing={framing}
-            corner={hasSelection && !narrow && <ColorPreview lights={here.filter((l) => selectedHere.has(l.id))} />}
+            corner={hasSelection && !open && !narrow && <ColorPreview lights={here.filter((l) => selectedHere.has(l.id))} />}
           />
         )}
       </main>
       {hasSelection && (
-        <SelectionPanel floor={floor} here={here} selected={selectedHere} previewing={previewing} onClose={() => setSelected(new Set())} />
+        <SelectionPanel
+          floor={floor}
+          here={here}
+          selected={selectedHere}
+          previewing={previewing}
+          shader={openLayer ? shader : null}
+          onShader={setShader}
+          onClose={() => {
+            setSelected(new Set());
+            setShader(null);
+          }}
+        />
       )}
       <div className="hud" ref={hud}>
         <Banners />
