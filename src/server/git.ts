@@ -1,6 +1,6 @@
 // Sketches' canonical repos, with the real git: making one with its first
-// commit, reading main's latest commit, and serving them over HTTP (git's
-// own http-backend) for boxes to clone from and push to.
+// commit, reading main's latest commit, serving them over HTTP (git's own
+// http-backend) for boxes to clone from and push to, and erasing one.
 
 import { execFile, spawn } from "node:child_process";
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
@@ -61,6 +61,9 @@ export async function createRepo(dir: string, id: string, author: Author, messag
     await rm(work, { recursive: true, force: true });
   }
 }
+
+/** Erases a repo, every branch and commit in it. */
+export const removeRepo = (dir: string, id: string) => rm(repoPath(dir, id), { recursive: true, force: true });
 
 /** main's latest commit: when (ms) and by whom. */
 export async function headOf(dir: string, id: string): Promise<{ at: number; by: string } | null> {

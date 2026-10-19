@@ -47,6 +47,31 @@
   margin-left: 0;
 }
 
+/* Deleting a sketch, from its bar, asked once more first. */
+.delete-sketch,
+.confirm-delete .quiet {
+  display: inline-flex;
+  align-items: center;
+  gap: 6px;
+  height: 30px;
+  font-size: 13px;
+}
+
+.confirm-delete {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 8px;
+  min-width: 0;
+  color: var(--ink-2);
+  font-size: 13px;
+}
+
+button.quiet.danger {
+  color: var(--warn);
+}
+
 .crumbs {
   display: flex;
   align-items: center;
@@ -170,6 +195,49 @@
 .card-meta {
   color: var(--mute);
   font-size: 12px;
+}
+
+/* Under the library: what's been deleted, to restore. */
+.recently-deleted {
+  margin-top: 56px;
+}
+
+.recently-deleted h2 {
+  font-size: 17px;
+  font-weight: 750;
+  font-variation-settings: "CASL" 1;
+}
+
+.recently-deleted p {
+  max-width: 640px;
+  margin-top: 4px;
+  color: var(--mute);
+  font-size: 13px;
+}
+
+.recently-deleted ul {
+  margin: 14px 0 0;
+  padding: 0;
+  list-style: none;
+}
+
+.recently-deleted li {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: baseline;
+  gap: 4px 12px;
+  padding: 10px 0;
+  border-top: 1px solid var(--line);
+}
+
+.recently-deleted .card-name {
+  margin: 0;
+  font-size: 14px;
+}
+
+.recently-deleted li button {
+  margin-left: auto;
+  align-self: center;
 }
 
 /* A sketch: its VS Code, under the bar, and covered while it's woken again. */

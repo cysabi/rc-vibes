@@ -1,16 +1,19 @@
 import { Hono } from "hono";
+import { existsSync } from "node:fs";
 import { mkdtemp, rm } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import type { BoxState, Me, Sketch } from "../shared/vibes.ts";
+import { SKETCH_RESTORE_DAYS, type BoxState, type Me, type Sketch } from "../shared/vibes.ts";
 import type { LightsSource } from "./api.ts";
 import type { AuthEnv } from "./auth.ts";
 import { boxToken, createBoxes, type Boxes } from "./boxes.ts";
 import { openDb, type Db } from "./db.ts";
 import { loadConfig, type Config } from "./env.ts";
 import { fakeBoxRunner } from "./fake-box-runner.ts";
-import { boxApiRoutes, sketchRoutes } from "./sketches.ts";
+import { boxApiRoutes, eraseDeleted, sketchRoutes } from "./sketches.ts";
+
+const RESTORE_MS = SKETCH_RESTORE_DAYS * 24 * 60 * 60_000;
 
 const ada: Me = { id: "rc:1", name: "Ada Lovelace", dev: false };
 const grace: Me = { id: "rc:2", name: "Grace", dev: false };
@@ -100,6 +103,66 @@ describe("sketches", () => {
     expect(db.boxFor(s.id, ada.id)?.branch).toBe("ada-lovelace");
     expect(db.boxFor(s.id, grace.id)?.branch).toBe("grace");
     expect(db.boxFor(s.id, otherAda.id)?.branch).toBe("ada-lovelace-2");
+  });
+});
+
+describe("deleting a sketch", () => {
+  const del = (id: string) => app.request(`/sketches/${id}`, { method: "DELETE", headers: { "content-type": "application/json" }, body: "{}" });
+  const restore = (id: string) => app.request(`/sketches/${id}/restore`, json({}));
+  const listed = async (path = "/sketches") => ((await (await app.request(path)).json()) as { sketches: Sketch[] }).sketches.map((s) => s.id);
+
+  it("is anyone's to do, and to undo", async () => {
+    as = ada;
+    const s = await make("Short-lived");
+    as = grace;
+    expect((await del(s.id)).status).toBe(200);
+    expect(await listed()).not.toContain(s.id);
+    expect(await listed("/sketches/deleted")).toContain(s.id);
+    const gone = (await (await app.request(`/sketches/${s.id}`)).json()) as Sketch;
+    expect(gone.deleted).toMatchObject({ by: "Grace" });
+    expect(gone.deleted!.erasedAt - gone.deleted!.at).toBe(RESTORE_MS);
+    // Nothing opens it meanwhile.
+    expect((await app.request(`/sketches/${s.id}/box`, json({}))).status).toBe(410);
+
+    as = ada;
+    expect((await restore(s.id)).status).toBe(200);
+    expect(await listed()).toContain(s.id);
+    expect(await listed("/sketches/deleted")).not.toContain(s.id);
+    expect(await open(s.id)).toMatchObject({ state: "ready" });
+  });
+
+  it("removes everyone's boxes for it, and their git with it", async () => {
+    as = ada;
+    const s = await make("Crowded");
+    const mine = await open(s.id);
+    as = grace;
+    const theirs = await open(s.id);
+    const ids = [db.boxFor(s.id, ada.id)!.id, db.boxFor(s.id, grace.id)!.id];
+    await del(s.id);
+    for (const state of [mine, theirs]) expect(fake.boxes.has((state as { run: string }).run)).toBe(false);
+    for (const id of ids) expect(boxes.target(id)).toBeNull();
+    const token = boxToken(config.sessionSecret, ids[0]!);
+    const basic = { authorization: `Basic ${Buffer.from(`box:${token}`).toString("base64")}` };
+    expect((await boxApi.request(`/git/${s.id}.git/info/refs?service=git-upload-pack`, { headers: basic })).status).toBe(404);
+  });
+
+  it("erases it all once it can't be restored", async () => {
+    as = ada;
+    const s = await make("Ephemeral");
+    await open(s.id);
+    const box = db.boxFor(s.id, ada.id)!.id;
+    await del(s.id);
+    const deletedAt = db.sketch(s.id)!.deleted_at!;
+
+    await eraseDeleted(config.sketches!, db, fake.runner, deletedAt + RESTORE_MS - 1);
+    expect(db.sketch(s.id)).toBeDefined();
+    expect(existsSync(path.join(dir, `${s.id}.git`))).toBe(true);
+
+    await eraseDeleted(config.sketches!, db, fake.runner, deletedAt + RESTORE_MS + 1);
+    expect(db.sketch(s.id)).toBeUndefined();
+    expect(db.box(box)).toBeUndefined();
+    expect(fake.homesRemoved.has(box)).toBe(true);
+    expect(existsSync(path.join(dir, `${s.id}.git`))).toBe(false);
   });
 });
 

@@ -255,6 +255,12 @@ ever be built from one of its commits. On while `SKETCHES=1`.
   Code…") and loads it afresh once it's ready: the files are in your home
   and the open tabs in the browser, so only undo history is lost. vibes
   restarting doesn't end boxes; it adopts them.
+- **Deleting.** Anyone can delete a sketch (from its page) and anyone can
+  restore it (from its page, or "Recently deleted" under the library) for
+  `SKETCH_RESTORE_DAYS` (30). Deleting removes everyone's boxes for it, and
+  nothing opens it meanwhile; its repo and everyone's homes are kept until
+  it's erased, hourly once the 30 days are up (the homes by a pod that only
+  removes them, since vibes can't reach them).
 - **Through vibes only.** `/box/<id>/…` is proxied to your box's VS Code, for
   you only (`src/server/box-proxy.ts`). The box never sees vibes' cookies,
   only its VS Code's connection token, which vibes adds (and sets for the

@@ -113,10 +113,31 @@ export const useSketches = () =>
 export const useSketch = (id: string) =>
   useQuery({ queryKey: ["sketches", id], queryFn: () => request<Sketch>("GET", `/api/sketches/${encodeURIComponent(id)}`) });
 
+/** The deleted sketches that can still be restored. */
+export const useDeletedSketches = () =>
+  useQuery({ queryKey: ["sketches", "deleted"], queryFn: () => request<{ sketches: Sketch[] }>("GET", "/api/sketches/deleted").then((r) => r.sketches) });
+
+const invalidateSketches = () => queryClient.invalidateQueries({ queryKey: ["sketches"] });
+
 export function useCreateSketch() {
   return useMutation({
     mutationFn: (name: string) => request<Sketch>("POST", "/api/sketches", { name }),
-    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["sketches"] }),
+    onSuccess: invalidateSketches,
+  });
+}
+
+/** Deletes a sketch, for everyone; it can be restored for a while. */
+export function useDeleteSketch() {
+  return useMutation({
+    mutationFn: (id: string) => request<Sketch>("DELETE", `/api/sketches/${encodeURIComponent(id)}`, {}),
+    onSuccess: invalidateSketches,
+  });
+}
+
+export function useRestoreSketch() {
+  return useMutation({
+    mutationFn: (id: string) => request<Sketch>("POST", `/api/sketches/${encodeURIComponent(id)}/restore`, {}),
+    onSuccess: invalidateSketches,
   });
 }
 
@@ -124,11 +145,17 @@ export function useCreateSketch() {
  * Your box for a sketch, started if it isn't running, and asked after until
  * it's ready (or has failed).
  */
-export const useBox = (sketchId: string) =>
+export const useBox = (sketchId: string, enabled: boolean) =>
   useQuery({
     queryKey: ["box", sketchId],
+    enabled,
     // A JSON body, so it's never taken for a form posted from another site.
-    queryFn: () => request<BoxState>("POST", `/api/sketches/${encodeURIComponent(sketchId)}/box`, {}),
+    // A sketch deleted meanwhile (410) is looked at again, to say so.
+    queryFn: () =>
+      request<BoxState>("POST", `/api/sketches/${encodeURIComponent(sketchId)}/box`, {}).catch((err: unknown) => {
+        if (err instanceof RequestError && err.status === 410) void invalidateSketches();
+        throw err;
+      }),
     // Asked again soon while it starts, to show it the moment it's ready, and
     // every half minute once it is: that keeps it (a box nothing's checked in
     // on for a while is removed), and finds out if it's gone. Only while the

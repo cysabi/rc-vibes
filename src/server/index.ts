@@ -12,7 +12,7 @@ import { createBoxProxy } from "./box-proxy.ts";
 import { createBoxes, type BoxRunner } from "./boxes.ts";
 import { openDb } from "./db.ts";
 import { loadConfig } from "./env.ts";
-import { boxApiRoutes, sketchRoutes } from "./sketches.ts";
+import { boxApiRoutes, eraseDeleted, sketchRoutes } from "./sketches.ts";
 import { createStreamRelay } from "./stream.ts";
 
 const config = loadConfig();
@@ -30,6 +30,13 @@ let runner: BoxRunner | null = null;
 if (sketches) runner = sketches.runner === "docker" ? dockerRunner(sketches) : (await import("./box-kube.ts")).kubernetesRunner(sketches);
 const boxes = sketches && runner ? createBoxes(config, sketches, db, runner) : null;
 const proxy = boxes ? createBoxProxy(config, db, boxes) : null;
+// Deleted sketches past restoring, erased now and then.
+const erase = () => {
+  if (sketches && runner) eraseDeleted(sketches, db, runner).catch((err) => console.error("couldn't erase deleted sketches:", err));
+};
+erase();
+const erasing = setInterval(erase, 60 * 60_000);
+erasing.unref();
 
 const app = new Hono();
 app.onError(handleError);
@@ -72,6 +79,7 @@ server.on("upgrade", (req: http.IncomingMessage, socket, head) => {
 function shutdown() {
   relay.stop();
   boxes?.stop();
+  clearInterval(erasing);
   for (const ws of sockets.clients) ws.terminate();
   server.close(() => {
     db.close();

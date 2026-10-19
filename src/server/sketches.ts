@@ -1,22 +1,28 @@
 // Sketches: code made in vibes, each a git repo whose main is the sketch.
 // /api/sketches lists them, makes them (with a first commit to start from),
-// and opens your box for one. Boxes, with their own token, clone and push over
-// /git/<id>.git, and get the lights' layout for their preview from
-// /box-api/layout.
+// deletes and restores them, and opens your box for one. Boxes, with their
+// own token, clone and push over /git/<id>.git, and get the lights' layout for
+// their preview from /box-api/layout.
+//
+// Anyone can delete a sketch, and anyone can restore it for
+// SKETCH_RESTORE_DAYS after: deleting removes everyone's boxes for it, but keeps its repo and
+// their homes (with whatever they hadn't pushed). Only then is it all erased.
 
 import { zValidator } from "@hono/zod-validator";
 import { Hono, type Context } from "hono";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import type { Me, Sketch } from "../shared/vibes.ts";
+import { SKETCH_RESTORE_DAYS, type Me, type Sketch } from "../shared/vibes.ts";
 import type { LightsSource } from "./api.ts";
 import type { AuthEnv } from "./auth.ts";
-import { boxOfToken, type Boxes } from "./boxes.ts";
+import { boxOfToken, removeHomes, type BoxRunner, type Boxes } from "./boxes.ts";
 import type { Db, SketchRow } from "./db.ts";
 import type { Config, SketchesConfig } from "./env.ts";
-import { createRepo, headOf, serveGit } from "./git.ts";
+import { createRepo, headOf, removeRepo, serveGit } from "./git.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+const RESTORE_MS = SKETCH_RESTORE_DAYS * 24 * 60 * 60_000;
 
 const badBody = (result: { success: boolean; error?: unknown }, c: Context) => {
   if (!result.success) {
@@ -40,6 +46,7 @@ export function sketchRoutes(sketches: SketchesConfig, db: Db, boxes: Boxes) {
       createdAt: row.at,
       updatedAt: head?.at ?? row.at,
       updatedBy: head?.by ?? row.by_name,
+      ...(row.deleted_at !== null ? { deleted: { at: row.deleted_at, by: row.deleted_by_name ?? "", erasedAt: row.deleted_at + RESTORE_MS } } : {}),
     };
   }
 
@@ -50,12 +57,15 @@ export function sketchRoutes(sketches: SketchesConfig, db: Db, boxes: Boxes) {
       return c.json({ sketches: list });
     })
 
+    /** The deleted ones not erased yet, to restore. */
+    .get("/deleted", async (c) => c.json({ sketches: await Promise.all(db.deletedSketches().map(summary)) }))
+
     .post("/", zValidator("json", z.object({ name: z.string().trim().min(1).max(80) }), badBody), async (c) => {
       const user = c.get("user");
       const { name } = c.req.valid("json");
       const id = randomUUID();
       await createRepo(sketches.dir, id, authorOf(user), `Start ${name}`, starter(name));
-      const row: SketchRow = { id, name, by_id: user.id, by_name: user.name, at: Date.now() };
+      const row: SketchRow = { id, name, by_id: user.id, by_name: user.name, at: Date.now(), deleted_at: null, deleted_by_id: null, deleted_by_name: null };
       db.addSketch(row);
       return c.json(await summary(row), 201);
     })
@@ -65,11 +75,40 @@ export function sketchRoutes(sketches: SketchesConfig, db: Db, boxes: Boxes) {
       return row ? c.json(await summary(row)) : notFound(c);
     })
 
+    .delete("/:id", async (c) => {
+      const row = db.sketch(c.req.param("id"));
+      if (!row) return notFound(c);
+      if (row.deleted_at === null) {
+        db.deleteSketch(row.id, c.get("user"), Date.now());
+        boxes.closeSketch(row.id);
+      }
+      return c.json(await summary(db.sketch(row.id)!));
+    })
+
+    .post("/:id/restore", async (c) => {
+      const row = db.sketch(c.req.param("id"));
+      if (!row) return notFound(c);
+      db.restoreSketch(row.id);
+      return c.json(await summary(db.sketch(row.id)!));
+    })
+
     .post("/:id/box", async (c) => {
       const row = db.sketch(c.req.param("id"));
       if (!row) return notFound(c);
+      if (row.deleted_at !== null) return c.json({ error: "this sketch was deleted", code: "deleted" }, 410);
       return c.json(await boxes.ensure(row.id, c.get("user")));
     });
+}
+
+/** Erases the sketches deleted more than SKETCH_RESTORE_DAYS ago: their repos, everyone's homes for them, and their rows. */
+export async function eraseDeleted(sketches: SketchesConfig, db: Db, runner: BoxRunner, now = Date.now()) {
+  for (const row of db.deletedSketches()) {
+    if (row.deleted_at! + RESTORE_MS > now) continue;
+    await removeHomes(runner, db.boxesOf(row.id).map((b) => b.id));
+    await removeRepo(sketches.dir, row.id);
+    db.eraseSketch(row.id);
+    console.log(`erased sketch ${row.id} (${row.name}), deleted by ${row.deleted_by_name} on ${new Date(row.deleted_at!).toISOString()}`);
+  }
 }
 
 /** What boxes ask vibes for, with their own token: git, and the lights' layout. */
@@ -90,7 +129,8 @@ export function boxApiRoutes(config: Config, sketches: SketchesConfig, db: Db, l
   return new Hono()
     .all("/git/:repo/*", async (c) => {
       const repo = /^(.+)\.git$/.exec(c.req.param("repo"))?.[1] ?? "";
-      if (!UUID.test(repo) || !db.sketch(repo)) return c.text("no such sketch", 404);
+      const sketch = UUID.test(repo) ? db.sketch(repo) : undefined;
+      if (!sketch || sketch.deleted_at !== null) return c.text("no such sketch", 404);
       const box = boxOf(c);
       // A box may use its own sketch's repo, and only that.
       if (!box || box.sketch_id !== repo) return denied(c);

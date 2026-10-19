@@ -46,6 +46,16 @@ export interface BoxRunner {
   remove(name: string): Promise<void>;
   /** The boxes there are now, and whether each is from `image`. */
   list(image: string): Promise<{ name: string; current: boolean }[]>;
+  /** Erases these boxes' homes, for good. */
+  removeHomes(ids: string[]): Promise<void>;
+}
+
+const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
+
+/** Erases these boxes' homes, after checking each is a box's id (and so names nothing else). */
+export async function removeHomes(runner: BoxRunner, ids: string[]) {
+  if (!ids.every((id) => UUID.test(id))) throw new Error("those aren't all boxes");
+  if (ids.length) await runner.removeHomes(ids);
 }
 
 const mac = (secret: string, purpose: string, id: string) => createHmac("sha256", secret).update(`${purpose}:${id}`).digest("base64url");
@@ -240,6 +250,11 @@ export function createBoxes(config: Config, sketches: SketchesConfig, db: Db, ru
       w = await claimFor(box);
       const { target } = w;
       await until(w.name, () => answers(target, box.id), CLAIM_TIMEOUT_MS, "its VS Code didn't start answering in time");
+      // Let go of meanwhile (its sketch was deleted): it goes too.
+      if (live.get(box.id) !== l) {
+        void removeBox(w.name);
+        return;
+      }
       Object.assign(l, { state: "ready", pod: w.name, target });
     } catch (err) {
       console.error(`box ${box.id} didn't start:`, err);
@@ -313,6 +328,16 @@ export function createBoxes(config: Config, sketches: SketchesConfig, db: Db, ru
       }
       l.seen = Date.now();
       return view(l);
+    },
+
+    /** Removes everyone's boxes for a sketch, running or starting (their homes are kept). */
+    closeSketch(sketchId: string) {
+      for (const box of db.boxesOf(sketchId)) {
+        const l = live.get(box.id);
+        live.delete(box.id);
+        if (l?.pod) void removeBox(l.pod);
+        db.setBoxPod(box.id, null);
+      }
     },
 
     /** Where to send a request for a box, if it's running. */

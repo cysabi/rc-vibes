@@ -60,6 +60,9 @@ export interface Status {
   sketches: boolean;
 }
 
+/** How long anyone can restore a deleted sketch, before it's erased for good. */
+export const SKETCH_RESTORE_DAYS = 30;
+
 /** A sketch: code made in vibes, kept as a git repo whose `main` is the sketch. */
 export interface Sketch {
   id: string;
@@ -69,6 +72,11 @@ export interface Sketch {
   /** The latest commit on main: when, and by whom (the commit's author). */
   updatedAt: number;
   updatedBy: string;
+  /**
+   * If it's been deleted: when, by whom, and when it'll be erased (until
+   * then, anyone can restore it).
+   */
+  deleted?: { at: number; by: string; erasedAt: number };
 }
 
 /**

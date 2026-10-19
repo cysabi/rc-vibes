@@ -4,7 +4,7 @@
 
 import { DatabaseSync } from "node:sqlite";
 import type { RailShape } from "../shared/rails.ts";
-import type { ActivityAction, ActivityEntry, Person, Spot } from "../shared/vibes.ts";
+import type { ActivityAction, ActivityEntry, Me, Person, Spot } from "../shared/vibes.ts";
 
 interface ActivityRow {
   id: number;
@@ -81,6 +81,7 @@ export function openDb(path: string) {
       detail TEXT
     );
     -- Sketches: each is a git repo, <sketches dir>/<id>.git; its name lives here.
+    -- A deleted one keeps its row (deleted_at, deleted_by_*) until it's erased.
     CREATE TABLE IF NOT EXISTS sketches (
       id TEXT PRIMARY KEY,
       name TEXT NOT NULL,
@@ -108,6 +109,10 @@ export function openDb(path: string) {
   }
   const boxColumns = db.prepare("PRAGMA table_info(boxes)").all() as { name: string }[];
   if (!boxColumns.some((c) => c.name === "pod")) db.exec("ALTER TABLE boxes ADD COLUMN pod TEXT");
+  const sketchColumns = db.prepare("PRAGMA table_info(sketches)").all() as { name: string }[];
+  if (!sketchColumns.some((c) => c.name === "deleted_at")) {
+    db.exec("ALTER TABLE sketches ADD COLUMN deleted_at INTEGER; ALTER TABLE sketches ADD COLUMN deleted_by_id TEXT; ALTER TABLE sketches ADD COLUMN deleted_by_name TEXT");
+  }
 
   const selectPlacements = db.prepare("SELECT light_id, mm_x, mm_y, floor, rail_id, mm_along FROM placements");
   const upsertPlacement = db.prepare(`
@@ -142,7 +147,13 @@ export function openDb(path: string) {
   const selectActivity = db.prepare("SELECT * FROM activity ORDER BY id DESC LIMIT ?");
   const lastActivity = db.prepare("SELECT * FROM activity ORDER BY id DESC LIMIT 1");
   const updateActivity = db.prepare("UPDATE activity SET ts = ?, detail = ? WHERE id = ?");
-  const selectSketches = db.prepare("SELECT * FROM sketches ORDER BY at DESC");
+  const selectSketches = db.prepare("SELECT * FROM sketches WHERE deleted_at IS NULL ORDER BY at DESC");
+  const selectDeletedSketches = db.prepare("SELECT * FROM sketches WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC");
+  const markSketchDeleted = db.prepare("UPDATE sketches SET deleted_at = ?, deleted_by_id = ?, deleted_by_name = ? WHERE id = ? AND deleted_at IS NULL");
+  const unmarkSketchDeleted = db.prepare("UPDATE sketches SET deleted_at = NULL, deleted_by_id = NULL, deleted_by_name = NULL WHERE id = ?");
+  const deleteSketchRow = db.prepare("DELETE FROM sketches WHERE id = ?");
+  const selectBoxesOf = db.prepare("SELECT * FROM boxes WHERE sketch_id = ?");
+  const deleteBoxesOf = db.prepare("DELETE FROM boxes WHERE sketch_id = ?");
   const selectSketch = db.prepare("SELECT * FROM sketches WHERE id = ?");
   const insertSketch = db.prepare("INSERT INTO sketches (id, name, by_id, by_name, at) VALUES (?, ?, ?, ?, ?)");
   const selectBox = db.prepare("SELECT * FROM boxes WHERE id = ?");
@@ -300,14 +311,37 @@ export function openDb(path: string) {
       }));
     },
 
-    /** Every sketch, newest first. */
+    /** Every sketch that isn't deleted, newest first. */
     sketches: () => selectSketches.all() as unknown as SketchRow[],
 
+    /** The deleted sketches not erased yet, the most recently deleted first. */
+    deletedSketches: () => selectDeletedSketches.all() as unknown as SketchRow[],
+
+    /** A sketch, deleted or not. */
     sketch: (id: string) => selectSketch.get(id) as SketchRow | undefined,
 
-    addSketch(s: SketchRow) {
+    addSketch(s: Omit<SketchRow, "deleted_at" | "deleted_by_id" | "deleted_by_name">) {
       insertSketch.run(s.id, s.name, s.by_id, s.by_name, s.at);
     },
+
+    deleteSketch(id: string, by: Me, at: number) {
+      markSketchDeleted.run(at, by.id, by.name, id);
+    },
+
+    restoreSketch(id: string) {
+      unmarkSketchDeleted.run(id);
+    },
+
+    /** Forgets a sketch for good, with everyone's boxes for it. */
+    eraseSketch(id: string) {
+      transaction(() => {
+        deleteBoxesOf.run(id);
+        deleteSketchRow.run(id);
+      });
+    },
+
+    /** Everyone's boxes for a sketch. */
+    boxesOf: (sketchId: string) => selectBoxesOf.all(sketchId) as unknown as BoxRow[],
 
     box: (id: string) => selectBox.get(id) as BoxRow | undefined,
 
@@ -339,6 +373,10 @@ export interface SketchRow {
   by_name: string;
   /** When it was made, in ms. */
   at: number;
+  /** When it was deleted, and by whom, if it has been. */
+  deleted_at: number | null;
+  deleted_by_id: string | null;
+  deleted_by_name: string | null;
 }
 
 export interface BoxRow {

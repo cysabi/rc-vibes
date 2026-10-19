@@ -5,6 +5,7 @@
 // claimed for from. vibes talks to the cluster's API as its own service
 // account, which may only manage pods there (.kube/boxes.yaml).
 
+import { randomBytes } from "node:crypto";
 import { readFileSync } from "node:fs";
 import https from "node:https";
 import type { BoxRunner } from "./boxes.ts";
@@ -130,6 +131,48 @@ export function kubernetesRunner(sketches: SketchesConfig): BoxRunner {
 
     async remove(name) {
       await check("removing the box", kube("DELETE", `${pods}/${name}`), [200, 202, 404]);
+    },
+
+    // A pod of its own, which only removes them: the homes are on the machine,
+    // where vibes can't reach.
+    async removeHomes(ids) {
+      const name = `homes-gone-${randomBytes(4).toString("hex")}`;
+      await check(
+        "making the pod that erases homes",
+        kube("POST", pods, {
+          metadata: { name, labels: { app: "vibes-homes-gone" } },
+          spec: {
+            ...(sketches.runtimeClass ? { runtimeClassName: sketches.runtimeClass } : {}),
+            automountServiceAccountToken: false,
+            enableServiceLinks: false,
+            restartPolicy: "Never",
+            containers: [
+              {
+                name: "rm",
+                image: sketches.image,
+                imagePullPolicy: "IfNotPresent",
+                command: ["rm", "-rf", ...ids.map((id) => `/homes/${id}`)],
+                // Root, able to remove what's the person's (uid 1000).
+                securityContext: { runAsUser: 0, runAsGroup: 0, capabilities: { drop: ["ALL"], add: ["DAC_OVERRIDE"] } },
+                volumeMounts: [{ name: "homes", mountPath: "/homes" }],
+              },
+            ],
+            volumes: [{ name: "homes", hostPath: { path: sketches.homes, type: "DirectoryOrCreate" } }],
+          },
+        }),
+      );
+      try {
+        const deadline = Date.now() + RUNNING_TIMEOUT_MS;
+        for (;;) {
+          const phase = (await getPod(name))?.status.phase;
+          if (phase === "Succeeded") return;
+          if (phase === "Failed") throw new Error("erasing the homes failed");
+          if (Date.now() > deadline) throw new Error("erasing the homes didn't finish in time");
+          await new Promise((r) => setTimeout(r, 1000));
+        }
+      } finally {
+        await kube("DELETE", `${pods}/${name}`);
+      }
     },
 
     async list(image) {

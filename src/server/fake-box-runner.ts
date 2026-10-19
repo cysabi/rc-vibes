@@ -19,6 +19,7 @@ export interface FakeBox {
 export function fakeBoxRunner() {
   const boxes = new Map<string, FakeBox>();
   const ended = new Set<string>();
+  const homesRemoved = new Set<string>();
 
   const end = (name: string) => {
     const b = boxes.get(name);
@@ -55,11 +56,16 @@ export function fakeBoxRunner() {
       boxes.delete(name);
     },
     list: async (image) => [...boxes].map(([name, b]) => ({ name, current: b.image === image })),
+    async removeHomes(ids) {
+      for (const id of ids) homesRemoved.add(id);
+    },
   };
 
   return {
     runner,
     boxes,
+    /** The homes it's been asked to erase. */
+    homesRemoved,
     /** Ends a box behind vibes' back (it's still listed, but not running). */
     crash(name: string) {
       ended.add(name);

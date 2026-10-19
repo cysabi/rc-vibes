@@ -4,10 +4,22 @@
 // extension in box/extension), so this page is just the way in.
 
 import { useState, type FormEvent, type MouseEvent, type ReactNode } from "react";
-import { useBox, useCreateSketch, useLights, useSketch, useSketches, useStatus } from "../api.ts";
+import { SKETCH_RESTORE_DAYS, type Sketch } from "../../shared/vibes.ts";
+import {
+  RequestError,
+  useBox,
+  useCreateSketch,
+  useDeletedSketches,
+  useDeleteSketch,
+  useLights,
+  useRestoreSketch,
+  useSketch,
+  useSketches,
+  useStatus,
+} from "../api.ts";
 import { Brand } from "../components/Brand.tsx";
 import { UserMenu } from "../components/UserMenu.tsx";
-import { PlusIcon } from "../icons.tsx";
+import { PlusIcon, TrashIcon } from "../icons.tsx";
 import { navigate } from "../route.ts";
 import "./sketches.css";
 
@@ -41,7 +53,7 @@ export function SketchPages({ path }: { path: string }) {
   return id ? <SketchPage id={id} /> : <Library />;
 }
 
-function TopBar({ children }: { children: ReactNode }) {
+function TopBar({ children, actions }: { children: ReactNode; actions?: ReactNode }) {
   const lights = useLights();
   return (
     <header className="page-bar">
@@ -50,6 +62,7 @@ function TopBar({ children }: { children: ReactNode }) {
       </Link>
       {children}
       <span className="spacer" />
+      {actions}
       <UserMenu />
     </header>
   );
@@ -93,8 +106,36 @@ function Library() {
             </li>
           ))}
         </ul>
+        <RecentlyDeleted />
       </main>
     </div>
+  );
+}
+
+/** Deleted sketches, for anyone to bring back until they're erased. */
+function RecentlyDeleted() {
+  const deleted = useDeletedSketches();
+  const restore = useRestoreSketch();
+  if (!deleted.data?.length) return null;
+  return (
+    <section className="recently-deleted">
+      <h2>Recently deleted</h2>
+      <p>Anyone can restore these for {SKETCH_RESTORE_DAYS} days after they're deleted. Then they're gone for good, with everyone's copies.</p>
+      <ul>
+        {deleted.data.map((s) => (
+          <li key={s.id}>
+            <span className="card-name">{s.name}</span>
+            <span className="card-meta">
+              deleted {ago(s.deleted!.at)} by {s.deleted!.by}
+            </span>
+            <button className="quiet" disabled={restore.isPending} onClick={() => restore.mutate(s.id)}>
+              Restore
+            </button>
+          </li>
+        ))}
+      </ul>
+      {restore.isError && <p className="error-text">Couldn't restore it: {restore.error.message}</p>}
+    </section>
   );
 }
 
@@ -128,9 +169,40 @@ function NewSketch() {
   );
 }
 
+/** Deleting a sketch, from its page: asked once more first, in the bar. */
+function DeleteSketch({ sketch }: { sketch: Sketch }) {
+  const [asking, setAsking] = useState(false);
+  const remove = useDeleteSketch();
+  if (!asking) {
+    return (
+      <button className="quiet delete-sketch" onClick={() => setAsking(true)}>
+        <TrashIcon /> Delete
+      </button>
+    );
+  }
+  return (
+    <div className="confirm-delete">
+      <span>
+        Delete <b>{sketch.name}</b> for everyone? Anyone can restore it for {SKETCH_RESTORE_DAYS} days.
+      </span>
+      <button className="quiet danger" disabled={remove.isPending} onClick={() => remove.mutate(sketch.id, { onSuccess: () => navigate("/sketches") })}>
+        Delete it
+      </button>
+      <button className="quiet" onClick={() => setAsking(false)}>
+        Cancel
+      </button>
+      {remove.isError && <span className="error-text">{remove.error.message}</span>}
+    </div>
+  );
+}
+
 function SketchPage({ id }: { id: string }) {
   const sketch = useSketch(id);
-  const box = useBox(id);
+  const deleted = sketch.data?.deleted;
+  const restore = useRestoreSketch();
+  // Not opened once it's deleted. (Asked for before the sketch itself is
+  // known, so VS Code starts as soon as it can.)
+  const box = useBox(id, !deleted);
   // The run of the box VS Code was loaded from. A box gone since (removed
   // while the page was out of sight, or ended) starts again as a new run,
   // whose VS Code can't carry on with the old one's page: it's loaded afresh
@@ -139,7 +211,9 @@ function SketchPage({ id }: { id: string }) {
   const [shown, setShown] = useState<{ run: string; url: string } | null>(null);
   const ready = box.data?.state === "ready" ? box.data : null;
   if (ready && ready.run !== shown?.run) setShown({ run: ready.run, url: ready.url });
-  const failed = box.data?.state === "failed" ? box.data.error : box.isError ? box.error.message : null;
+  // Deleted meanwhile is said below, once the sketch has been looked at again.
+  const goneMeanwhile = box.error instanceof RequestError && box.error.status === 410;
+  const failed = box.data?.state === "failed" ? box.data.error : box.isError && !goneMeanwhile ? box.error.message : null;
   const failure = failed !== null && (
     <>
       Couldn't start your VS Code: {failed}.{" "}
@@ -150,7 +224,7 @@ function SketchPage({ id }: { id: string }) {
   );
   return (
     <div className="sketch-page">
-      <TopBar>
+      <TopBar actions={sketch.data && !deleted && <DeleteSketch sketch={sketch.data} />}>
         <nav className="crumbs">
           <Link to="/">Room</Link>
           <span className="crumb-sep">/</span>
@@ -162,6 +236,15 @@ function SketchPage({ id }: { id: string }) {
       {sketch.isError ? (
         <Notice>
           Couldn't open this sketch: {sketch.error.message}. <Link to="/sketches">All sketches</Link>
+        </Notice>
+      ) : deleted ? (
+        <Notice>
+          <b>{sketch.data!.name}</b> was deleted {ago(deleted.at)} by {deleted.by}. Anyone can restore it until{" "}
+          {new Date(deleted.erasedAt).toLocaleDateString(undefined, { month: "long", day: "numeric" })}.{" "}
+          <button className="quiet" disabled={restore.isPending} onClick={() => restore.mutate(id)}>
+            Restore it
+          </button>{" "}
+          <Link to="/sketches">All sketches</Link>
         </Notice>
       ) : shown ? (
         <div className="box-stage">
