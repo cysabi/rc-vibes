@@ -41,7 +41,6 @@ const TINT_MAX = 0.1;
 const TINT_SHOWN = 0.04;
 const tintAt = (y: number) => y * TINT_SHOWN;
 const heightOf = (tint: number) => Math.max(-1, Math.min(1, tint / TINT_SHOWN));
-const TICK_MS = 250;
 
 interface Props {
   /** The selected lights. */
@@ -54,14 +53,26 @@ interface Spot {
 }
 
 export function ColorPreview({ lights }: Props) {
-  // A fresh look at the room a few times a second.
+  // The room as it changes: drawn again with each new frame, at most once a
+  // frame on the screen.
+  const frames = useFrames();
   const [, tick] = useState(0);
   useEffect(() => {
-    const t = window.setInterval(() => tick((n) => n + 1), TICK_MS);
-    return () => window.clearInterval(t);
-  }, []);
+    let raf = 0;
+    const off = frames.subscribe(() => {
+      if (raf) return;
+      raf = requestAnimationFrame(() => {
+        raf = 0;
+        tick((n) => n + 1);
+      });
+    });
+    return () => {
+      off();
+      cancelAnimationFrame(raf);
+    };
+  }, [frames]);
   const gamut = useGamut();
-  const frame = useFrames().latest();
+  const frame = frames.latest();
 
   const colored: Spot[] = [];
   let oldOn = 0;

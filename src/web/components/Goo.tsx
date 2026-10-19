@@ -321,9 +321,12 @@ export function Goo({ marks, width, height, gamut }: Props) {
     };
   }, [width, height, gamut]);
 
-  // Where each ball should be: new ones grow in where they are, gone ones shrink away.
+  // Where each ball should be: new ones grow in where they are, gone ones
+  // shrink away. This runs with every frame of the room, so the goo is drawn
+  // again only when a ball has somewhere new to go.
   useEffect(() => {
     const here = new Set<string>();
+    let changed = false;
     for (const g of marks) {
       here.add(g.key);
       const n = g.ids.length;
@@ -331,11 +334,17 @@ export function Goo({ marks, width, height, gamut }: Props) {
       const cluster = n > 1 && g.into ? g.into.key : g.key;
       const to = { x: g.x + PAD, y: g.y + PAD, r: sizeOf(n) / 2, rgb: swatch(g.t.a, g.t.b, gamut), alpha: g.dim ? 0.5 : 1, n, cluster };
       const b = balls.current.get(g.key);
-      if (b) b.to = to;
-      else balls.current.set(g.key, { ...to, r: 0, to });
+      if (!b) balls.current.set(g.key, { ...to, r: 0, to });
+      else if (!sameLook(b.to, to)) b.to = to;
+      else continue;
+      changed = true;
     }
-    for (const [key, b] of balls.current) if (!here.has(key)) b.to = { ...b.to, r: 0 };
-    kick.current();
+    for (const [key, b] of balls.current) {
+      if (here.has(key) || b.to.r === 0) continue;
+      b.to = { ...b.to, r: 0 };
+      changed = true;
+    }
+    if (changed) kick.current();
   });
 
   return (
@@ -373,3 +382,6 @@ export function Goo({ marks, width, height, gamut }: Props) {
 }
 
 const clamp = (v: number) => Math.min(1, Math.max(0, v));
+
+const sameLook = (a: Look, b: Look) =>
+  a.x === b.x && a.y === b.y && a.r === b.r && a.alpha === b.alpha && a.n === b.n && a.cluster === b.cluster && a.rgb.every((v, i) => v === b.rgb[i]);
