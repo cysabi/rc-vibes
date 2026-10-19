@@ -6,6 +6,7 @@ import { zValidator } from "@hono/zod-validator";
 import { Hono, type Context, type ErrorHandler } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HTTPException } from "hono/http-exception";
+import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 import { normalizeLights, type LightsResponse, type ShaderDescriptor } from "../shared/arclamp.ts";
 import { orientationsOf } from "../shared/fixtures.ts";
@@ -16,8 +17,9 @@ import { ArclampError, type Arclamp } from "./arclamp.ts";
 import { requireUser, type AuthEnv } from "./auth.ts";
 import type { Db } from "./db.ts";
 import type { Config } from "./env.ts";
-import { instanceRoutes } from "./instances.ts";
+import { instanceRoutes, type Instances } from "./instances.ts";
 import { applyEdits, lightsFile } from "./lights.ts";
+import type { SceneFeedSource } from "./scene-feed.ts";
 import { sketchOf } from "./stamp.ts";
 import type { StreamRelay } from "./stream.ts";
 
@@ -36,9 +38,16 @@ export interface ApiDeps {
   relay: StreamRelay;
   origins: string[];
   lights: LightsSource;
-  /** Sketches' routes, while sketches are on. */
+  /** The scene, as pushed to browsers. */
+  feed: SceneFeedSource;
+  /** Sketches' routes, and their instances in the room, while sketches are on. */
   sketches: Hono<AuthEnv> | null;
+  instances?: Instances | null;
 }
+
+// An event stream says something at least this often (a ping, if nothing
+// else), so a browser can tell one that's gone quiet from one that's dead.
+const STREAM_PING_MS = 10_000;
 
 /**
  * The lights as vibes has them: arclamp's (asked for at most once a minute),
@@ -99,7 +108,7 @@ const badBody = (result: { success: boolean; error?: unknown }, c: Context) => {
   }
 };
 
-export function apiRoutes({ config, arclamp, db, relay, origins, lights, sketches }: ApiDeps) {
+export function apiRoutes({ config, arclamp, db, relay, origins, lights, feed, sketches, instances = null }: ApiDeps) {
   const api = new Hono<AuthEnv>();
   api.onError(handleError);
   // Browsers already refuse cross-site JSON requests without CORS headers,
@@ -116,12 +125,17 @@ export function apiRoutes({ config, arclamp, db, relay, origins, lights, sketche
     await next();
   });
   api.use("*", requireUser(config));
+  // Whatever's changed through vibes reaches the scene feed now, not on its next look.
+  api.use("*", async (c, next) => {
+    await next();
+    if (c.req.method !== "GET" && c.res.status < 400) feed.poke();
+  });
 
   const { arclampLights, currentLights } = lights;
   if (sketches) {
     api.route("/sketches", sketches);
     // Sketches' builds, in the room.
-    api.route("/", instanceRoutes(config, arclamp, db));
+    api.route("/", instanceRoutes(config, arclamp, db, instances));
   }
 
   const nameOf = (d: ShaderDescriptor) => `Shader #${d.id}`;
@@ -264,6 +278,36 @@ export function apiRoutes({ config, arclamp, db, relay, origins, lights, sketche
       return c.json(scene);
     })
 
+    // The scene feed (scene-feed.ts): as it is, then each time it changes.
+    .get("/scene/events", (c) => {
+      c.header("Cache-Control", "no-cache");
+      // Proxies that buffer (nginx) pass it straight through.
+      c.header("X-Accel-Buffering", "no");
+      return streamSSE(c, async (stream) => {
+        const send = (json: string) => stream.writeSSE({ event: "scene", data: json });
+        let unsubscribe = () => {};
+        stream.onAbort(() => unsubscribe());
+        const now = feed.current() ?? (await feed.refresh(), feed.current());
+        if (now) await send(now.json);
+        unsubscribe = feed.subscribe((_feed, json) => void send(json).catch(() => {}));
+        while (!stream.aborted) {
+          await stream.sleep(STREAM_PING_MS);
+          if (!stream.aborted) await stream.writeSSE({ event: "ping", data: "" });
+        }
+        unsubscribe();
+      });
+    })
+
+    // The scene feed, looked at again now: for a browser that's just changed it.
+    .get("/scene/live", async (c) => c.json(await feed.refresh()))
+
+    // Shaders' scripts, by hash (?hashes=a,b), for the preview: the feed leaves them out.
+    .get("/scene/scripts", (c) => {
+      const all = feed.scripts();
+      const wanted = (c.req.query("hashes") ?? "").split(",").filter((h) => all.has(h));
+      return c.json(Object.fromEntries(wanted.map((h) => [h, all.get(h)!])));
+    })
+
     .get("/health", async (c) => c.json(await arclamp.health()))
 
     .get("/activity", (c) => {
@@ -311,7 +355,9 @@ export function apiRoutes({ config, arclamp, db, relay, origins, lights, sketche
       async (c) => {
         const user = c.get("user");
         const { id } = c.req.valid("param");
-        const mask = [...new Set(c.req.valid("json").mask)].sort((a, b) => a - b);
+        const asked = [...new Set(c.req.valid("json").mask)].sort((a, b) => a - b);
+        // An instance stays masked off everything outside its home.
+        const mask = instances ? await instances.within(id, asked) : asked;
         const d = await arclamp.shader(id);
         await arclamp.setMask(id, mask);
         db.log({ user, action: "shader.mask", shaderId: id, shaderName: nameOf(d), detail: { lights: mask.length } });

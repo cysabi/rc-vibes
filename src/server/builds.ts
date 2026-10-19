@@ -81,6 +81,9 @@ export function checkScript(script: string): string | null {
 
 const podOf = (id: string) => `build-${id}`;
 
+/** A tool's message without its terminal colors (Vite's, say), for a page to show. */
+export const plainText = (s: string) => s.replace(/\u001b\[[0-9;?]*[A-Za-z]/g, "");
+
 export function view(row: BuildRow, withLog = false): Build {
   return {
     id: row.id,
@@ -101,8 +104,17 @@ export function createBuilds(config: Config, sketches: SketchesConfig, db: Db, r
   const removePod = (id: string, after = 0) =>
     setTimeout(() => runner.removeBuild(podOf(id)).catch((err) => console.error(`couldn't remove build ${id}:`, err)), after).unref();
 
+  // Told of each build as it ends, built or not (instances waiting on it).
+  const finished = new Set<(id: string) => void>();
+  const ended = (id: string) => {
+    for (const listener of finished) listener(id);
+  };
+
   function fail(id: string, error: string, log: string | null = null, plan: string | null = null) {
-    if (db.finishBuild(id, { state: "failed", finished_at: Date.now(), plan, error, log, script: null })) console.error(`build ${id} failed: ${error}`);
+    if (db.finishBuild(id, { state: "failed", finished_at: Date.now(), plan, error: plainText(error), log, script: null })) {
+      console.error(`build ${id} failed: ${error}`);
+      ended(id);
+    }
     removePod(id);
   }
 
@@ -114,7 +126,7 @@ export function createBuilds(config: Config, sketches: SketchesConfig, db: Db, r
     .catch((err) => console.error("couldn't clear old builds:", err));
 
   // A build that's stopped with nothing sent back, or taken too long, has failed.
-  const ended = new Map<string, number>();
+  const stoppedAt = new Map<string, number>();
   const watch = setInterval(() => {
     for (const row of db.building()) {
       if (Date.now() - row.at > BUILD_TIMEOUT_MS) {
@@ -125,10 +137,10 @@ export function createBuilds(config: Config, sketches: SketchesConfig, db: Db, r
         .buildState(podOf(row.id))
         .then((state) => {
           if (state === "running") return;
-          const since = ended.get(row.id) ?? Date.now();
-          ended.set(row.id, since);
+          const since = stoppedAt.get(row.id) ?? Date.now();
+          stoppedAt.set(row.id, since);
           if (Date.now() - since > timing.graceMs) {
-            ended.delete(row.id);
+            stoppedAt.delete(row.id);
             fail(row.id, "the build stopped without sending a result");
           }
         })
@@ -178,11 +190,18 @@ export function createBuilds(config: Config, sketches: SketchesConfig, db: Db, r
         else {
           const script = stamp(result.script, { sketch: row.sketch_id, commit: row.commit_sha, builder: row.builder }, config.signingKey!);
           db.finishBuild(id, { state: "built", finished_at: Date.now(), plan, error: null, log, script });
+          ended(id);
           // Its request still on its way back to it.
           removePod(id, 5_000);
         }
       }
       return true;
+    },
+
+    /** Tells `listener` of each build as it ends (its id), built or failed; returns a way to stop. */
+    onFinish(listener: (id: string) => void): () => void {
+      finished.add(listener);
+      return () => void finished.delete(listener);
     },
 
     stop() {

@@ -13,6 +13,8 @@ import { createBoxes, type BoxRunner } from "./boxes.ts";
 import { buildApiRoutes, createBuilds, type BuildRunner } from "./builds.ts";
 import { openDb } from "./db.ts";
 import { loadConfig } from "./env.ts";
+import { createInstances, type Instances } from "./instances.ts";
+import { createSceneFeed } from "./scene-feed.ts";
 import { boxApiRoutes, sketchRoutes } from "./sketches.ts";
 import { createStreamRelay } from "./stream.ts";
 
@@ -33,6 +35,14 @@ const boxes = sketches && runner ? createBoxes(config, sketches, db, runner) : n
 const builds = sketches && runner ? createBuilds(config, sketches, db, runner) : null;
 const proxy = boxes ? createBoxProxy(config, db, boxes) : null;
 
+// The scene as browsers get it, and sketches put in the room (instances).
+let instances: Instances | null = null;
+const feed = createSceneFeed({ config, db, arclamp, instances: () => instances });
+if (builds) {
+  const lightIds = async () => (await lights.arclampLights()).lights.map((l) => l.id);
+  instances = createInstances({ config, db, arclamp, builds, lightIds, changed: () => feed.poke() });
+}
+
 const app = new Hono();
 app.onError(handleError);
 app.use("*", csrf({ origin: origins }));
@@ -40,7 +50,7 @@ app.route("/auth", authRoutes(config));
 if (sketches) app.route("/", boxApiRoutes(config, sketches, db, lights));
 if (builds) app.route("/", buildApiRoutes(config, builds));
 const sketchApi = sketches && boxes && builds ? sketchRoutes(sketches, db, boxes, builds) : null;
-app.route("/api", apiRoutes({ config, arclamp, db, relay, origins, lights, sketches: sketchApi }));
+app.route("/api", apiRoutes({ config, arclamp, db, relay, origins, lights, feed, sketches: sketchApi, instances }));
 if (config.production) {
   app.use("/*", serveStatic({ root: "./dist/web" }));
   app.get("*", serveStatic({ path: "./dist/web/index.html" }));
@@ -75,6 +85,7 @@ server.on("upgrade", (req: http.IncomingMessage, socket, head) => {
 // indefinitely, so close them rather than waiting for them to finish.
 function shutdown() {
   relay.stop();
+  feed.stop();
   boxes?.stop();
   builds?.stop();
   for (const ws of sockets.clients) ws.terminate();

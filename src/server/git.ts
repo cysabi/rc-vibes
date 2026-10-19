@@ -78,12 +78,12 @@ export function archive(dir: string, id: string, commit: string): ReadableStream
   return Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>;
 }
 
-/** main's latest commit: when (ms) and by whom. */
-export async function headOf(dir: string, id: string): Promise<{ at: number; by: string } | null> {
+/** main's latest commit: which (its full hash), when (ms) and by whom. */
+export async function headOf(dir: string, id: string): Promise<{ commit: string; at: number; by: string } | null> {
   try {
-    const out = await git(["-C", repoPath(dir, id), "log", "-1", "--format=%ct%x00%an", "main"]);
-    const [at, by] = out.trim().split("\0");
-    return { at: Number(at) * 1000, by: by ?? "" };
+    const out = await git(["-C", repoPath(dir, id), "log", "-1", "--format=%H%x00%ct%x00%an", "main"]);
+    const [commit, at, by] = out.trim().split("\0");
+    return { commit: commit ?? "", at: Number(at) * 1000, by: by ?? "" };
   } catch {
     return null;
   }

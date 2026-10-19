@@ -120,6 +120,31 @@ export function openDb(path: string) {
       script TEXT
     );
     CREATE INDEX IF NOT EXISTS builds_by_sketch ON builds (sketch_id, at);
+    -- Instances: sketches put in the room from vibes, each on a home (the
+    -- lights it was put on, a JSON array of ids), which it's masked to. Its
+    -- build is the one it runs, or will once built; shader_id is its shader
+    -- in arclamp once it's there. state: building, failed (error says why),
+    -- or live. next_build_id is a newer build on its way in.
+    CREATE TABLE IF NOT EXISTS instances (
+      id TEXT PRIMARY KEY,
+      sketch_id TEXT NOT NULL,
+      build_id TEXT NOT NULL,
+      home TEXT NOT NULL,
+      shader_id INTEGER,
+      state TEXT NOT NULL,
+      error TEXT,
+      next_build_id TEXT,
+      by_id TEXT NOT NULL,
+      by_name TEXT NOT NULL,
+      at INTEGER NOT NULL
+    );
+    -- Footprints: every light a shader has changed, before its mask or mute,
+    -- since its script (script_hash) last changed: a JSON array of ids.
+    CREATE TABLE IF NOT EXISTS footprints (
+      shader_id INTEGER PRIMARY KEY,
+      script_hash TEXT NOT NULL,
+      lights TEXT NOT NULL
+    );
   `);
 
   const placementColumns = db.prepare("PRAGMA table_info(placements)").all() as { name: string }[];
@@ -185,6 +210,18 @@ export function openDb(path: string) {
   const selectBuildOfCommit = db.prepare("SELECT * FROM builds WHERE sketch_id = ? AND commit_sha = ? AND builder = ? AND state IN ('building', 'built') ORDER BY at DESC LIMIT 1");
   const selectBuilding = db.prepare("SELECT * FROM builds WHERE state = 'building'");
   const updateBuild = db.prepare("UPDATE builds SET state = ?, finished_at = ?, plan = ?, error = ?, log = ?, script = ? WHERE id = ? AND state = 'building'");
+  const insertInstance = db.prepare(
+    "INSERT INTO instances (id, sketch_id, build_id, home, shader_id, state, error, next_build_id, by_id, by_name, at) VALUES (?, ?, ?, ?, NULL, 'building', NULL, NULL, ?, ?, ?)",
+  );
+  const selectInstance = db.prepare("SELECT * FROM instances WHERE id = ?");
+  const selectInstances = db.prepare("SELECT * FROM instances ORDER BY at");
+  const selectInstanceOfShader = db.prepare("SELECT * FROM instances WHERE shader_id = ?");
+  const deleteInstanceRow = db.prepare("DELETE FROM instances WHERE id = ?");
+  const selectFootprints = db.prepare("SELECT shader_id, script_hash, lights FROM footprints");
+  const upsertFootprint = db.prepare(
+    "INSERT INTO footprints (shader_id, script_hash, lights) VALUES (?, ?, ?) ON CONFLICT (shader_id) DO UPDATE SET script_hash = excluded.script_hash, lights = excluded.lights",
+  );
+  const deleteFootprintRow = db.prepare("DELETE FROM footprints WHERE shader_id = ?");
 
   // Nests: an inner transaction just joins the outer one.
   let depth = 0;
@@ -397,6 +434,47 @@ export function openDb(path: string) {
       return updateBuild.run(end.state, end.finished_at, end.plan, end.error, end.log, end.script, id).changes > 0;
     },
 
+    /** A new instance, building. */
+    addInstance(i: Pick<InstanceRow, "id" | "sketch_id" | "build_id" | "home" | "by_id" | "by_name" | "at">) {
+      insertInstance.run(i.id, i.sketch_id, i.build_id, JSON.stringify(i.home), i.by_id, i.by_name, i.at);
+    },
+
+    instance: (id: string) => instanceOf(selectInstance.get(id)),
+
+    /** Every instance, the oldest first. */
+    instances: () => (selectInstances.all() as unknown as RawInstance[]).map((r) => instanceOf(r)!),
+
+    /** The instance a shader is, if it's one. */
+    instanceOfShader: (shaderId: number) => instanceOf(selectInstanceOfShader.get(shaderId)),
+
+    /** Changes some of an instance. */
+    updateInstance(id: string, patch: Partial<Pick<InstanceRow, "build_id" | "home" | "shader_id" | "state" | "error" | "next_build_id">>) {
+      const cols = Object.keys(patch) as (keyof typeof patch)[];
+      if (cols.length === 0) return;
+      const values = cols.map((c) => (c === "home" ? JSON.stringify(patch.home) : (patch[c] ?? null)));
+      db.prepare(`UPDATE instances SET ${cols.map((c) => `${c} = ?`).join(", ")} WHERE id = ?`).run(...(values as (string | number | null)[]), id);
+    },
+
+    deleteInstance(id: string) {
+      deleteInstanceRow.run(id);
+    },
+
+    /** Every shader's footprint, as kept. */
+    footprints: () =>
+      (selectFootprints.all() as { shader_id: number; script_hash: string; lights: string }[]).map((r) => ({
+        shaderId: r.shader_id,
+        scriptHash: r.script_hash,
+        lights: JSON.parse(r.lights) as number[],
+      })),
+
+    setFootprint(shaderId: number, scriptHash: string, lights: number[]) {
+      upsertFootprint.run(shaderId, scriptHash, JSON.stringify(lights));
+    },
+
+    deleteFootprint(shaderId: number) {
+      deleteFootprintRow.run(shaderId);
+    },
+
     close: () => db.close(),
   };
 }
@@ -446,6 +524,32 @@ export interface BuildRow {
   log: string | null;
   /** The script, stamped, if it built. */
   script: string | null;
+}
+
+export interface InstanceRow {
+  id: string;
+  sketch_id: string;
+  /** The build it runs, or will once it's built. */
+  build_id: string;
+  /** The lights it was put on, by id. */
+  home: number[];
+  shader_id: number | null;
+  state: "building" | "failed" | "live";
+  error: string | null;
+  /** A newer build on its way in. */
+  next_build_id: string | null;
+  by_id: string;
+  by_name: string;
+  /** When it was put in, in ms. */
+  at: number;
+}
+
+type RawInstance = Omit<InstanceRow, "home"> & { home: string };
+
+function instanceOf(raw: unknown): InstanceRow | undefined {
+  if (!raw) return undefined;
+  const r = raw as RawInstance;
+  return { ...r, home: JSON.parse(r.home) as number[] };
 }
 
 export type Db = ReturnType<typeof openDb>;

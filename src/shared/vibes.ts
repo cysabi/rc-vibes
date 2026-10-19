@@ -20,9 +20,54 @@ export interface LoginOptions {
 
 /**
  * A shader in the scene, as vibes passes it on from arclamp, with the sketch
- * it was built from, if its script has vibes' stamp.
+ * it was built from, if its script has vibes' stamp. As the scene feed has it
+ * (SceneFeed), its script is left out: scriptHash says which it is.
  */
-export type SceneNode = ShaderDescriptor & { sketch?: ShaderSketch };
+export type SceneNode = ShaderDescriptor & {
+  sketch?: ShaderSketch;
+  /** The sha256 of its script, in hex. */
+  scriptHash?: string;
+  /**
+   * Every light it's changed since its script last did, before its mask or
+   * mute: where its code lights. Learned as it runs.
+   */
+  footprint?: number[];
+  /** The instance it is, if it was put in from a sketch in vibes. */
+  instance?: Instance;
+};
+
+/**
+ * A sketch put in the room from vibes, on a home: the lights it was put on,
+ * which it's masked to. It's in vibes before it's in arclamp: until its build
+ * is built, it's only here (SceneFeed.pending).
+ */
+export interface Instance {
+  id: string;
+  sketchId: string;
+  /** Its sketch's name, or null if vibes has no such sketch. */
+  sketchName: string | null;
+  /** The commit it runs (or will, once built), and its build. */
+  commit: string;
+  buildId: string;
+  /** The lights it was put on, by id: it's masked off every other. */
+  home: number[];
+  /** Its shader in arclamp, once it's there. */
+  shaderId: number | null;
+  /** Building; couldn't go in (error says why); or in the room. */
+  state: "building" | "failed" | "live";
+  error: string | null;
+  /** A newer commit on its way in, while it builds (or why it couldn't). */
+  next: { commit: string; buildId: string; state: "building" | "failed"; error: string | null } | null;
+  by: Person;
+  /** When it was put in, in ms. */
+  at: number;
+}
+
+/** What vibes pushes of the scene (/api/scene/events): the shaders, and the instances not in arclamp yet. */
+export interface SceneFeed {
+  nodes: SceneNode[];
+  pending: Instance[];
+}
 
 /** The sketch a shader was built from, as its stamp says. */
 export interface ShaderSketch {
@@ -97,6 +142,8 @@ export interface Sketch {
   /** The latest commit on main: when, and by whom (the commit's author). */
   updatedAt: number;
   updatedBy: string;
+  /** And which (its full hash), if it has one. */
+  head: string | null;
   /** If it's been deleted: when, and by whom. Anyone can restore it, always. */
   deleted?: { at: number; by: string };
 }
@@ -140,6 +187,7 @@ export type ActivityAction =
   | "shader.mute"
   | "shader.unmute"
   | "shader.mask"
+  | "shader.home"
   | "roomtone.set"
   | "scene.clear"
   | "lights.move"

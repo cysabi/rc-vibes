@@ -46,6 +46,7 @@ export function sketchRoutes(sketches: SketchesConfig, db: Db, boxes: Boxes, bui
       createdAt: row.at,
       updatedAt: head?.at ?? row.at,
       updatedBy: head?.by ?? row.by_name,
+      head: head?.commit ?? null,
       ...(row.deleted_at !== null ? { deleted: { at: row.deleted_at, by: row.deleted_by_name ?? "" } } : {}),
     };
   }
