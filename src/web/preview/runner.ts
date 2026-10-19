@@ -4,11 +4,17 @@
 // sketch's VS Code (main.tsx), and touches nothing else: not the room, and
 // not any other preview.
 //
-// Pausing stops calling update(), and its clock with it, so playing again
-// picks up where it was (nowMs - initialMs carries on from there). Restarting
-// loads the sketch afresh, top-level state and all, with a new initialMs.
-// Swapping in a new build of it does too, but keeps the clock: the preview
-// carries on from where it was, running the new code. A sketch run as its
+// Its clock runs from when it was (re)started, less any pauses, and each
+// frame's time is what update() gets, as both nowMs and initialMs: arclamp
+// gives every layer of a frame that frame's time as initialMs (the room tone
+// stamps each tick), so a sketch counting from initialMs to nowMs sees
+// almost nothing go by, here as in the room. Time since it started is the
+// sketch's own to keep, from the first initialMs it sees.
+//
+// Pausing stops calling update(), and the clock with it, so playing again
+// picks up where it was. Restarting loads the sketch afresh, top-level state
+// and all, on a new clock. Swapping in a new build of it does too, but keeps
+// the clock: the preview carries on from where it was, running the new code. A sketch run as its
 // modules is updated in place instead, by Vite's HMR (hmr() hands the
 // worker what the box's Vite sends; onHmr, what the worker sends back).
 // Each tick, update() gets every light at rest (every channel 0: nothing under
@@ -44,7 +50,8 @@ export class SketchRunner implements FrameSource {
   private frame: Frame | null = null;
   private frameListeners = new Set<(f: Frame) => void>();
   private watchers = new Set<() => void>();
-  private initial = 0;
+  /** When its clock started (less pauses, elapsed says how far it's gone). */
+  private origin = 0;
   private elapsed = 0;
   private resumedAt = 0;
   private timer: number | undefined;
@@ -103,7 +110,7 @@ export class SketchRunner implements FrameSource {
   restart() {
     this.halt();
     this.load();
-    this.initial = Date.now();
+    this.origin = Date.now();
     this.elapsed = 0;
     this.stopped = null;
     this.log = [];
@@ -176,7 +183,8 @@ export class SketchRunner implements FrameSource {
   private async tick() {
     if (!this.playing || !this.worker) return;
     const started = performance.now();
-    const out = await this.call(prevOf(this.base, this.lights, this.initial), this.initial + this.elapsedMs());
+    const at = this.origin + this.elapsedMs();
+    const out = await this.call(prevOf(this.base, this.lights, at), at);
     if (out) this.show(mergeOutput(this.base, this.lights, out));
     if (!this.playing) return;
     this.timer = window.setTimeout(() => void this.tick(), Math.max(0, TICK_MS - (performance.now() - started)));
@@ -194,7 +202,8 @@ export class SketchRunner implements FrameSource {
         window.clearTimeout(timer);
         resolve(out);
       });
-      this.post({ type: "tick", seq, prev, now, initial: this.initial });
+      // The frame's time as initialMs, as arclamp gives it.
+      this.post({ type: "tick", seq, prev, now, initial: now });
     });
   }
 
@@ -205,7 +214,7 @@ export class SketchRunner implements FrameSource {
   }
 
   private show(state: RoomState) {
-    this.frame = { initialTime: this.initial, lights: state };
+    this.frame = { initialTime: this.origin + this.elapsedMs(), lights: state };
     for (const l of this.frameListeners) l(this.frame);
   }
 

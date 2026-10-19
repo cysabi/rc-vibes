@@ -86,7 +86,13 @@ and revoking a key revokes every key minted with it.
 - **Shader contract** (from `internal/sandbox/runtime.go`):
   `update(prev, nowMs, initialMs)` is called at 100 Hz with
   `{initial_time, lights: [{id, channels, tags, coords, rail}]}` and must
-  return `{lights: [{id, channels}]}`. Channel values are float32 and pass
+  return `{lights: [{id, channels}]}`. `initialMs` (and `initial_time`) is the
+  frame's time, not the shader's start: the room tone stamps each tick with
+  the wall clock, and every layer of that frame gets the same value, so the
+  layers stay in step. `nowMs - initialMs` is only the delay through the
+  stack (about 60 ms, measured), so time since a sketch started is the
+  sketch's own to keep, from the first `initialMs` it sees. The editor's
+  preview passes time the same way. Channel values are float32 and pass
   through as given, out of range included; anything that isn't a finite
   number is dropped (the channel keeps the value from below) with a warning in
   arclamp's log. Omitted lights and channels keep the value from below
