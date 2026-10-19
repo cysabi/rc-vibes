@@ -4,7 +4,7 @@
 // extension in box/extension), so this page is just the way in.
 
 import { useEffect, useRef, useState, type FormEvent, type MouseEvent, type ReactNode } from "react";
-import { BOX_COMMITS_FOLDER, type Sketch } from "../../shared/vibes.ts";
+import { boxCommitFolder, type Sketch } from "../../shared/vibes.ts";
 import {
   RequestError,
   useBox,
@@ -255,7 +255,7 @@ function SketchPage({ id }: { id: string }) {
   // home and the open tabs in the browser, so only undo history is lost.
   const [shown, setShown] = useState<{ run: string; url: string } | null>(null);
   const ready = box.data?.state === "ready" ? box.data : null;
-  const url = ready && (commit ? inFolder(ready.url, `${BOX_COMMITS_FOLDER}/${commit}`) : ready.url);
+  const url = ready && (commit ? inFolder(ready.url, boxCommitFolder(commit)) : ready.url);
   if (ready && url && (ready.run !== shown?.run || url !== shown.url)) setShown({ run: ready.run, url });
   // Deleted meanwhile is said below, once the sketch has been looked at again.
   const goneMeanwhile = box.error instanceof RequestError && box.error.status === 410;

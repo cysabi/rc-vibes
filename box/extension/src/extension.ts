@@ -10,9 +10,9 @@
 // The lights' layout comes from vibes (VIBES_URL), asked with the box's own
 // token (VIBES_BOX_TOKEN), so the webview never needs vibes' cookies.
 //
-// Opened at <BOX_COMMITS_FOLDER>/<commit> (vibes' page does that for a sketch
-// at one commit), it first makes that folder: a checkout of just that commit,
-// beside the clone, which it's left alone.
+// Opened at <BOX_COMMITS_FOLDER>/<commit>/sketch (vibes' page does that for a
+// sketch at one commit), it first makes that folder: a checkout of just that
+// commit, beside the clone, which it's left alone.
 
 import * as esbuild from "esbuild-wasm";
 import { execFile } from "node:child_process";
@@ -44,7 +44,7 @@ export function activate(context: vscode.ExtensionContext) {
   process.env.PATH = `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH ?? ""}`;
 
   const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
-  const commit = root && path.dirname(root) === BOX_COMMITS_FOLDER ? path.basename(root) : null;
+  const commit = root && path.dirname(path.dirname(root)) === BOX_COMMITS_FOLDER ? path.basename(path.dirname(root)) : null;
   if (root && commit && !fs.existsSync(root)) {
     void checkOut(root, commit);
     return;

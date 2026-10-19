@@ -268,7 +268,7 @@ ever be built from one of its commits. On while `SKETCHES=1`.
   commit Y, or edited (changed since, or signed with another key). "Lit by"
   shows the sketch's name and short commit, badged "edited" or "deleted",
   with a button that opens the sketch at that commit (a checkout of just it,
-  `/home/workspace/commits/<commit>` beside your clone, made by the
+  `/home/workspace/commits/<commit>/sketch` beside your clone, made by the
   extension; `/sketches/<id>?commit=<sha>`), or, deleted, finds it in the
   library's "Recently deleted". Nothing makes stamped scripts yet: that's the
   builder.

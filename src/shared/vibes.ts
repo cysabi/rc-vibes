@@ -77,11 +77,16 @@ export interface Status {
 }
 
 /**
- * Where a box keeps checkouts of single commits of its sketch, each at
- * <folder>/<commit> beside the clone; vibes' extension makes one when VS Code
- * opens it.
+ * Where a box keeps checkouts of single commits of its sketch, beside the
+ * clone; vibes' extension makes one when VS Code opens it.
  */
 export const BOX_COMMITS_FOLDER = "/home/workspace/commits";
+
+/**
+ * The checkout of one commit: in a folder named for the commit, and itself
+ * named "sketch", like the clone, so VS Code shows it by that name, not a hash.
+ */
+export const boxCommitFolder = (commit: string) => `${BOX_COMMITS_FOLDER}/${commit}/sketch`;
 
 /** A sketch: code made in vibes, kept as a git repo whose `main` is the sketch. */
 export interface Sketch {
