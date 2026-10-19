@@ -261,16 +261,18 @@ export function createBoxes(config: Config, sketches: SketchesConfig, db: Db, ru
         ? { state: "failed", error: l.error ?? "it failed" }
         : { state: "starting" };
 
-  // What's left from before vibes last started: boxes still someone's carry on
-  // (until nothing checks in on them), waiting ones from this image go back in
-  // the pool, and the rest go.
+  // What's left from before vibes last started: boxes from this image carry
+  // on, someone's until nothing checks in on them, waiting ones back in the
+  // pool. The rest go, someone's too: a page and its box's extension must be
+  // the same version, so after a deploy, an open page wakes its box again on
+  // the new image.
   async function adopt() {
     const owners = new Map(db.boxPods().map((b) => [b.pod, b.id]));
     for (const { name, current } of await runner.list(sketches.image)) {
       const id = owners.get(name);
-      const target = await runner.find(name);
+      const target = current ? await runner.find(name) : null;
       if (id && target && (await answers(target, id))) live.set(id, { id, state: "ready", pod: name, target, seen: Date.now() });
-      else if (!id && current && target && (await waiting(target))) pool.push({ name, target });
+      else if (!id && target && (await waiting(target))) pool.push({ name, target });
       else void removeBox(name);
     }
   }

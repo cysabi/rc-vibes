@@ -141,6 +141,20 @@ describe("boxes", () => {
     await sleep(100);
     expect([...fake.boxes.keys()].sort()).toEqual([mine, waiting].sort());
   });
+
+  it("left from before a deploy with a new image go, someone's too, and start again on the new one", async () => {
+    fake = fakeBoxRunner();
+    const before = boxesWith({ BOX_POOL: "0", BOX_IMAGE: "vibes-box:old" });
+    const old = run(await open(before.boxes, ada));
+    before.boxes.stop();
+
+    const after = boxesWith({ BOX_POOL: "0", BOX_IMAGE: "vibes-box:new" }, before.db);
+    expect(await after.boxes.ensure("sketch-1", ada)).toEqual({ state: "starting" });
+    const fresh = run(await open(after.boxes, ada));
+    expect(fresh).not.toBe(old);
+    expect(fake.boxes.has(old!)).toBe(false);
+    expect(fake.boxes.get(fresh!)!.image).toBe("vibes-box:new");
+  });
 });
 
 describe("box tokens", () => {

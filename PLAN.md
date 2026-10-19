@@ -254,7 +254,9 @@ ever be built from one of its commits. On while `SKETCHES=1`.
   finds its box gone, or on a new run, covers VS Code ("Waking your VS
   Code…") and loads it afresh once it's ready: the files are in your home
   and the open tabs in the browser, so only undo history is lost. vibes
-  restarting doesn't end boxes; it adopts them.
+  restarting adopts boxes from the same image; after a deploy (a new box
+  image) it removes them all, so no page talks to an older extension, and
+  open pages wake theirs again on the new image.
 - **Deleting.** Anyone can delete a sketch (from its page), and anyone can
   restore it, always (from its page, or the library's "Recently deleted"
   dropdown; `/sketches?deleted=<id>` opens that with it picked out).
