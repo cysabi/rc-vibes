@@ -1,4 +1,4 @@
-// A sketch's own preview: its script in its own worker, on its own clock,
+// A sketch's own preview: the sketch in its own worker, on its own clock,
 // making its own frames for the map it's drawn on (it's a FrameSource), and
 // keeping what it logs for the console. It runs in the preview panel of the
 // sketch's VS Code (main.tsx), and touches nothing else: not the room, and
@@ -6,9 +6,11 @@
 //
 // Pausing stops calling update(), and its clock with it, so playing again
 // picks up where it was (nowMs - initialMs carries on from there). Restarting
-// loads the script afresh, top-level state and all, with a new initialMs.
+// loads the sketch afresh, top-level state and all, with a new initialMs.
 // Swapping in a new build of it does too, but keeps the clock: the preview
-// carries on from where it was, running the new code.
+// carries on from where it was, running the new code. A sketch run as its
+// modules is updated in place instead, by Vite's HMR (hmr() hands the
+// worker what the box's Vite sends; onHmr, what the worker sends back).
 // Each tick, update() gets every light at rest (every channel 0: nothing under
 // it, as if it were all that's running), and its output is merged over that
 // as arclamp merges. An update() that throws, or takes too long, stops the
@@ -20,8 +22,8 @@ import { baseState, mergeOutput, prevOf, type RoomState } from "../sim.ts";
 // Inline, so it also starts where a page can't load a worker from a URL (a
 // VS Code webview's resources are on another origin).
 import SketchWorker from "./sketch.worker.ts?worker&inline";
-import type { FromSketch } from "./sketch.worker.ts";
-import type { LogLine } from "./protocol.ts";
+import type { FromSketch, ToSketch } from "./sketch.worker.ts";
+import type { LogLine, SketchSource } from "./protocol.ts";
 
 const TICK_MS = 33;
 // A sketch that hasn't answered by then is stuck; arclamp would kill it too.
@@ -29,9 +31,11 @@ const DEADLINE_MS = 250;
 const MAX_LINES = 200;
 
 export class SketchRunner implements FrameSource {
-  script: string;
+  source: SketchSource;
   /** Told of each new line logged (not its repeats). */
   onLine: ((line: LogLine) => void) | null = null;
+  /** Told what the worker's module runner sends the box's Vite. */
+  onHmr: ((payload: unknown) => void) | null = null;
   readonly lights: LightInfo[];
   private readonly base: RoomState;
   private worker: Worker | null = null;
@@ -53,8 +57,8 @@ export class SketchRunner implements FrameSource {
   /** Bumped whenever any of the above changes, for React. */
   version = 0;
 
-  constructor(script: string, lights: LightInfo[]) {
-    this.script = script;
+  constructor(source: SketchSource, lights: LightInfo[]) {
+    this.source = source;
     this.lights = lights;
     this.base = baseState(lights, {});
     this.restart();
@@ -105,17 +109,33 @@ export class SketchRunner implements FrameSource {
     this.play();
   }
 
-  /** A new build in place of the old, on the same clock; it plays unless it was paused. */
-  swap(script: string) {
+  /** A new build (or another way of running it) in place of the old, on the same clock; it plays unless it was paused. */
+  swap(source: SketchSource) {
     const elapsed = this.elapsedMs();
     const paused = !this.playing && this.stopped === null;
-    this.script = script;
+    this.source = source;
     this.halt();
     this.load();
     this.elapsed = elapsed;
     this.stopped = null;
     if (paused) this.changed();
     else this.play();
+  }
+
+  /**
+   * What the box's Vite sends the sketch's modules: their updates. Stopped
+   * (by an error), an update loads it all again, on the same clock: the edit
+   * that fixes it starts it.
+   */
+  hmr(payload: unknown) {
+    if (this.source.kind !== "modules") return;
+    const p = payload as { type: string };
+    if (this.stopped !== null && (p.type === "update" || p.type === "full-reload")) this.swap(this.source);
+    else this.post({ type: "hmr", payload: p });
+  }
+
+  private post(m: ToSketch) {
+    this.worker?.postMessage(m);
   }
 
   private load() {
@@ -126,12 +146,14 @@ export class SketchRunner implements FrameSource {
       const m = e.data;
       if (m.type === "log") this.write(m.level, m.text);
       else if (m.type === "out") this.answer(m.seq, m.out);
+      else if (m.type === "hmr") this.onHmr?.(m.payload);
       else if (m.type === "error") {
         if (m.seq !== undefined) this.answer(m.seq, null);
         this.fail(m.message);
       }
     };
-    worker.postMessage({ type: "load", script: this.script });
+    const s = this.source;
+    this.post(s.kind === "script" ? { type: "load", script: s.script } : { type: "load-modules", entry: s.entry });
   }
 
   dispose() {
@@ -160,7 +182,6 @@ export class SketchRunner implements FrameSource {
 
   private call(prev: unknown, now: number): Promise<unknown> {
     const seq = ++this.seq;
-    const worker = this.worker!;
     return new Promise((resolve) => {
       const timer = window.setTimeout(() => {
         if (!this.waiting.delete(seq)) return;
@@ -171,7 +192,7 @@ export class SketchRunner implements FrameSource {
         window.clearTimeout(timer);
         resolve(out);
       });
-      worker.postMessage({ type: "tick", seq, prev, now, initial: this.initial });
+      this.post({ type: "tick", seq, prev, now, initial: this.initial });
     });
   }
 

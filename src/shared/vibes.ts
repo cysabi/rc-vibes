@@ -101,6 +101,26 @@ export interface Sketch {
   deleted?: { at: number; by: string };
 }
 
+/** A commit of a sketch, built for the room by vibes' builder: its script is stamped. */
+export interface Build {
+  id: string;
+  sketchId: string;
+  /** The commit built (its full hash). */
+  commit: string;
+  /** The builder's version. */
+  builder: string;
+  state: "building" | "built" | "failed";
+  /** Who asked for it, and when; and when it ended. */
+  by: string;
+  at: number;
+  finishedAt: number | null;
+  /** How it was built: "vite main.ts", "package.json: pnpm run build", … */
+  plan: string | null;
+  error: string | null;
+  /** What it printed (with the build only, not in lists). */
+  log?: string;
+}
+
 /**
  * Your box for a sketch: your own VS Code with your own clone of it. `url` is
  * where to open it, once it's ready, and `run` which run of it that is: a box

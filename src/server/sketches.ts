@@ -1,6 +1,7 @@
 // Sketches: code made in vibes, each a git repo whose main is the sketch.
 // /api/sketches lists them, makes them (with a first commit to start from),
-// deletes and restores them, and opens your box for one. Boxes, with their
+// deletes and restores them, opens your box for one, and builds its commits
+// for the room (builds.ts). Boxes, with their
 // own token, clone and push over /git/<id>.git, and get the lights' layout for
 // their preview from /box-api/layout.
 //
@@ -16,6 +17,7 @@ import type { Me, Sketch } from "../shared/vibes.ts";
 import type { LightsSource } from "./api.ts";
 import type { AuthEnv } from "./auth.ts";
 import { boxOfToken, type Boxes } from "./boxes.ts";
+import { view as buildView, type Builds } from "./builds.ts";
 import type { Db, SketchRow } from "./db.ts";
 import type { Config, SketchesConfig } from "./env.ts";
 import { createRepo, headOf, serveGit } from "./git.ts";
@@ -34,7 +36,7 @@ const notFound = (c: Context) => c.json({ error: "no such sketch", code: "not_fo
 const authorOf = (user: Me) => ({ name: user.name, email: `${user.id.replace(/[^a-z0-9]+/gi, "-")}@users.vibes.invalid` });
 
 /** /api/sketches, for people logged in. */
-export function sketchRoutes(sketches: SketchesConfig, db: Db, boxes: Boxes) {
+export function sketchRoutes(sketches: SketchesConfig, db: Db, boxes: Boxes, builds: Builds) {
   async function summary(row: SketchRow): Promise<Sketch> {
     const head = await headOf(sketches.dir, row.id);
     return {
@@ -95,6 +97,30 @@ export function sketchRoutes(sketches: SketchesConfig, db: Db, boxes: Boxes) {
       if (!row) return notFound(c);
       if (row.deleted_at !== null) return c.json({ error: "this sketch was deleted", code: "deleted" }, 410);
       return c.json(await boxes.ensure(row.id, c.get("user")));
+    })
+
+    // Its builds, for the room: one started (of main, or a commit), the
+    // latest, one with its log, and a built one's stamped script.
+    .post("/:id/builds", zValidator("json", z.object({ commit: z.string().optional() }), badBody), async (c) => {
+      const row = db.sketch(c.req.param("id"));
+      if (!row) return notFound(c);
+      if (row.deleted_at !== null) return c.json({ error: "this sketch was deleted", code: "deleted" }, 410);
+      const started = await builds.start(row.id, c.req.valid("json").commit ?? "main", c.get("user"));
+      if ("refused" in started) return c.json({ error: started.refused, code: "cant_build" }, started.status);
+      return c.json(started.build, started.build.state === "building" ? 202 : 200);
+    })
+
+    .get("/:id/builds", (c) => c.json({ builds: db.buildsOf(c.req.param("id")).map((b) => buildView(b)) }))
+
+    .get("/:id/builds/:build", (c) => {
+      const b = db.build(c.req.param("build"));
+      return b && b.sketch_id === c.req.param("id") ? c.json(buildView(b, true)) : c.json({ error: "no such build", code: "not_found" }, 404);
+    })
+
+    .get("/:id/builds/:build/script", (c) => {
+      const b = db.build(c.req.param("build"));
+      if (!b || b.sketch_id !== c.req.param("id") || !b.script) return c.json({ error: "no such script", code: "not_found" }, 404);
+      return c.body(b.script, 200, { "content-type": "text/javascript; charset=utf-8" });
     });
 }
 

@@ -62,6 +62,22 @@ export async function createRepo(dir: string, id: string, author: Author, messag
   }
 }
 
+/** A commit's full hash: of main, or of a hash (whole or short) the repo has; null if it hasn't. */
+export async function resolveCommit(dir: string, id: string, rev: string): Promise<string | null> {
+  if (rev !== "main" && !/^[0-9a-f]{4,40}$/.test(rev)) return null;
+  try {
+    return (await git(["-C", repoPath(dir, id), "rev-parse", "--verify", "--quiet", `${rev}^{commit}`])).trim() || null;
+  } catch {
+    return null;
+  }
+}
+
+/** A commit's files, as a tar, as git makes it. */
+export function archive(dir: string, id: string, commit: string): ReadableStream<Uint8Array> {
+  const child = spawn("git", ["-C", repoPath(dir, id), "archive", "--format=tar", commit], { env: GIT_ENV, stdio: ["ignore", "pipe", "ignore"] });
+  return Readable.toWeb(child.stdout) as ReadableStream<Uint8Array>;
+}
+
 /** main's latest commit: when (ms) and by whom. */
 export async function headOf(dir: string, id: string): Promise<{ at: number; by: string } | null> {
   try {

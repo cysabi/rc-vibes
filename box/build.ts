@@ -1,12 +1,15 @@
 // Builds the vibes extension for sketch boxes into box/dist/vibes-sketch: the
 // extension (CommonJS, as VS Code loads it), the preview panel's bundle
 // (src/web/preview: one script and one stylesheet, fonts and the worker
-// inlined, for a webview), its manifest and icon, and esbuild-wasm, which it
-// builds sketches with.
+// inlined, for a webview), the builder (box/builder.ts, which builds sketches
+// for the room in a box of its own), its manifest and icon, and Vite, with
+// what it needs, which the extension runs sketches with and the builder
+// builds them with.
 //   pnpm build:box
 
 import react from "@vitejs/plugin-react";
-import { cp, mkdir, realpath, rm } from "node:fs/promises";
+import { cp, mkdir, readFile, realpath, rm, stat } from "node:fs/promises";
+import path from "node:path";
 import { fileURLToPath } from "node:url";
 import { build } from "vite";
 
@@ -37,13 +40,55 @@ await build({
     target: "node22",
     minify: false,
     lib: { entry: at("box/extension/src/extension.ts"), formats: ["cjs"], fileName: () => "extension.js" },
-    rollupOptions: { external: ["vscode", "esbuild-wasm", /^node:/] },
+    rollupOptions: { external: ["vscode", "vite", /^node:/] },
+  },
+});
+
+await build({
+  configFile: false,
+  logLevel: "warn",
+  build: {
+    outDir: out,
+    emptyOutDir: false,
+    target: "node22",
+    minify: false,
+    lib: { entry: at("box/builder.ts"), formats: ["es"], fileName: () => "builder.mjs" },
+    rollupOptions: { external: ["vite", /^node:/] },
   },
 });
 
 await cp(at("box/extension/package.json"), `${out}/package.json`);
 await mkdir(`${out}/media`, { recursive: true });
 await cp(at("box/extension/media/icon.svg"), `${out}/media/icon.svg`);
-await cp(await realpath(at("node_modules/esbuild-wasm")), `${out}/node_modules/esbuild-wasm`, { recursive: true, dereference: true });
 
-console.log(`built ${out}`);
+// Vite and everything it depends on, as plain folders (not pnpm's links), for
+// this platform (its native parts are).
+const copied = new Map<string, string>();
+const exists = (p: string) => stat(p).then(() => true, () => false);
+
+/** Where `name` is, as seen from the package in `dir`: its own node_modules, then those above. */
+async function find(name: string, dir: string): Promise<string | null> {
+  for (let d = dir; ; d = path.dirname(d)) {
+    const candidate = path.join(d, "node_modules", name);
+    if (await exists(path.join(candidate, "package.json"))) return realpath(candidate);
+    if (path.dirname(d) === d) return null;
+  }
+}
+
+async function copy(name: string, from: string, optional: boolean) {
+  if (copied.has(name)) return;
+  const dir = await find(name, from);
+  if (!dir) {
+    if (optional) return;
+    throw new Error(`couldn't find ${name} (for ${from})`);
+  }
+  copied.set(name, dir);
+  await cp(dir, `${out}/node_modules/${name}`, { recursive: true, dereference: true });
+  const pkg = JSON.parse(await readFile(path.join(dir, "package.json"), "utf8")) as Record<string, Record<string, string> | undefined>;
+  for (const dep of Object.keys(pkg.dependencies ?? {})) await copy(dep, dir, false);
+  // Native parts for other platforms aren't installed: just this one's.
+  for (const dep of Object.keys(pkg.optionalDependencies ?? {})) await copy(dep, dir, true);
+}
+await copy("vite", at("."), false);
+
+console.log(`built ${out} (with ${[...copied.keys()].sort().join(", ")})`);

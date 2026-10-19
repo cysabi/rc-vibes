@@ -1,7 +1,8 @@
 // Boxes as Docker containers on this machine, for local development: each a
 // container vibes-<name>, answering on a port of 127.0.0.1 Docker picks, with
 // everyone's homes in one volume (BOX_HOMES) at /homes, for its agent to take
-// the one it's claimed for from.
+// the one it's claimed for from. Builds too, each a container from the same
+// image, as uid 1000 with no privileges.
 
 import { execFile } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -9,13 +10,34 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import type { BoxRunner } from "./boxes.ts";
+import type { BuildRunner } from "./builds.ts";
 import type { SketchesConfig } from "./env.ts";
 
 const run = promisify(execFile);
 const docker = async (...args: string[]) => (await run("docker", args)).stdout.trim();
 const container = (name: string) => `vibes-${name}`;
 
-export function dockerRunner(sketches: SketchesConfig): BoxRunner {
+/** Runs `use` with the env (tokens) in a file only it can read, not on the command line. */
+async function withEnvFile<T>(env: Record<string, string>, use: (file: string) => Promise<T>): Promise<T> {
+  const dir = await mkdtemp(path.join(tmpdir(), "vibes-box-"));
+  try {
+    const file = path.join(dir, "env");
+    await writeFile(file, Object.entries(env).map(([k, v]) => `${k}=${v}`).join("\n"), { mode: 0o600 });
+    return await use(file);
+  } finally {
+    await rm(dir, { recursive: true, force: true });
+  }
+}
+
+async function removeContainer(name: string) {
+  try {
+    await docker("rm", "--force", container(name));
+  } catch (err) {
+    if (!/No such container/i.test(String((err as { stderr?: string }).stderr))) throw err;
+  }
+}
+
+export function dockerRunner(sketches: SketchesConfig): BoxRunner & BuildRunner {
   async function find(name: string): Promise<string | null> {
     const running = await docker("inspect", "--format", "{{.State.Running}}", container(name)).catch(() => "");
     if (running !== "true") return null;
@@ -28,12 +50,8 @@ export function dockerRunner(sketches: SketchesConfig): BoxRunner {
     find,
 
     async boot(name, image, env) {
-      // The env (its claim token) in a file, not on the command line.
-      const dir = await mkdtemp(path.join(tmpdir(), "vibes-box-"));
-      try {
-        const file = path.join(dir, "env");
-        await writeFile(file, Object.entries(env).map(([k, v]) => `${k}=${v}`).join("\n"), { mode: 0o600 });
-        await docker(
+      await withEnvFile(env, (file) =>
+        docker(
           "run",
           "--detach",
           "--name",
@@ -53,10 +71,8 @@ export function dockerRunner(sketches: SketchesConfig): BoxRunner {
           "--env-file",
           file,
           image,
-        );
-      } finally {
-        await rm(dir, { recursive: true, force: true });
-      }
+        ),
+      );
       for (let tries = 0; tries < 50; tries++) {
         const target = await find(name);
         if (target) return target;
@@ -65,12 +81,45 @@ export function dockerRunner(sketches: SketchesConfig): BoxRunner {
       throw new Error("the container started, but has no port");
     },
 
-    async remove(name) {
-      try {
-        await docker("rm", "--force", container(name));
-      } catch (err) {
-        if (!/No such container/i.test(String((err as { stderr?: string }).stderr))) throw err;
-      }
+    remove: removeContainer,
+
+    async startBuild(name, image, command, env) {
+      await withEnvFile(env, (file) =>
+        docker(
+          "run",
+          "--detach",
+          "--name",
+          container(name),
+          "--label",
+          "vibes.build=1",
+          "--user",
+          "1000:1000",
+          "--cap-drop",
+          "ALL",
+          "--security-opt",
+          "no-new-privileges",
+          "--memory",
+          "2g",
+          "--env-file",
+          file,
+          "--entrypoint",
+          command[0]!,
+          image,
+          ...command.slice(1),
+        ),
+      );
+    },
+
+    async buildState(name) {
+      const status = await docker("inspect", "--format", "{{.State.Status}}", container(name)).catch(() => null);
+      return status === null ? "gone" : status === "created" || status === "running" ? "running" : "ended";
+    },
+
+    removeBuild: removeContainer,
+
+    async builds() {
+      const names = await docker("ps", "--all", "--filter", "label=vibes.build", "--format", "{{.Names}}");
+      return names.split("\n").filter(Boolean).map((n) => n.replace(/^vibes-/, ""));
     },
 
     async list(image) {

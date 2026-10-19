@@ -10,6 +10,7 @@ import { authRoutes } from "./auth.ts";
 import { dockerRunner } from "./box-docker.ts";
 import { createBoxProxy } from "./box-proxy.ts";
 import { createBoxes, type BoxRunner } from "./boxes.ts";
+import { buildApiRoutes, createBuilds, type BuildRunner } from "./builds.ts";
 import { openDb } from "./db.ts";
 import { loadConfig } from "./env.ts";
 import { boxApiRoutes, sketchRoutes } from "./sketches.ts";
@@ -24,11 +25,12 @@ const lights = createLights(arclamp, db);
 const origins = config.publicUrls.map((u) => u.origin);
 if (!config.production) origins.push("http://localhost:5173", "http://127.0.0.1:5173");
 
-// Sketches, and the boxes they're edited in, while they're on.
+// Sketches, the boxes they're edited in, and their builds, while they're on.
 const sketches = config.sketches;
-let runner: BoxRunner | null = null;
+let runner: (BoxRunner & BuildRunner) | null = null;
 if (sketches) runner = sketches.runner === "docker" ? dockerRunner(sketches) : (await import("./box-kube.ts")).kubernetesRunner(sketches);
 const boxes = sketches && runner ? createBoxes(config, sketches, db, runner) : null;
+const builds = sketches && runner ? createBuilds(config, sketches, db, runner) : null;
 const proxy = boxes ? createBoxProxy(config, db, boxes) : null;
 
 const app = new Hono();
@@ -36,7 +38,9 @@ app.onError(handleError);
 app.use("*", csrf({ origin: origins }));
 app.route("/auth", authRoutes(config));
 if (sketches) app.route("/", boxApiRoutes(config, sketches, db, lights));
-app.route("/api", apiRoutes({ config, arclamp, db, relay, origins, lights, sketches: sketches && boxes ? sketchRoutes(sketches, db, boxes) : null }));
+if (builds) app.route("/", buildApiRoutes(config, builds));
+const sketchApi = sketches && boxes && builds ? sketchRoutes(sketches, db, boxes, builds) : null;
+app.route("/api", apiRoutes({ config, arclamp, db, relay, origins, lights, sketches: sketchApi }));
 if (config.production) {
   app.use("/*", serveStatic({ root: "./dist/web" }));
   app.get("*", serveStatic({ path: "./dist/web/index.html" }));
@@ -72,6 +76,7 @@ server.on("upgrade", (req: http.IncomingMessage, socket, head) => {
 function shutdown() {
   relay.stop();
   boxes?.stop();
+  builds?.stop();
   for (const ws of sockets.clients) ws.terminate();
   server.close(() => {
     db.close();

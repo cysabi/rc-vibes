@@ -272,8 +272,8 @@ ever be built from one of its commits. On while `SKETCHES=1`.
   with a button that opens the sketch at that commit (a checkout of just it,
   `/home/workspace/commits/<commit>/sketch` beside your clone, made by the
   extension; `/sketches/<id>?commit=<sha>`), or, deleted, finds it in the
-  library's "Recently deleted". Nothing makes stamped scripts yet: that's the
-  builder.
+  library's "Recently deleted". The builder (below) makes stamped scripts;
+  nothing puts them in the room yet.
 - **Through vibes only.** `/box/<id>/…` is proxied to your box's VS Code, for
   you only (`src/server/box-proxy.ts`). The box never sees vibes' cookies,
   only its VS Code's connection token, which vibes adds (and sets for the
@@ -285,15 +285,44 @@ ever be built from one of its commits. On while `SKETCHES=1`.
   control brings changes together; anyone can change `main`. What saving
   commits comes later.
 - **The preview runs in the browser, on its own** (`src/web/preview`), in a
-  "Sketch" panel in VS Code beside the console (`box/extension`). The
-  extension builds the sketch with esbuild on start and on each save, and the
-  preview swaps each build in on the same clock: hot reload. The sketch runs
-  in its own worker, on its own clock, drawn on its own map from the lights'
-  layout (which the extension gets from vibes with the box's token); it never
-  touches the room. Play, pause (which stops calling `update()`) and restart
-  in the panel's title bar, the clock in the status bar; lights select as on
-  the map, with what they look like in the corner. Build errors go to
-  Problems, and the preview keeps running what last built.
+  "Sketch" panel in VS Code beside the console (`box/extension`). The sketch
+  runs in its own worker, on its own clock, drawn on its own map from the
+  lights' layout (which the extension gets from vibes with the box's token);
+  it never touches the room. Play, pause (which stops calling `update()`) and
+  restart in the panel's title bar, the clock in the status bar; lights
+  select as on the map, with what they look like in the corner. Build errors
+  go to Problems, and the preview keeps running what last worked.
+- **Two loops: the room's build, and the editor's.** How a sketch is built is
+  decided the same way for both (`src/shared/sketch-plan.ts`): `sketch.json`'s
+  commands, if it has one (`build` and `dev`, each `{ command, output }`, dev
+  with `watch` if it watches by itself); otherwise a `package.json` `build`
+  script, writing `dist/sketch.js`; otherwise its entry (`main.ts`, …) built
+  by Vite (with its own `vite.config`, if any). Packages install first (pnpm
+  or npm, by lockfile). The room's build is allowed to be slow and exact; the
+  editor's is fast, with the toolchain's own tools (a Nix sketch's dev shell,
+  its language's watcher), never `nix build` on save.
+- **HMR, in tiers** (`box/extension/src/dev.ts`, the preview's worker). A Vite
+  sketch runs as its modules, from a Vite dev server in the box, through
+  Vite's module runner in the preview's worker, their messages relayed through
+  the webview: an edit runs only what changed again (the entry accepts its
+  updates, and hands the worker its new `update()`), and the rest keeps its
+  state (`import.meta.hot.data` keeps the edited module's). Any other sketch
+  swaps in each new script its dev command (or build) writes, on the same
+  clock, its own state starting over. Toolchains that can patch running code
+  (Rust's `subsecond`) would be a third tier, an adapter each, later. A
+  preview stopped by an error starts again on the next update.
+- **The builder** (phase 6; `src/server/builds.ts`, `box/builder.ts`). A build
+  of a commit runs in a pod of its own, from the box image (`builder.mjs`
+  beside the extension): Kata, uid 1000, no privileges, the boxes' network
+  rules, 15 minutes at most. It fetches the commit from vibes (a tar, at
+  `/build-api/source`, with its own token), installs, builds as planned, and
+  sends back the script and its log (`/build-api/result`, once). vibes checks
+  the script itself (a script rclamp can run, at most 256 KB, defining a
+  global `update()`), stamps it, and keeps it with the log. A commit's built
+  once per builder version. `POST /api/sketches/<id>/builds` (`{ commit }`,
+  main's by default), `GET …/builds`, `…/builds/<id>` (with its log),
+  `…/builds/<id>/script`. Nothing uses builds yet: putting one in the room is
+  phase 7.
 
 Still to come: VS Code's own defaults that only its product configuration
 sets (no AI chat; the welcome page is skipped from VS Code's address), its

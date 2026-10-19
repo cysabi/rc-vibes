@@ -1,11 +1,10 @@
 // vibes inside a sketch's VS Code, in the sketch's box. A "Sketch" panel along
 // the bottom holds the preview (the sketch running on the plan: src/web/preview,
-// in a webview) and its console beside it. The extension builds the sketch
-// from the box's files with esbuild (its wasm build, so it runs on any box) on
-// start and on every save, and hands each build to the preview, which swaps
-// it in on the same clock. Build errors go to Problems and the console, and
-// the preview keeps running what last built. Play, pause and restart sit in
-// the panel's title bar, and the clock in the status bar.
+// in a webview) and its console beside it. The dev loop (dev.ts) keeps the
+// preview up to date as you type: by Vite's HMR, or by swapping in each new
+// build, on the same clock either way. Build errors go to Problems and the
+// console, and the preview keeps running what last worked. Play, pause and
+// restart sit in the panel's title bar, and the clock in the status bar.
 //
 // The lights' layout comes from vibes (VIBES_URL), asked with the box's own
 // token (VIBES_BOX_TOKEN), so the webview never needs vibes' cookies.
@@ -14,19 +13,15 @@
 // sketch at one commit), it first makes that folder: a checkout of just that
 // commit, beside the clone, which it's left alone.
 
-import * as esbuild from "esbuild-wasm";
 import { execFile } from "node:child_process";
 import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 import * as vscode from "vscode";
 import { BOX_COMMITS_FOLDER, type Lights } from "../../../src/shared/vibes.ts";
-import type { FromPreview, LogLine, ToPreview } from "../../../src/web/preview/protocol.ts";
+import type { FromPreview, LogLine, SketchSource, ToPreview } from "../../../src/web/preview/protocol.ts";
+import { DevLoop } from "./dev.ts";
 
-// What a sketch is built from: the first of these it has.
-const ENTRIES = ["main.ts", "main.js", "src/main.ts", "src/index.ts", "index.ts", "index.js"];
-// The build is a global script defining update(), as arclamp runs it.
-const FOOTER = "function update(prev, nowMs, initialMs) { return __sketch.update(prev, nowMs, initialMs); }";
 const MAX_LINES = 500;
 // Lights move now and then; the layout is asked for again this often.
 const LAYOUT_EVERY_MS = 5 * 60_000;
@@ -39,8 +34,7 @@ type ConsoleLine = { kind: LogLine["level"] | "build"; at?: number; text: string
 const clock = (ms: number) => `${Math.floor(ms / 60_000)}:${((ms % 60_000) / 1000).toFixed(1).padStart(4, "0")}`;
 
 export function activate(context: vscode.ExtensionContext) {
-  // esbuild-wasm runs its wasm under `node`, by name; a box needn't have one
-  // on its PATH, but the extension host is one.
+  // A sketch's commands (pnpm, its build) want `node` by name; the extension host is one.
   process.env.PATH = `${path.dirname(process.execPath)}${path.delimiter}${process.env.PATH ?? ""}`;
 
   const root = vscode.workspace.workspaceFolders?.[0]?.uri.fsPath;
@@ -73,7 +67,17 @@ export function activate(context: vscode.ExtensionContext) {
   );
 
   void keepLayout(preview, consoleView);
-  if (root) watchAndBuild(context, root, preview, consoleView, problems);
+  if (root) {
+    const dev = new DevLoop(root, {
+      source: (source) => preview.setSource(source),
+      hmr: (payload) => preview.post({ type: "hmr", payload }),
+      line: (kind, text) => consoleView.add({ kind, text }),
+      problems,
+    });
+    preview.onHmr = (payload) => dev.deliver(payload);
+    dev.watch(context);
+    dev.restart();
+  }
 
   // Bring the panel up, then hand the keyboard back to the code.
   setTimeout(async () => {
@@ -131,81 +135,7 @@ async function keepLayout(preview: PreviewView, consoleView: ConsoleView) {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
-function watchAndBuild(
-  context: vscode.ExtensionContext,
-  root: string,
-  preview: PreviewView,
-  consoleView: ConsoleView,
-  problems: vscode.DiagnosticCollection,
-) {
-  const rebuild = async () => {
-    const started = Date.now();
-    const result = await build(root);
-    problems.clear();
-    if ("script" in result) {
-      consoleView.add({ kind: "build", text: `Built ${result.entry} in ${Date.now() - started} ms` });
-      preview.setScript(result.script);
-      return;
-    }
-    const byFile = new Map<string, { uri: vscode.Uri; items: vscode.Diagnostic[] }>();
-    for (const e of result.errors) {
-      const at = e.location;
-      consoleView.add({ kind: "error", text: `Couldn't build: ${at ? `${at.file}:${at.line}:${at.column + 1} ` : ""}${e.text}` });
-      if (!at) continue;
-      const uri = vscode.Uri.file(path.join(root, at.file));
-      const range = new vscode.Range(at.line - 1, at.column, at.line - 1, at.column + Math.max(1, at.length));
-      const list = byFile.get(uri.toString()) ?? { uri, items: [] };
-      list.items.push(new vscode.Diagnostic(range, e.text, vscode.DiagnosticSeverity.Error));
-      byFile.set(uri.toString(), list);
-    }
-    for (const { uri, items } of byFile.values()) problems.set(uri, items);
-    if (preview.script !== null) consoleView.add({ kind: "build", text: "The preview keeps running what last built." });
-  };
-  // Saves come in bunches (and autosave is on): build once they settle.
-  let timer: NodeJS.Timeout | undefined;
-  const later = () => {
-    clearTimeout(timer);
-    timer = setTimeout(() => void rebuild(), 120);
-  };
-  const watcher = vscode.workspace.createFileSystemWatcher(new vscode.RelativePattern(root, "**/*.{ts,js,mjs,json}"));
-  context.subscriptions.push(
-    watcher,
-    watcher.onDidCreate(later),
-    watcher.onDidChange(later),
-    watcher.onDidDelete(later),
-    vscode.workspace.onDidSaveTextDocument((doc) => doc.uri.fsPath.startsWith(root) && later()),
-  );
-  void rebuild();
-}
-
-type BuildError = { text: string; location: esbuild.Location | null };
-type Built = { entry: string; script: string } | { entry: string | null; errors: BuildError[] };
-
-/** The sketch bundled into one global script, or why it couldn't be. */
-async function build(root: string): Promise<Built> {
-  const entry = ENTRIES.find((e) => fs.existsSync(path.join(root, e)));
-  if (!entry) return { entry: null, errors: [{ text: `nothing to build: none of ${ENTRIES.join(", ")}`, location: null }] };
-  try {
-    const out = await esbuild.build({
-      entryPoints: [path.join(root, entry)],
-      absWorkingDir: root,
-      bundle: true,
-      write: false,
-      format: "iife",
-      globalName: "__sketch",
-      platform: "browser",
-      target: "es2022",
-      logLevel: "silent",
-      footer: { js: FOOTER },
-    });
-    return { entry, script: out.outputFiles[0]!.text };
-  } catch (err) {
-    const errors = (err as esbuild.BuildFailure).errors;
-    return { entry, errors: errors?.length ? errors : [{ text: String((err as Error).message ?? err), location: null }] };
-  }
-}
-
-/** The preview: src/web/preview's bundle in a webview, fed the layout and each build. */
+/** The preview: src/web/preview's bundle in a webview, fed the layout and the sketch. */
 class PreviewView implements vscode.WebviewViewProvider {
   private readonly media: vscode.Uri;
   private readonly console: ConsoleView;
@@ -213,7 +143,9 @@ class PreviewView implements vscode.WebviewViewProvider {
   private view: vscode.WebviewView | null = null;
   private layout: Lights | null = null;
   private playing: boolean | null = null;
-  script: string | null = null;
+  private source: SketchSource | null = null;
+  /** What the preview's module runner sends the box's Vite. */
+  onHmr: ((payload: unknown) => void) | null = null;
 
   constructor(extensionUri: vscode.Uri, consoleView: ConsoleView, status: vscode.StatusBarItem) {
     this.media = vscode.Uri.joinPath(extensionUri, "media", "preview");
@@ -248,7 +180,9 @@ class PreviewView implements vscode.WebviewViewProvider {
   private receive(m: FromPreview) {
     if (m.type === "ready") {
       if (this.layout) this.post({ type: "layout", layout: this.layout });
-      if (this.script !== null) this.post({ type: "script", script: this.script });
+      if (this.source) this.post({ type: "source", source: this.source });
+    } else if (m.type === "hmr") {
+      this.onHmr?.(m.payload);
     } else if (m.type === "log") {
       this.console.add({ kind: m.line.level, at: m.line.at, text: m.line.text });
     } else {
@@ -269,9 +203,9 @@ class PreviewView implements vscode.WebviewViewProvider {
     this.post({ type: "layout", layout });
   }
 
-  setScript(script: string) {
-    this.script = script;
-    this.post({ type: "script", script });
+  setSource(source: SketchSource) {
+    this.source = source;
+    this.post({ type: "source", source });
   }
 
   post(m: ToPreview) {
@@ -295,8 +229,10 @@ class ConsoleView implements vscode.WebviewViewProvider {
   }
 
   add(line: ConsoleLine) {
-    this.lines = [...this.lines.slice(-(MAX_LINES - 1)), line];
-    void this.view?.webview.postMessage({ type: "line", line });
+    // Tools color what they print for a terminal; this isn't one.
+    const plain = { ...line, text: line.text.replace(/\x1b\[[0-9;]*m/g, "") };
+    this.lines = [...this.lines.slice(-(MAX_LINES - 1)), plain];
+    void this.view?.webview.postMessage({ type: "line", line: plain });
   }
 
   clear() {

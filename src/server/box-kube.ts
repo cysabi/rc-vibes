@@ -8,6 +8,7 @@
 import { readFileSync } from "node:fs";
 import https from "node:https";
 import type { BoxRunner } from "./boxes.ts";
+import type { BuildRunner } from "./builds.ts";
 import type { SketchesConfig } from "./env.ts";
 
 const SA = "/var/run/secrets/kubernetes.io/serviceaccount";
@@ -20,7 +21,7 @@ interface Pod {
   metadata: { name: string; deletionTimestamp?: string };
 }
 
-export function kubernetesRunner(sketches: SketchesConfig): BoxRunner {
+export function kubernetesRunner(sketches: SketchesConfig): BoxRunner & BuildRunner {
   const ns = sketches.namespace;
   const host = process.env.KUBERNETES_SERVICE_HOST;
   const port = process.env.KUBERNETES_SERVICE_PORT ?? "443";
@@ -130,6 +131,51 @@ export function kubernetesRunner(sketches: SketchesConfig): BoxRunner {
 
     async remove(name) {
       await check("removing the box", kube("DELETE", `${pods}/${name}`), [200, 202, 404]);
+    },
+
+    // Builds: a pod each, as uid 1000 with nothing it can raise itself to,
+    // gone by itself after 15 minutes at most.
+    async startBuild(name, image, command, env) {
+      await check(
+        "starting the build",
+        kube("POST", pods, {
+          metadata: { name, labels: { app: "vibes-build" } },
+          spec: {
+            ...(sketches.runtimeClass ? { runtimeClassName: sketches.runtimeClass } : {}),
+            automountServiceAccountToken: false,
+            enableServiceLinks: false,
+            restartPolicy: "Never",
+            activeDeadlineSeconds: 900,
+            securityContext: { runAsUser: 1000, runAsGroup: 1000, runAsNonRoot: true },
+            containers: [
+              {
+                name: "build",
+                image,
+                imagePullPolicy: "IfNotPresent",
+                command,
+                env: Object.entries(env).map(([k, v]) => ({ name: k, value: v })),
+                resources: { requests: { cpu: "250m", memory: "512Mi" }, limits: { cpu: "2", memory: "2Gi" } },
+                securityContext: { allowPrivilegeEscalation: false, capabilities: { drop: ["ALL"] } },
+              },
+            ],
+          },
+        }),
+      );
+    },
+
+    async buildState(name) {
+      const pod = await getPod(name);
+      if (!pod || pod.metadata.deletionTimestamp) return "gone";
+      return pod.status.phase === "Succeeded" || pod.status.phase === "Failed" ? "ended" : "running";
+    },
+
+    async removeBuild(name) {
+      await check("removing the build", kube("DELETE", `${pods}/${name}`), [200, 202, 404]);
+    },
+
+    async builds() {
+      const res = await check("listing builds", kube<{ items: Pod[] }>("GET", `${pods}?labelSelector=${encodeURIComponent("app=vibes-build")}`));
+      return res.data.items.map((p) => p.metadata.name);
     },
 
     async list(image) {

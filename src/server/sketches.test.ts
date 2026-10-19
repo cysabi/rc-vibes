@@ -8,6 +8,7 @@ import type { BoxState, Me, Sketch } from "../shared/vibes.ts";
 import type { LightsSource } from "./api.ts";
 import type { AuthEnv } from "./auth.ts";
 import { boxToken, createBoxes, type Boxes } from "./boxes.ts";
+import type { Builds } from "./builds.ts";
 import { openDb, type Db } from "./db.ts";
 import { loadConfig, type Config } from "./env.ts";
 import { fakeBoxRunner } from "./fake-box-runner.ts";
@@ -45,7 +46,7 @@ beforeAll(async () => {
       c.set("user", as);
       await next();
     })
-    .route("/sketches", sketchRoutes(config.sketches!, db, boxes));
+    .route("/sketches", sketchRoutes(config.sketches!, db, boxes, {} as Builds));
   const lights = { currentLights: async () => ({ lights: [], rails: [], changed: 0 }) } as unknown as LightsSource;
   boxApi = boxApiRoutes(config, config.sketches!, db, lights);
 });

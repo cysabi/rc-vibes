@@ -158,6 +158,9 @@
               p.pnpm_11
               # mount and umount, for its agent.
               p.util-linuxMinimal
+              # For builds (box/builder.ts), which unpack the commit vibes sends.
+              p.gnutar
+              p.gzip
             ];
             # Where the homes are given (/homes) and where the person's goes
             # (/home/workspace). Who's who as real files, which Docker reads to

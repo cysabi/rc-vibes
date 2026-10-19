@@ -101,6 +101,25 @@ export function openDb(path: string) {
       at INTEGER NOT NULL,
       UNIQUE (sketch_id, user_id)
     );
+    -- Builds: one commit of a sketch, built for the room by vibes' builder
+    -- (builder is its version), and how it went: its log, and the script,
+    -- stamped, if it built.
+    CREATE TABLE IF NOT EXISTS builds (
+      id TEXT PRIMARY KEY,
+      sketch_id TEXT NOT NULL,
+      commit_sha TEXT NOT NULL,
+      builder TEXT NOT NULL,
+      state TEXT NOT NULL,
+      by_id TEXT NOT NULL,
+      by_name TEXT NOT NULL,
+      at INTEGER NOT NULL,
+      finished_at INTEGER,
+      plan TEXT,
+      error TEXT,
+      log TEXT,
+      script TEXT
+    );
+    CREATE INDEX IF NOT EXISTS builds_by_sketch ON builds (sketch_id, at);
   `);
 
   const placementColumns = db.prepare("PRAGMA table_info(placements)").all() as { name: string }[];
@@ -160,6 +179,12 @@ export function openDb(path: string) {
   const selectBranch = db.prepare("SELECT 1 FROM boxes WHERE sketch_id = ? AND branch = ?");
   const updateBoxPod = db.prepare("UPDATE boxes SET pod = ? WHERE id = ?");
   const selectBoxPods = db.prepare("SELECT id, pod FROM boxes WHERE pod IS NOT NULL");
+  const insertBuild = db.prepare("INSERT INTO builds (id, sketch_id, commit_sha, builder, state, by_id, by_name, at) VALUES (?, ?, ?, ?, 'building', ?, ?, ?)");
+  const selectBuild = db.prepare("SELECT * FROM builds WHERE id = ?");
+  const selectBuildsOf = db.prepare("SELECT * FROM builds WHERE sketch_id = ? ORDER BY at DESC LIMIT ?");
+  const selectBuildOfCommit = db.prepare("SELECT * FROM builds WHERE sketch_id = ? AND commit_sha = ? AND builder = ? AND state IN ('building', 'built') ORDER BY at DESC LIMIT 1");
+  const selectBuilding = db.prepare("SELECT * FROM builds WHERE state = 'building'");
+  const updateBuild = db.prepare("UPDATE builds SET state = ?, finished_at = ?, plan = ?, error = ?, log = ?, script = ? WHERE id = ? AND state = 'building'");
 
   // Nests: an inner transaction just joins the outer one.
   let depth = 0;
@@ -352,6 +377,26 @@ export function openDb(path: string) {
     /** The boxes claimed for someone, and whose. */
     boxPods: () => selectBoxPods.all() as { id: string; pod: string }[],
 
+    addBuild(b: Pick<BuildRow, "id" | "sketch_id" | "commit_sha" | "builder" | "by_id" | "by_name" | "at">) {
+      insertBuild.run(b.id, b.sketch_id, b.commit_sha, b.builder, b.by_id, b.by_name, b.at);
+    },
+
+    build: (id: string) => selectBuild.get(id) as BuildRow | undefined,
+
+    /** A sketch's latest builds, newest first. */
+    buildsOf: (sketchId: string, limit = 20) => selectBuildsOf.all(sketchId, limit) as unknown as BuildRow[],
+
+    /** A build of this commit by this builder that's built, or still building. */
+    buildOfCommit: (sketchId: string, commit: string, builder: string) => selectBuildOfCommit.get(sketchId, commit, builder) as BuildRow | undefined,
+
+    /** The builds still going. */
+    building: () => selectBuilding.all() as unknown as BuildRow[],
+
+    /** How a build ended; false if it had already. */
+    finishBuild(id: string, end: Pick<BuildRow, "state" | "finished_at" | "plan" | "error" | "log" | "script">): boolean {
+      return updateBuild.run(end.state, end.finished_at, end.plan, end.error, end.log, end.script, id).changes > 0;
+    },
+
     close: () => db.close(),
   };
 }
@@ -380,6 +425,27 @@ export interface BoxRow {
   at: number;
   /** The box it was last claimed in, unless it's been let go since. */
   pod: string | null;
+}
+
+export interface BuildRow {
+  id: string;
+  sketch_id: string;
+  /** The commit built (its full hash). */
+  commit_sha: string;
+  /** The builder's version (BUILDER_VERSION). */
+  builder: string;
+  state: "building" | "built" | "failed";
+  by_id: string;
+  by_name: string;
+  /** When it was started, and when it ended, in ms. */
+  at: number;
+  finished_at: number | null;
+  /** How it was built: "vite main.ts", "package.json: pnpm run build", … */
+  plan: string | null;
+  error: string | null;
+  log: string | null;
+  /** The script, stamped, if it built. */
+  script: string | null;
 }
 
 export type Db = ReturnType<typeof openDb>;
