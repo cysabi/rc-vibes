@@ -239,14 +239,39 @@ describe("adding a sketch", () => {
   });
 
   it("goes in on its home, from its branch: at the commit previewed, or the branch's head if it wasn't built yet", async () => {
-    drafts.built(aurora(), built, "function update() {}");
-    rain();
+    const first = aurora();
+    drafts.built(first, built, "function update() {}");
+    const second = rain();
     await applyDraft(live);
     expect(calls).toEqual([
-      'POST /api/instances {"sketch":"s1","branch":"main","commit":"abc1234def","home":[1,2]}',
-      'POST /api/instances {"sketch":"s2","branch":"ada/try","home":[1]}',
+      `POST /api/instances {"sketch":"s1","branch":"main","commit":"abc1234def","home":[1,2],"key":"${first}"}`,
+      `POST /api/instances {"sketch":"s2","branch":"ada/try","home":[1],"key":"${second}"}`,
     ]);
     expect(currentDraft()).toBe(EMPTY);
+  });
+
+  it("goes in once, however the draft changes while it's sent", async () => {
+    const key = aurora();
+    // Its build looked at, and room tone dragged, while it's on its way.
+    during = () => {
+      drafts.built(key, { ...built, state: "building" });
+      drafts.setRoomtone({ "1": { brightness: 0.3 } }, "dimmer");
+    };
+    await applyDraft(live);
+    expect(calls.filter((c) => c.startsWith("POST /api/instances"))).toHaveLength(1);
+    expect(currentDraft().added).toEqual([]);
+    expect(currentDraft().roomtone).toEqual({ "1": { brightness: 0.3 } });
+    expect(pendingCount(live, currentDraft())).toBe(1);
+  });
+
+  it("doesn't change the draft when its build hasn't changed", () => {
+    const key = aurora();
+    drafts.built(key, { ...built, state: "building" });
+    const before = currentDraft();
+    drafts.built(key, { ...built, state: "building" });
+    expect(currentDraft()).toBe(before);
+    drafts.built(key, built, "function update() {}");
+    expect(currentDraft()).not.toBe(before);
   });
 
   it("stays pending if it couldn't go in", async () => {

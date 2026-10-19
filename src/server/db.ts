@@ -160,6 +160,9 @@ export function openDb(path: string) {
   // The branch an instance was put in from (all of them main, before there was a choice).
   const instanceColumns = db.prepare("PRAGMA table_info(instances)").all() as { name: string }[];
   if (!instanceColumns.some((c) => c.name === "branch")) db.exec("ALTER TABLE instances ADD COLUMN branch TEXT NOT NULL DEFAULT 'main'");
+  // The key the browser sent with it (its pending edit's), so the same edit sent again is the same instance.
+  if (!instanceColumns.some((c) => c.name === "client_key")) db.exec("ALTER TABLE instances ADD COLUMN client_key TEXT");
+  db.exec("CREATE UNIQUE INDEX IF NOT EXISTS instances_by_client_key ON instances (by_id, client_key)");
 
   const selectPlacements = db.prepare("SELECT light_id, mm_x, mm_y, floor, rail_id, mm_along FROM placements");
   const upsertPlacement = db.prepare(`
@@ -214,8 +217,9 @@ export function openDb(path: string) {
   const selectBuilding = db.prepare("SELECT * FROM builds WHERE state = 'building'");
   const updateBuild = db.prepare("UPDATE builds SET state = ?, finished_at = ?, plan = ?, error = ?, log = ?, script = ? WHERE id = ? AND state = 'building'");
   const insertInstance = db.prepare(
-    "INSERT INTO instances (id, sketch_id, branch, build_id, home, shader_id, state, error, next_build_id, by_id, by_name, at) VALUES (?, ?, ?, ?, ?, NULL, 'building', NULL, NULL, ?, ?, ?)",
+    "INSERT INTO instances (id, sketch_id, branch, build_id, home, shader_id, state, error, next_build_id, by_id, by_name, at, client_key) VALUES (?, ?, ?, ?, ?, NULL, 'building', NULL, NULL, ?, ?, ?, ?)",
   );
+  const selectInstanceOfKey = db.prepare("SELECT * FROM instances WHERE by_id = ? AND client_key = ?");
   const selectInstance = db.prepare("SELECT * FROM instances WHERE id = ?");
   const selectInstances = db.prepare("SELECT * FROM instances ORDER BY at");
   const selectInstanceOfShader = db.prepare("SELECT * FROM instances WHERE shader_id = ?");
@@ -438,9 +442,12 @@ export function openDb(path: string) {
     },
 
     /** A new instance, building: from main, unless it says otherwise. */
-    addInstance(i: Pick<InstanceRow, "id" | "sketch_id" | "build_id" | "home" | "by_id" | "by_name" | "at"> & { branch?: string }) {
-      insertInstance.run(i.id, i.sketch_id, i.branch ?? "main", i.build_id, JSON.stringify(i.home), i.by_id, i.by_name, i.at);
+    addInstance(i: Pick<InstanceRow, "id" | "sketch_id" | "build_id" | "home" | "by_id" | "by_name" | "at"> & { branch?: string; client_key?: string | null }) {
+      insertInstance.run(i.id, i.sketch_id, i.branch ?? "main", i.build_id, JSON.stringify(i.home), i.by_id, i.by_name, i.at, i.client_key ?? null);
     },
+
+    /** The instance someone put in with a key of theirs, if there is one. */
+    instanceOfKey: (byId: string, key: string) => instanceOf(selectInstanceOfKey.get(byId, key)),
 
     instance: (id: string) => instanceOf(selectInstance.get(id)),
 
@@ -534,6 +541,8 @@ export interface InstanceRow {
   sketch_id: string;
   /** The branch it was put in from: trying again, or updating, moves it to that branch's head. */
   branch: string;
+  /** The key the browser put it in with (its pending edit's), if it sent one. */
+  client_key: string | null;
   /** The build it runs, or will once it's built. */
   build_id: string;
   /** The lights it was put on, by id. */

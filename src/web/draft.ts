@@ -356,15 +356,24 @@ export const drafts = {
   keep(key: LayerKey) {
     set({ ...draft, removed: draft.removed.filter((k) => k !== key) });
   },
-  /** A sketch to put in, on `home`, its build asked for next (adding.ts); its key. */
+  /**
+   * A sketch to put in, on `home`, its build asked for next (adding.ts); its
+   * key, which vibes is sent with it, to put it in once however often it's sent.
+   */
   add(a: Pick<Adding, "sketchId" | "sketchName" | "branch" | "home" | "mask">): LayerKey {
-    const key = `+${crypto.randomUUID().slice(0, 8)}`;
+    const key = `+${crypto.randomUUID()}`;
     set({ ...draft, added: [...draft.added, { ...a, key, build: null }] });
     return key;
   },
-  /** How a sketch being added's build is going; with its script, once it's built. */
+  /**
+   * How a sketch being added's build is going; with its script, once it's
+   * built. The draft only changes when that does (it's looked at every second).
+   */
   built(key: LayerKey, build: NonNullable<Adding["build"]>, script?: string) {
     if (script !== undefined) addedScripts.set(build.id, script);
+    const was = draft.added.find((a) => a.key === key)?.build;
+    const same = was && was.id === build.id && was.commit === build.commit && was.state === build.state && was.error === build.error;
+    if (same && script === undefined) return;
     set({ ...draft, added: draft.added.map((a) => (a.key === key ? { ...a, build } : a)) });
   },
   /** A sketch being added, built again (after its build failed), at its branch's head. */
@@ -414,9 +423,13 @@ export async function applyDraft(live: SceneNode[]): Promise<void> {
   } finally {
     // Catch the scene up first, so the preview never drops a change before
     // the live room shows it. Edits made while the draft was being sent are
-    // kept: they only count where they still differ from the room.
+    // kept: they only count where they still differ from the room. But a
+    // sketch added is added once: whatever went in comes out of the draft,
+    // however the draft changed meanwhile (left in, live mode would put it
+    // in again, and again).
     await invalidateScene().catch(() => {});
-    set(draft === start ? d : draft);
+    const added = new Set(start.added.filter((a) => !d.added.some((x) => x.key === a.key)).map((a) => a.key));
+    set(draft === start ? d : { ...draft, added: draft.added.filter((a) => !added.has(a.key)) });
   }
 }
 
@@ -447,7 +460,7 @@ async function sendDraft(live: SceneNode[], d: Draft, onStep: (next: Draft) => v
   // in once built).
   for (const a of d.added) {
     const commit = a.build?.state === "built" ? a.build.commit : undefined;
-    await request("POST", "/api/instances", { sketch: a.sketchId, branch: a.branch, ...(commit ? { commit } : {}), home: a.home });
+    await request("POST", "/api/instances", { sketch: a.sketchId, branch: a.branch, ...(commit ? { commit } : {}), home: a.home, key: a.key });
     step({ ...d, added: d.added.filter((x) => x.key !== a.key) });
   }
 

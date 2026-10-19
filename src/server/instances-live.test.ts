@@ -137,6 +137,21 @@ describe("an instance", () => {
     expect((await send("POST", "/instances", { sketch: SKETCH, branch: "../x", home: [1] })).status).toBe(400);
   });
 
+  it("with a key, is put in once, however often (or at once) it's asked, by the one who asked", async () => {
+    nextBuild = { id: "b11", commit: "5".repeat(40), built: false };
+    const ask = () => send("POST", "/instances", { sketch: SKETCH, home: [1], key: "+one" });
+    const [a, b] = await Promise.all([ask(), ask()]);
+    const again = await ask();
+    const ids = await Promise.all([a, b, again].map(async (r) => ((await r.json()) as Instance).id));
+    expect(new Set(ids).size).toBe(1);
+    expect(db.instances()).toHaveLength(1);
+    expect(asked).toEqual(["main"]);
+    // Without one, each ask is its own.
+    await send("POST", "/instances", { sketch: SKETCH, home: [1] });
+    await send("POST", "/instances", { sketch: SKETCH, home: [1] });
+    expect(db.instances()).toHaveLength(3);
+  });
+
   it("updates to its branch's head, unless it's given a commit", async () => {
     nextBuild = { id: "b9", commit: "3".repeat(40), built: true };
     const inst = (await (await send("POST", "/instances", { sketch: SKETCH, branch: "ada/try", home: [1] })).json()) as Instance;

@@ -162,26 +162,48 @@ export function createInstances({ config, db, arclamp, builds, lightIds, changed
 
   const sorted = (ids: Iterable<number>) => [...new Set(ids)].sort((a, b) => a - b);
 
+  type From = { branch: string; commit?: string };
+  type Made = { instance: Instance } | Refusal;
+
+  async function make(sketchId: string, from: From, homeLights: number[], user: Me, key: string | null): Promise<Made> {
+    const sketch = db.sketch(sketchId);
+    if (!sketch) return refusal("no such sketch", 404, "not_found");
+    if (sketch.deleted_at !== null) return refusal("its sketch was deleted", 410, "deleted");
+    const bad = await badHome(homeLights);
+    if (bad) return refusal(bad, 400, "bad_home");
+    const started = await builds.start(sketchId, from.commit ?? from.branch, user);
+    if ("refused" in started) return refusal(started.refused, started.status, "cant_build");
+    const id = randomUUID();
+    db.addInstance({ id, sketch_id: sketchId, branch: from.branch, build_id: started.build.id, home: sorted(homeLights), by_id: user.id, by_name: user.name, at: Date.now(), client_key: key });
+    changed();
+    if (started.build.state !== "building") await place(id);
+    return { instance: view(db.instance(id)!) };
+  }
+
+  // Being put in now, by whose key: asked again meanwhile, it's the same one.
+  const making = new Map<string, Promise<Made>>();
+
   return {
     view,
 
     /**
      * A sketch from a branch, put in the room on `home`: at a commit (the
      * branch's head, if none is given), building first if it isn't built.
+     * With a key (the browser's, for its pending edit), it's put in once:
+     * asked again with the same key, by the same person, it's the instance
+     * that was made, so a browser that sends an edit twice can't put it in
+     * twice.
      */
-    async create(sketchId: string, from: { branch: string; commit?: string }, homeLights: number[], user: Me): Promise<{ instance: Instance } | Refusal> {
-      const sketch = db.sketch(sketchId);
-      if (!sketch) return refusal("no such sketch", 404, "not_found");
-      if (sketch.deleted_at !== null) return refusal("its sketch was deleted", 410, "deleted");
-      const bad = await badHome(homeLights);
-      if (bad) return refusal(bad, 400, "bad_home");
-      const started = await builds.start(sketchId, from.commit ?? from.branch, user);
-      if ("refused" in started) return refusal(started.refused, started.status, "cant_build");
-      const id = randomUUID();
-      db.addInstance({ id, sketch_id: sketchId, branch: from.branch, build_id: started.build.id, home: sorted(homeLights), by_id: user.id, by_name: user.name, at: Date.now() });
-      changed();
-      if (started.build.state !== "building") await place(id);
-      return { instance: view(db.instance(id)!) };
+    async create(sketchId: string, from: From, homeLights: number[], user: Me, key?: string): Promise<Made> {
+      if (!key) return make(sketchId, from, homeLights, user, null);
+      const made = db.instanceOfKey(user.id, key);
+      if (made) return { instance: view(made) };
+      const id = `${user.id}\0${key}`;
+      const already = making.get(id);
+      if (already) return already;
+      const putting = make(sketchId, from, homeLights, user, key).finally(() => making.delete(id));
+      making.set(id, putting);
+      return putting;
     },
 
     /** A live instance, moved on to another commit (its branch's head by default): built, then swapped in. */
@@ -312,9 +334,10 @@ export function instanceRoutes(config: Config, arclamp: Pick<Arclamp, "shader" |
     routes
       // A sketch, put in the room on the lights given (its home): from a
       // branch (main, unless it says), at a commit (the branch's head, unless it says).
-      .post("/instances", zValidator("json", z.object({ sketch: z.string().min(1), branch, commit: z.string().min(1).optional(), home }), badInstance), async (c) => {
-        const { sketch, branch, commit, home } = c.req.valid("json");
-        return answer(c, await instances.create(sketch, { branch, ...(commit ? { commit } : {}) }, home, c.get("user")), 202);
+      // With a key, put in once however often it's asked.
+      .post("/instances", zValidator("json", z.object({ sketch: z.string().min(1), branch, commit: z.string().min(1).optional(), home, key: z.string().min(1).max(100).optional() }), badInstance), async (c) => {
+        const { sketch, branch, commit, home, key } = c.req.valid("json");
+        return answer(c, await instances.create(sketch, { branch, ...(commit ? { commit } : {}) }, home, c.get("user"), key), 202);
       })
 
       .post("/instances/:id/update", zValidator("json", z.object({ commit: z.string().min(1).optional() }), badInstance), async (c) => {
