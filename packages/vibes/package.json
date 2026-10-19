@@ -1,0 +1,26 @@
+{
+  "name": "@roobscoob/vibes",
+  "version": "0.1.0",
+  "description": "Color, light and time for sketches on the lights at the Recurse Center",
+  "keywords": ["lighting", "lemtone", "oklab", "arclamp", "recurse-center"],
+  "license": "MIT",
+  "author": "Rose Kodsi-Hall",
+  "type": "module",
+  "sideEffects": false,
+  "main": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "types": "./dist/index.d.ts",
+      "default": "./dist/index.js"
+    }
+  },
+  "files": ["dist", "src", "!src/**/*.test.ts"],
+  "scripts": {
+    "build": "tsc -p tsconfig.build.json",
+    "prepack": "npm run build"
+  },
+  "publishConfig": {
+    "access": "public"
+  }
+}

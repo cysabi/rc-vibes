@@ -39,6 +39,8 @@
             ./vite.config.ts
             ./src
             ./box
+            # The sketch library, whose color core vibes uses too (src/shared/lemtone.ts).
+            ./packages/vibes/src
           ];
         };
 
@@ -78,7 +80,7 @@
           installPhase = ''
             runHook preInstall
             mkdir -p $out
-            cp -r package.json src dist node_modules $out/
+            cp -r package.json src packages dist node_modules $out/
             runHook postInstall
           '';
         };
