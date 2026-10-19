@@ -295,12 +295,24 @@ ever be built from one of its commits. On while `SKETCHES=1`.
 - **Two loops: the room's build, and the editor's.** How a sketch is built is
   decided the same way for both (`src/shared/sketch-plan.ts`): `sketch.json`'s
   commands, if it has one (`build` and `dev`, each `{ command, output }`, dev
-  with `watch` if it watches by itself); otherwise a `package.json` `build`
-  script, writing `dist/sketch.js`; otherwise its entry (`main.ts`, …) built
-  by Vite (with its own `vite.config`, if any). Packages install first (pnpm
-  or npm, by lockfile). The room's build is allowed to be slow and exact; the
-  editor's is fast, with the toolchain's own tools (a Nix sketch's dev shell,
-  its language's watcher), never `nix build` on save.
+  with `watch` if it watches by itself); otherwise, with a `flake.nix`,
+  `nix build .#sketch` (its output the script, or a folder with `sketch.js`);
+  otherwise a `package.json` `build` script, writing `dist/sketch.js`;
+  otherwise its entry (`main.ts`, …) built by Vite (with its own
+  `vite.config`, if any). Packages install first (pnpm or npm, by lockfile).
+  The room's build is allowed to be slow and exact; the editor's is fast,
+  with the toolchain's own tools (its language's watcher, in the flake's dev
+  shell), not `nix build` on save unless that's all it has.
+- **Nix, first-class.** Every box and build has Nix (flakes on). A flake
+  sketch brings its own tools: its own commands (`sketch.json`'s, installing
+  its packages) run in its dev shell (`nix develop`). Nix's daemon runs as
+  root in the VM (started by the box's agent, after the homes are gone,
+  unable to mount anything; and by the builder before it drops to uid 1000),
+  building as Nix's build users, with Nix's own sandbox off: the VM is the
+  sandbox. The store is the VM's own, fresh each box and build, so a toolchain
+  downloads from cache.nixos.org the first time in each (a cache on kokuzo,
+  or each person's store kept in their home, can make that fast later). Nix
+  sees what git does: a new file needs `git add` before a Nix build sees it.
 - **HMR, in tiers** (`box/extension/src/dev.ts`, the preview's worker). A Vite
   sketch runs as its modules, from a Vite dev server in the box, through
   Vite's module runner in the preview's worker, their messages relayed through
@@ -321,8 +333,14 @@ ever be built from one of its commits. On while `SKETCHES=1`.
   global `update()`), stamps it, and keeps it with the log. A commit's built
   once per builder version. `POST /api/sketches/<id>/builds` (`{ commit }`,
   main's by default), `GET …/builds`, `…/builds/<id>` (with its log),
-  `…/builds/<id>/script`. Nothing uses builds yet: putting one in the room is
-  phase 7.
+  `…/builds/<id>/script`.
+- **Builds in the room** (phase 7; `src/server/instances.ts`). The only way
+  vibes makes a shader or changes one's script, and it takes a build's id,
+  never a script: `POST /api/shaders { build }` (a new shader running that
+  build's stamped script), `PUT /api/shaders/<id>/build { build }` and
+  `DELETE /api/shaders/<id>`, both for vibes' own shaders only (stamped). A
+  build goes in only if it built, its sketch isn't deleted, and its stamp
+  checks out with vibes' key. The UI for it (and the draft) is to come.
 
 Still to come: VS Code's own defaults that only its product configuration
 sets (no AI chat; the welcome page is skipped from VS Code's address), its

@@ -16,6 +16,7 @@ import { ArclampError, type Arclamp } from "./arclamp.ts";
 import { requireUser, type AuthEnv } from "./auth.ts";
 import type { Db } from "./db.ts";
 import type { Config } from "./env.ts";
+import { instanceRoutes } from "./instances.ts";
 import { applyEdits, lightsFile } from "./lights.ts";
 import { sketchOf } from "./stamp.ts";
 import type { StreamRelay } from "./stream.ts";
@@ -117,7 +118,11 @@ export function apiRoutes({ config, arclamp, db, relay, origins, lights, sketche
   api.use("*", requireUser(config));
 
   const { arclampLights, currentLights } = lights;
-  if (sketches) api.route("/sketches", sketches);
+  if (sketches) {
+    api.route("/sketches", sketches);
+    // Sketches' builds, in the room.
+    api.route("/", instanceRoutes(config, arclamp, db));
+  }
 
   const nameOf = (d: ShaderDescriptor) => `Shader #${d.id}`;
 
