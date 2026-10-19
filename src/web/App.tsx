@@ -198,7 +198,10 @@ function Shell() {
   );
 }
 
+/** The floor to show until you pick another: the 4th, where the lights are. */
+const DEFAULT_FLOOR = 4;
+
 function initialFloor(): number {
   const n = Number(savedFloor());
-  return FLOORS.some((f) => f.id === n) ? n : FLOORS[FLOORS.length - 1]!.id;
+  return FLOORS.some((f) => f.id === n) ? n : DEFAULT_FLOOR;
 }

@@ -24,7 +24,7 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type ReactNode } from "react";
 import type { Frame, LightInfo, Rail, RailPoint, RailSpot } from "../../shared/arclamp.ts";
-import { baseType, footprintOf, lemtoneOf, orientationsOf, seenOf } from "../../shared/fixtures.ts";
+import { baseType, footprintOf, isBinary, isOn, lemtoneOf, orientationsOf, seenOf } from "../../shared/fixtures.ts";
 import { cssColor, lemtoneCode, lemtoneCss, lightRgb, lookOf, LUMENS_PER_BRIGHTNESS, swatch, type Lemtone, type Vec3 } from "../../shared/lemtone.ts";
 import {
   alongAfterEndMove,
@@ -1388,8 +1388,9 @@ function HoverCard({ light, at, view, width, moving }: { light: PlacedLight; at:
 
 /**
  * The lights a box being dragged out would select, summed up over the top of
- * them: how many, of what, and the color they're making, if they're all
- * making the same one.
+ * them: how many, of what, the color the color lights are making, if they're
+ * all making the same one, and whether the old bulbs are on. The two are
+ * apart, as an old bulb never makes a color light's light.
  */
 function SelectionCard({ lights, at, view, width }: { lights: PlacedLight[]; at: (l: PlacedLight) => Point; view: View; width: number }) {
   const [, tick] = useState(0);
@@ -1398,10 +1399,14 @@ function SelectionCard({ lights, at, view, width }: { lights: PlacedLight[]; at:
     return () => window.clearInterval(t);
   }, []);
   const frame = useFrames().latest();
-  const tones = lights.map((l) => lemtoneOf(frame?.lights.get(l.id), l.type));
-  const seen = lights.map((l) => seenOf(frame?.lights.get(l.id), l.type));
+  const seenAll = (ls: PlacedLight[]) => ls.map((l) => seenOf(frame?.lights.get(l.id), l.type));
+  const colors = lights.filter((l) => !isBinary(l.type));
+  const olds = lights.filter((l) => isBinary(l.type));
+  const tones = colors.map((l) => lemtoneOf(frame?.lights.get(l.id), l.type));
   const first = tones[0] ?? null;
   const alike = tones.every((t) => sameTone(t, first));
+  const on = olds.filter((l) => isOn(frame?.lights.get(l.id))).length;
+  const switched = on === 0 ? "off" : on === olds.length ? "on" : `${on} of ${olds.length} on`;
   const kinds = new Map<string, number>();
   for (const l of lights) kinds.set(baseType(l.type), (kinds.get(baseType(l.type)) ?? 0) + 1);
   // Over the middle of them, or under them if that's too near the top.
@@ -1428,19 +1433,29 @@ function SelectionCard({ lights, at, view, width }: { lights: PlacedLight[]; at:
           {[...kinds].map(([kind, n]) => `${n} ${typeName(kind, n)}`).join(" · ")}
         </span>
       )}
-      <span className="mono hover-value selection-tone">
-        {alike ? (
-          <span className="dot" style={{ background: lemtoneCss(seen[0] ?? null, screenGamut()) }} />
-        ) : (
-          <span className="slivers" aria-hidden="true">
-            {seen.slice(0, 24).map((t, i) => (
-              <span key={i} style={{ background: lemtoneCss(t, screenGamut()) }} />
-            ))}
-          </span>
-        )}
-        {alike ? (first ? lemtoneCode(first) : "off") : "mixed"}
-      </span>
+      {colors.length > 0 && <ToneLine seen={seenAll(colors)} alike={alike} text={alike ? (first ? lemtoneCode(first) : "off") : "mixed"} />}
+      {olds.length > 0 && (
+        <ToneLine seen={seenAll(olds)} alike={on === 0 || on === olds.length} text={colors.length > 0 ? `old bulbs ${switched}` : switched} />
+      )}
     </div>
+  );
+}
+
+/** A line of the selection card: the lights' light, one dot when they're alike (else a strip of them), and what it is. */
+function ToneLine({ seen, alike, text }: { seen: (Lemtone | null)[]; alike: boolean; text: string }) {
+  return (
+    <span className="mono hover-value selection-tone">
+      {alike ? (
+        <span className="dot" style={{ background: lemtoneCss(seen[0] ?? null, screenGamut()) }} />
+      ) : (
+        <span className="slivers" aria-hidden="true">
+          {seen.slice(0, 24).map((t, i) => (
+            <span key={i} style={{ background: lemtoneCss(t, screenGamut()) }} />
+          ))}
+        </span>
+      )}
+      {text}
+    </span>
   );
 }
 
