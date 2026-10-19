@@ -49,4 +49,4 @@ export {
 } from "./field.ts";
 export { clock, type Clock, type Every } from "./signal.ts";
 export { chance, clamp, decay, ease, fract, hash, lerp, noiseAt, remap, saw, smoothstep, square, tri, wave } from "./shape.ts";
-export { sketch, type Look, type LookResult, type SketchOptions } from "./sketch.ts";
+export { sketch, type Look, type LookResult, type Looks, type OnLook, type OnResult, type SketchOptions } from "./sketch.ts";

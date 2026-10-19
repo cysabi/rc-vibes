@@ -55,6 +55,8 @@ export class Light {
   readonly random: number;
   /** What the layers below this sketch are making it do. */
   below: Color = off;
+  /** Whether the layers below have it on (for an old bulb), or lit at all (for a color light). */
+  belowOn = false;
   /** Its own memory, kept from one tick to the next. */
   state: Record<string, any> = {};
 

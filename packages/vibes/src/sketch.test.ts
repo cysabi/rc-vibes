@@ -1,8 +1,9 @@
 import { afterEach, describe, expect, it, vi } from "vitest";
 import type { Prev, PrevLight } from "./arclamp.ts";
 import { lemtone, palettes, white, type ColorInput } from "./color.ts";
-import { osc } from "./field.ts";
+import { field, osc } from "./field.ts";
 import type { Here } from "./here.ts";
+import { square } from "./shape.ts";
 import { sketch } from "./sketch.ts";
 
 afterEach(() => vi.restoreAllMocks());
@@ -32,7 +33,7 @@ const prevOf = (list = lights()): Prev => ({ initial_time: 0, lights: list });
 /** Runs a look once, at nowMs, and says what each light saw and was given. */
 function once(look: (here: Here) => ColorInput | null | undefined, list = lights()) {
   const seen = new Map<number, Here>();
-  const update = sketch((here) => (seen.set(here.light.id, here), look(here)));
+  const update = sketch({ color: (here) => (seen.set(here.light.id, here), look(here)), on: (here) => (seen.set(here.light.id, here), null) });
   const out = update(prevOf(list), 5000, 1000);
   return { seen, out };
 }
@@ -42,8 +43,49 @@ describe("sketch()", () => {
     const c = lemtone(40, 0.2, 250);
     const { out } = once(() => c);
     expect(out.lights.find((l) => l.id === 1)!.channels).toEqual({ a: c.a, b: c.b, brightness: 0.25, fidelity: 1 });
-    expect(out.lights.find((l) => l.id === 3)!.channels).toEqual({ on: 1 });
-    expect(out.lights).toHaveLength(5);
+    expect(out.lights).toHaveLength(4);
+  });
+
+  it("never switches old bulbs by color: they have a look of their own", () => {
+    const asked: number[] = [];
+    const update = sketch((here) => (asked.push(here.light.id), white(2700, 900)));
+    const out = update(prevOf(), 0, 0);
+    expect(asked).not.toContain(3);
+    expect(out.lights.map((l) => l.id)).toEqual([1, 2, 4, 5]);
+    expect(sketch(palettes.dusk)(prevOf(), 0, 0).lights.map((l) => l.id)).not.toContain(3);
+  });
+
+  it("switches old bulbs by their on look, however it says it", () => {
+    const onOf = (on: unknown) => {
+      const lights = sketch({ on: () => on as never })(prevOf(), 0, 0).lights;
+      return lights.find((l) => l.id === 3)?.channels.on;
+    };
+    expect([true, false, 1, 0, 0.5, 0.49, "on", "off", " ON ", "yes", "no", "1", "0", { on: 1 }, { on: false }].map(onOf)).toEqual([1, 0, 1, 0, 1, 0, 1, 0, 1, 1, 0, 1, 0, 1, 0]);
+    expect(onOf(null)).toBeUndefined();
+    expect(onOf(undefined)).toBeUndefined();
+  });
+
+  it("takes the on look as a function, a field, or one answer for every old bulb", () => {
+    const onOfThree = (update: ReturnType<typeof sketch>, now = 0) => update(prevOf(), now, 0).lights.find((l) => l.id === 3)?.channels.on;
+    expect(onOfThree(sketch({ on: true }))).toBe(1);
+    expect(onOfThree(sketch({ on: "off" }))).toBe(0);
+    expect(onOfThree(sketch("#f80", { on: 1 }))).toBe(1);
+    expect(onOfThree(sketch({ on: ({ light }) => light.rail?.index === 1 }))).toBe(1);
+    // A field: on for the first half of every two seconds.
+    const blink = sketch({ on: field(({ t }) => square(t / 2)) });
+    expect([0, 500, 1500, 2500].map((now) => onOfThree(blink, now))).toEqual([1, 1, 0, 1]);
+    // Only the old bulbs are touched.
+    expect(sketch({ on: true })(prevOf(), 0, 0).lights.map((l) => l.id)).toEqual([3]);
+    expect(() => sketch({ on: "sometimes" })).toThrow(/isn't on or off/);
+  });
+
+  it("says once when an old bulb is given something it can't switch by", () => {
+    const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
+    const update = sketch({ on: () => white(2700, 800) as never });
+    expect(update(prevOf(), 0, 0).lights).toEqual([]);
+    update(prevOf(), 10, 0);
+    expect(warn).toHaveBeenCalledTimes(1);
+    expect(String(warn.mock.calls[0]![0])).toMatch(/old bulb.*sketch\(\{ color, on \}\)/);
   });
 
   it("takes anything that says a color, from the look or as the look", () => {
@@ -93,21 +135,9 @@ describe("sketch()", () => {
     expect(out.lights.map((l) => l.id)).toEqual([2]);
   });
 
-  it("switches old bulbs on and off without chattering", () => {
-    let lm = 0;
-    const update = sketch(() => white(2700, lm));
-    const on = (asked: number) => {
-      lm = asked;
-      return update(prevOf(), 1000, 0).lights.find((l) => l.id === 3)!.channels.on;
-    };
-    expect([150, 90, 60, 90, 120, 100, 69].map(on)).toEqual([1, 1, 0, 0, 1, 1, 0]);
-    const late = sketch(() => white(2700, 400), { switchOn: 500, switchOff: 300 });
-    expect(late(prevOf(), 0, 0).lights.find((l) => l.id === 3)!.channels.on).toBe(0);
-  });
-
   it("leaves out colors that aren't all numbers, and warns once", () => {
     const warn = vi.spyOn(console, "warn").mockImplementation(() => {});
-    const update = sketch((here) => (here.light.id === 4 ? lemtone(30, 0.2, NaN) : here.light.id === 3 ? white(2700, NaN) : null));
+    const update = sketch((here) => (here.light.id === 4 ? lemtone(30, 0.2, NaN) : here.light.id === 1 ? white(2700, NaN) : null));
     expect(update(prevOf(), 0, 0).lights).toEqual([]);
     expect(update(prevOf(), 10, 0).lights).toEqual([]);
     expect(warn).toHaveBeenCalledTimes(1);
@@ -156,7 +186,10 @@ describe("sketch()", () => {
     list[2]!.channels = { on: 1 };
     const { seen } = once(() => null, list);
     expect(seen.get(1)!.light.below).toEqual({ a: 0.1, b: 0.05, lm: 300, fidelity: 0 });
+    expect(seen.get(1)!.light.belowOn).toBe(true);
+    expect(seen.get(2)!.light.belowOn).toBe(false);
     expect(seen.get(3)!.light.below.lm).toBe(800);
+    expect(seen.get(3)!.light.belowOn).toBe(true);
   });
 
   it("keeps each light's memory, even when lights move", () => {
@@ -188,6 +221,6 @@ describe("sketch()", () => {
   it("takes a field as it is", () => {
     const update = sketch(osc(3, 0).color((v) => white(2700, 100 * v)));
     const out = update(prevOf(), 0, 0);
-    expect(out.lights).toHaveLength(5);
+    expect(out.lights).toHaveLength(4);
   });
 });

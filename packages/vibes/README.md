@@ -32,19 +32,40 @@ A sketch says what each light should make, a hundred times a second.
 | `at({ x, y, t })` | the same light, looking from somewhere else or at another time |
 
 Return a color (anything that says one: see below), or `null` to leave the
-light as the layers below have it. `sketch("#f80")` makes every light one
-color; `sketch(palettes.dusk)` lays a palette across the room.
+light as the layers below have it. `sketch("#f80")` makes every color light
+one color; `sketch(palettes.dusk)` lays a palette across the room.
 
 - `light.rail` is `{ id, along, t, index, count }`: how far along its rail
   (meters, and 0 to 1), its place on it, and how many share it.
 - `light.random` is a number from 0 to 1 of its own, the same every time.
-- `light.below` is what the layers below this sketch make it, as a color.
+- `light.below` is what the layers below this sketch make it, as a color, and
+  `light.belowOn` whether that's on at all.
 - `light.state` is the light's own memory, kept from tick to tick.
 
-Old bulbs only switch: `sketch()` turns them on at 100 lm or more and off
-below 70 (`sketch(fn, { switchOn, switchOff })` to change that). Something
-that isn't a color leaves its light as it is, with a warning in the console,
-so one slip doesn't stop the sketch.
+Something that isn't a color leaves its light as it is, with a warning in
+the console, so one slip doesn't stop the sketch.
+
+## Old bulbs
+
+The old bulbs only switch, and look nothing like the color lights, so they
+have a look of their own, apart from color's:
+
+```ts
+export const update = sketch({
+  color: osc(3).color(palettes.dusk),   // the color bulbs and panels
+  on: osc(1, 0.25).thresh(),            // the old bulbs: on or off
+});
+```
+
+`sketch(look)` is `sketch({ color: look })`: a color look is never asked
+about old bulbs, and never switches them. Without an `on` look they're left
+as they are; `sketch(look, { on })` gives one beside a color look.
+
+An `on` look gives `true` or `false`, a number (on at 0.5 or more, as
+arclamp's own `on` channel: a field from 0 to 1 works, like
+`noise(4).thresh(0.6)` or `clock(96).every(1).env()`), `"on"` or `"off"`, or
+`null` to leave the bulb as it is. It can be a function of `here`, a field,
+or one answer for every old bulb: `sketch({ on: true })`.
 
 ## Colors
 

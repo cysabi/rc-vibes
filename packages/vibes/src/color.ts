@@ -28,6 +28,7 @@ import {
   xyzToOklab,
   type Vec3,
 } from "./lemtone.ts";
+import type { Here } from "./here.ts";
 import { parseColor, type Spec } from "./parse.ts";
 import { clamp, lerp } from "./shape.ts";
 import {
@@ -484,6 +485,8 @@ function fromObject(o: Record<string, unknown>): Color {
 /** Colors along a line from 0 to 1: palette(x) is the color at x. */
 export interface Palette {
   (x: number): Color;
+  /** Given a here instead, the palette laid across the room, left to right: its color at here.u. */
+  (here: Here): Color;
   readonly stops: readonly Color[];
   /** Where each stop is, 0 to 1. */
   readonly positions: readonly number[];
@@ -512,8 +515,9 @@ export function palette(...given: Stop[] | [readonly Stop[]]): Palette {
     .sort((x, y) => x.at - y.at);
   const stops = Object.freeze(placed.map((p) => Object.freeze(p.c)));
   const positions = Object.freeze(placed.map((p) => p.at));
-  const at = (x: number): Color => {
-    const v = Number.isFinite(x) ? x : 0;
+  const at = (x: number | Here): Color => {
+    const along = typeof x === "number" ? x : (x as Partial<Here> | null)?.u;
+    const v = typeof along === "number" && Number.isFinite(along) ? along : 0;
     if (v <= positions[0]!) return stops[0]!;
     for (let i = 1; i < stops.length; i++) {
       if (v <= positions[i]!) {
@@ -523,7 +527,7 @@ export function palette(...given: Stop[] | [readonly Stop[]]): Palette {
     }
     return stops[stops.length - 1]!;
   };
-  return Object.assign(at, { stops, positions });
+  return Object.assign(at, { stops, positions }) as Palette;
 }
 
 /** A palette from anything that says one: a palette, a list of stops, or one color (from dark at 0 to it at 1). */
