@@ -1,10 +1,11 @@
-# A box starting (src/server/boxes.ts gives it its VIBES_* settings): the
-# person's clone of the sketch, made the first time on their own branch; git
-# set up to reach vibes with the box's token; vibes' extension and settings
-# in place; then their VS Code, under the path vibes reaches it at.
+# A box starting, as its person, once it's claimed (box/agent.ts passes on the
+# VIBES_* settings src/server/boxes.ts gives it): their clone of the sketch,
+# made the first time on their own branch; git set up to reach vibes with the
+# box's token; vibes' extension and settings in place; then their VS Code,
+# under the path vibes reaches it at.
 #
-# Its home, /home/workspace, is the box's own volume: the clone, VS Code's
-# state and anything installed there are kept from one start to the next.
+# Its home, /home/workspace, is theirs, kept apart from the box: the clone, VS
+# Code's state and anything installed there carry on from one box to the next.
 
 cd /home/workspace
 

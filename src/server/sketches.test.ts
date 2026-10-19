@@ -1,16 +1,15 @@
-import { serve, type ServerType } from "@hono/node-server";
 import { Hono } from "hono";
 import { mkdtemp, rm } from "node:fs/promises";
-import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { BoxState, Me, Sketch } from "../shared/vibes.ts";
 import type { LightsSource } from "./api.ts";
 import type { AuthEnv } from "./auth.ts";
-import { boxToken, createBoxes, type BoxRunner, type Boxes } from "./boxes.ts";
+import { boxToken, createBoxes, type Boxes } from "./boxes.ts";
 import { openDb, type Db } from "./db.ts";
 import { loadConfig, type Config } from "./env.ts";
+import { fakeBoxRunner } from "./fake-box-runner.ts";
 import { boxApiRoutes, sketchRoutes } from "./sketches.ts";
 
 const ada: Me = { id: "rc:1", name: "Ada Lovelace", dev: false };
@@ -21,7 +20,7 @@ let dir: string;
 let config: Config;
 let db: Db;
 let boxes: Boxes;
-let box: ServerType;
+const fake = fakeBoxRunner();
 let app: Hono<AuthEnv>;
 let boxApi: Hono;
 let as: Me = ada;
@@ -39,18 +38,7 @@ beforeAll(async () => {
     BOX_VIBES_URL: "http://vibes.test",
   });
   db = openDb(":memory:");
-  // Every box answers at once, from here.
-  box = serve({ fetch: () => new Response("VS Code"), port: 0, hostname: "127.0.0.1" });
-  await new Promise((r) => box.once("listening", r));
-  const target = `http://127.0.0.1:${(box.address() as AddressInfo).port}`;
-  const started = new Set<string>();
-  const runner: BoxRunner = {
-    find: async (id) => (started.has(id) ? target : null),
-    start: async (id) => (started.add(id), target),
-    stop: async (id) => void started.delete(id),
-    running: async () => [...started],
-  };
-  boxes = createBoxes(config, config.sketches!, db, runner);
+  boxes = createBoxes(config, config.sketches!, db, fake.runner);
   app = new Hono<AuthEnv>()
     .use("*", async (c, next) => {
       c.set("user", as);
@@ -63,7 +51,7 @@ beforeAll(async () => {
 
 afterAll(async () => {
   boxes.stop();
-  box.close();
+  fake.close();
   await rm(dir, { recursive: true, force: true });
 });
 

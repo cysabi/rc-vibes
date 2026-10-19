@@ -89,7 +89,8 @@ export function openDb(path: string) {
       at INTEGER NOT NULL
     );
     -- Boxes: one person's VS Code for one sketch, with their own clone of it
-    -- on their own branch. Whether it's running is the box runner's to say.
+    -- on their own branch. pod is the box it was last claimed in (whether
+    -- that's still running is the box runner's to say).
     CREATE TABLE IF NOT EXISTS boxes (
       id TEXT PRIMARY KEY,
       sketch_id TEXT NOT NULL,
@@ -105,6 +106,8 @@ export function openDb(path: string) {
   if (!placementColumns.some((c) => c.name === "rail_id")) {
     db.exec("ALTER TABLE placements ADD COLUMN rail_id TEXT; ALTER TABLE placements ADD COLUMN mm_along REAL");
   }
+  const boxColumns = db.prepare("PRAGMA table_info(boxes)").all() as { name: string }[];
+  if (!boxColumns.some((c) => c.name === "pod")) db.exec("ALTER TABLE boxes ADD COLUMN pod TEXT");
 
   const selectPlacements = db.prepare("SELECT light_id, mm_x, mm_y, floor, rail_id, mm_along FROM placements");
   const upsertPlacement = db.prepare(`
@@ -146,6 +149,8 @@ export function openDb(path: string) {
   const selectBoxFor = db.prepare("SELECT * FROM boxes WHERE sketch_id = ? AND user_id = ?");
   const insertBox = db.prepare("INSERT INTO boxes (id, sketch_id, user_id, user_name, branch, at) VALUES (?, ?, ?, ?, ?, ?)");
   const selectBranch = db.prepare("SELECT 1 FROM boxes WHERE sketch_id = ? AND branch = ?");
+  const updateBoxPod = db.prepare("UPDATE boxes SET pod = ? WHERE id = ?");
+  const selectBoxPods = db.prepare("SELECT id, pod FROM boxes WHERE pod IS NOT NULL");
 
   // Nests: an inner transaction just joins the outer one.
   let depth = 0;
@@ -309,12 +314,19 @@ export function openDb(path: string) {
     /** Someone's box for a sketch, if they've opened it before. */
     boxFor: (sketchId: string, userId: string) => selectBoxFor.get(sketchId, userId) as BoxRow | undefined,
 
-    addBox(b: BoxRow) {
+    addBox(b: Omit<BoxRow, "pod">) {
       insertBox.run(b.id, b.sketch_id, b.user_id, b.user_name, b.branch, b.at);
     },
 
     /** Whether someone's box for a sketch already works on this branch. */
     sketchBranchTaken: (sketchId: string, branch: string) => selectBranch.get(sketchId, branch) !== undefined,
+
+    setBoxPod(id: string, pod: string | null) {
+      updateBoxPod.run(pod, id);
+    },
+
+    /** The boxes claimed for someone, and whose. */
+    boxPods: () => selectBoxPods.all() as { id: string; pod: string }[],
 
     close: () => db.close(),
   };
@@ -338,6 +350,8 @@ export interface BoxRow {
   branch: string;
   /** When it was first opened, in ms. */
   at: number;
+  /** The box it was last claimed in, unless it's been let go since. */
+  pod: string | null;
 }
 
 export type Db = ReturnType<typeof openDb>;

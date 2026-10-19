@@ -156,19 +156,27 @@
               p.git
               p.nodejs_24
               p.pnpm_11
+              # mount and umount, for its agent.
+              p.util-linuxMinimal
             ];
-            # Its home is the box's volume, which starts out owned by the person.
-            # Who's who as real files, which Docker reads to run commands in it.
+            # Where the homes are given (/homes) and where the person's goes
+            # (/home/workspace). Who's who as real files, which Docker reads to
+            # run commands in it.
             fakeRootCommands = ''
-              mkdir -p home/workspace tmp etc
+              mkdir -p home/workspace homes tmp etc
               chown 1000:1000 home/workspace
+              chmod 0700 homes
               chmod 1777 tmp
               cp ${users}/etc/passwd ${users}/etc/group ${users}/etc/nsswitch.conf etc/
             '';
             config = {
-              User = "1000:1000";
-              Entrypoint = [ (p.lib.getExe start) ];
-              WorkingDir = "/home/workspace";
+              # Its agent, as root until it starts VS Code as the person (box/agent.ts).
+              Entrypoint = [
+                (p.lib.getExe p.nodejs_24)
+                "${./box/agent.ts}"
+                (p.lib.getExe start)
+              ];
+              WorkingDir = "/";
               Env = [
                 "HOME=/home/workspace"
                 "PATH=/bin:/usr/bin"

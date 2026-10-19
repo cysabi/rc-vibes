@@ -73,11 +73,12 @@ export interface Sketch {
 
 /**
  * Your box for a sketch: your own VS Code with your own clone of it. `url` is
- * where to open it, once it's ready.
+ * where to open it, once it's ready, and `run` which run of it that is: a box
+ * started again is a new run, whose VS Code a page has to load afresh.
  */
 export type BoxState =
   | { state: "starting" }
-  | { state: "ready"; url: string }
+  | { state: "ready"; url: string; run: string }
   | { state: "failed"; error: string };
 
 export type ActivityAction =

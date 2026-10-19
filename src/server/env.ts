@@ -25,7 +25,9 @@ const schema = z.object({
   BOX_VIBES_URL: z.url().optional(),
   BOX_NAMESPACE: z.string().min(1).default("vibes-boxes"),
   BOX_RUNTIME_CLASS: z.string().default("kata"),
-  BOX_IDLE_MINUTES: z.coerce.number().positive().default(30),
+  BOX_IDLE_MINUTES: z.coerce.number().positive().default(15),
+  BOX_POOL: z.coerce.number().int().min(0).default(2),
+  BOX_HOMES: z.string().min(1).optional(),
 });
 
 export interface SketchesConfig {
@@ -41,8 +43,12 @@ export interface SketchesConfig {
   namespace: string;
   /** The RuntimeClass box pods run with (a Kata VM on kokuzo), or "" for the cluster's own. */
   runtimeClass: string;
-  /** A box nobody has used for this long is stopped (its files are kept). */
+  /** A box its page hasn't checked in on for this long is removed (its home is kept). */
   idleMs: number;
+  /** How many booted boxes, no one's yet, are kept waiting to be claimed. */
+  pool: number;
+  /** Where everyone's homes are kept: a Docker volume, or a directory on the cluster's machine. */
+  homes: string;
 }
 
 export interface Config {
@@ -91,6 +97,8 @@ export function loadConfig(source: Record<string, string | undefined> = process.
       namespace: env.BOX_NAMESPACE,
       runtimeClass: env.BOX_RUNTIME_CLASS,
       idleMs: env.BOX_IDLE_MINUTES * 60_000,
+      pool: env.BOX_POOL,
+      homes: env.BOX_HOMES ?? (env.BOX_RUNNER === "docker" ? "vibes-box-homes" : "/var/lib/vibes/box-homes"),
     };
   }
   return {

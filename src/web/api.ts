@@ -129,8 +129,12 @@ export const useBox = (sketchId: string) =>
     queryKey: ["box", sketchId],
     // A JSON body, so it's never taken for a form posted from another site.
     queryFn: () => request<BoxState>("POST", `/api/sketches/${encodeURIComponent(sketchId)}/box`, {}),
-    refetchInterval: (q) => (q.state.data?.state === "starting" ? 1000 : false),
-    refetchOnWindowFocus: false,
+    // Asked again soon while it starts, to show it the moment it's ready, and
+    // every half minute once it is: that keeps it (a box nothing's checked in
+    // on for a while is removed), and finds out if it's gone. Only while the
+    // page is in sight; coming back into sight asks at once.
+    refetchInterval: (q) => (q.state.data?.state === "starting" ? 500 : q.state.data?.state === "ready" ? 30_000 : false),
+    refetchOnWindowFocus: "always",
   });
 
 const invalidateLights = () => queryClient.invalidateQueries({ queryKey: ["lights"] });

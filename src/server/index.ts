@@ -27,7 +27,7 @@ if (!config.production) origins.push("http://localhost:5173", "http://127.0.0.1:
 // Sketches, and the boxes they're edited in, while they're on.
 const sketches = config.sketches;
 let runner: BoxRunner | null = null;
-if (sketches) runner = sketches.runner === "docker" ? dockerRunner() : (await import("./box-kube.ts")).kubernetesRunner(sketches);
+if (sketches) runner = sketches.runner === "docker" ? dockerRunner(sketches) : (await import("./box-kube.ts")).kubernetesRunner(sketches);
 const boxes = sketches && runner ? createBoxes(config, sketches, db, runner) : null;
 const proxy = boxes ? createBoxProxy(config, db, boxes) : null;
 

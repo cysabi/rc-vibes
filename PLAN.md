@@ -51,7 +51,9 @@ lighting system at the Recurse Center, served at `vibes.recurse.com`.
 | `BOX_RUNNER` | no | `docker` (default: containers on this machine) or `kubernetes` (pods on the cluster vibes runs in) |
 | `BOX_VIBES_URL` | kubernetes | where boxes reach vibes; with Docker, `http://host.docker.internal:$PORT` |
 | `BOX_NAMESPACE`, `BOX_RUNTIME_CLASS` | no | where box pods run (default `vibes-boxes`), and with what (default `kata`; empty for the cluster's own) |
-| `BOX_IDLE_MINUTES` | no | an unused box is stopped after this long (default 30); its files are kept |
+| `BOX_IDLE_MINUTES` | no | a box whose page hasn't checked in for this long is removed (default 15); its home is kept |
+| `BOX_POOL` | no | how many booted boxes wait to be claimed (default 2) |
+| `BOX_HOMES` | no | where everyone's homes are kept: a Docker volume (default `vibes-box-homes`), or a directory on the cluster's machine (default `/var/lib/vibes/box-homes`) |
 
 Mint the production key on the arclamp host, with full access (no `-perms`):
 
@@ -233,9 +235,26 @@ ever be built from one of its commits. On while `SKETCHES=1`.
   (`flake.nix`, started by `box/start.sh`). On kokuzo it's a pod in
   `vibes-boxes`, in a Kata VM, reached only by vibes and reaching only DNS,
   vibes and the public internet (`.kube/boxes.yaml`); locally, a Docker
-  container. Its files are on its own volume, kept when it's stopped after
-  `BOX_IDLE_MINUTES` unused. The terminal is hidden, but the sandbox is the
-  boundary: tasks and extensions can run anything.
+  container. The terminal is hidden, but the sandbox is the boundary: tasks
+  and extensions can run anything.
+- **Near-instant, from a warm pool.** vibes keeps `BOX_POOL` boxes booted and
+  no one's yet, each running only its agent (`box/agent.ts`); a Kata pod
+  takes ~10 s to boot, so none is booted while you wait unless the pool's
+  run dry. Opening a sketch claims one: the agent, root in its VM, bind-mounts
+  your home from the homes every box is given (`/homes`, which on kokuzo is
+  `/var/lib/vibes/box-homes` on tank) at `/home/workspace`, unmounts the
+  rest, and starts VS Code as uid 1000 with no capabilities; vibes records
+  whose it is (`boxes.pod`), and boots another for the pool. A box is never
+  anyone else's after, and is removed when done with; homes are kept. The
+  trade-off: every box's VM has every home shared into it, so code that
+  escaped to root in its VM could reach other homes (not just its own).
+- **Lifetime: while your page is in sight.** The sketch page checks in every
+  30 s while it's visible (and at once when it becomes visible again); a box
+  nothing's checked in on for `BOX_IDLE_MINUTES` is removed. A page that
+  finds its box gone, or on a new run, covers VS Code ("Waking your VS
+  Code…") and loads it afresh once it's ready: the files are in your home
+  and the open tabs in the browser, so only undo history is lost. vibes
+  restarting doesn't end boxes; it adopts them.
 - **Through vibes only.** `/box/<id>/…` is proxied to your box's VS Code, for
   you only (`src/server/box-proxy.ts`). The box never sees vibes' cookies,
   only its VS Code's connection token, which vibes adds (and sets for the
@@ -258,9 +277,11 @@ ever be built from one of its commits. On while `SKETCHES=1`.
   Problems, and the preview keeps running what last built.
 
 Still to come: VS Code's own defaults that only its product configuration
-sets (no welcome page, no AI chat), its webviews served from our own domain
-rather than Microsoft's CDN, boxes on their own origin (now their page shares
-vibes'), what saving commits, and the room: the trusted builder, the stamp (an
+sets (no AI chat; the welcome page is skipped from VS Code's address), its
+webviews served from our own domain rather than Microsoft's CDN, boxes on
+their own origin (now their page shares vibes'), faster boots for refilling
+the pool if it runs dry often (Kata VM templating, an initrd), what saving
+commits, and the room: the trusted builder, the stamp (an
 HMAC over the built script, so an edited copy shows as edited), and putting
 sketches in the room.
 

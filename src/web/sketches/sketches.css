@@ -172,7 +172,20 @@
   font-size: 12px;
 }
 
-/* A sketch: its VS Code, under the bar. */
+/* A sketch: its VS Code, under the bar, and covered while it's woken again. */
+.box-stage {
+  position: relative;
+  min-height: 0;
+}
+
+.box-cover {
+  position: absolute;
+  inset: 0;
+  background: var(--glass);
+  -webkit-backdrop-filter: var(--blur);
+  backdrop-filter: var(--blur);
+}
+
 .box-frame {
   width: 100%;
   height: 100%;

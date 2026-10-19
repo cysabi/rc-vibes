@@ -131,6 +131,23 @@ function NewSketch() {
 function SketchPage({ id }: { id: string }) {
   const sketch = useSketch(id);
   const box = useBox(id);
+  // The run of the box VS Code was loaded from. A box gone since (removed
+  // while the page was out of sight, or ended) starts again as a new run,
+  // whose VS Code can't carry on with the old one's page: it's loaded afresh
+  // once that's ready, under a cover meanwhile. The files are all in its
+  // home and the open tabs in the browser, so only undo history is lost.
+  const [shown, setShown] = useState<{ run: string; url: string } | null>(null);
+  const ready = box.data?.state === "ready" ? box.data : null;
+  if (ready && ready.run !== shown?.run) setShown({ run: ready.run, url: ready.url });
+  const failed = box.data?.state === "failed" ? box.data.error : box.isError ? box.error.message : null;
+  const failure = failed !== null && (
+    <>
+      Couldn't start your VS Code: {failed}.{" "}
+      <button className="quiet" onClick={() => void box.refetch()}>
+        Try again
+      </button>
+    </>
+  );
   return (
     <div className="sketch-page">
       <TopBar>
@@ -146,15 +163,13 @@ function SketchPage({ id }: { id: string }) {
         <Notice>
           Couldn't open this sketch: {sketch.error.message}. <Link to="/sketches">All sketches</Link>
         </Notice>
-      ) : box.data?.state === "ready" ? (
-        <iframe className="box-frame" src={box.data.url} title={`${sketch.data?.name ?? "The sketch"} in VS Code`} allow="clipboard-read; clipboard-write" />
-      ) : box.data?.state === "failed" || box.isError ? (
-        <Notice>
-          Couldn't start your VS Code: {box.data?.state === "failed" ? box.data.error : box.error?.message}.{" "}
-          <button className="quiet" onClick={() => void box.refetch()}>
-            Try again
-          </button>
-        </Notice>
+      ) : shown ? (
+        <div className="box-stage">
+          <iframe key={shown.run} className="box-frame" src={shown.url} title={`${sketch.data?.name ?? "The sketch"} in VS Code`} allow="clipboard-read; clipboard-write" />
+          {!ready && <div className={failure ? "box-notice box-cover" : "box-notice box-cover starting"}>{failure ? <p>{failure}</p> : <p>Waking your VS Code…</p>}</div>}
+        </div>
+      ) : failure ? (
+        <Notice>{failure}</Notice>
       ) : (
         <Notice starting>
           Starting your VS Code, with your own copy of {sketch.data ? <b>{sketch.data.name}</b> : "the sketch"}…

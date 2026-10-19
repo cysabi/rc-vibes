@@ -1,9 +1,9 @@
-// Boxes as pods on the cluster vibes runs in (kokuzo's k3s): each a pod
-// box-<id> in its own namespace, run in a Kata VM (BOX_RUNTIME_CLASS; none on
-// a local cluster), with a volume box-<id> for
-// its files, reached at the pod's address. vibes talks to the cluster's API
-// as its own service account, which may only manage pods and volumes there
-// (.kube/boxes.yaml).
+// Boxes as pods on the cluster vibes runs in (kokuzo's k3s): each a pod in
+// its own namespace, run in a Kata VM (BOX_RUNTIME_CLASS; none on a local
+// cluster), reached at the pod's address, with everyone's homes (BOX_HOMES, a
+// directory on the machine) at /homes, for its agent to take the one it's
+// claimed for from. vibes talks to the cluster's API as its own service
+// account, which may only manage pods there (.kube/boxes.yaml).
 
 import { readFileSync } from "node:fs";
 import https from "node:https";
@@ -11,13 +11,13 @@ import type { BoxRunner } from "./boxes.ts";
 import type { SketchesConfig } from "./env.ts";
 
 const SA = "/var/run/secrets/kubernetes.io/serviceaccount";
-// A pod that isn't running by then (a first start pulls the image) has failed.
+// A pod that isn't running by then (a first boot pulls the image) has failed.
 const RUNNING_TIMEOUT_MS = 5 * 60_000;
 
 interface Pod {
   spec: { containers: { image: string }[] };
-  status: { phase?: string; podIP?: string; containerStatuses?: { ready: boolean }[] };
-  metadata: { labels?: Record<string, string>; deletionTimestamp?: string };
+  status: { phase?: string; podIP?: string };
+  metadata: { name: string; deletionTimestamp?: string };
 }
 
 export function kubernetesRunner(sketches: SketchesConfig): BoxRunner {
@@ -66,8 +66,6 @@ export function kubernetesRunner(sketches: SketchesConfig): BoxRunner {
   }
 
   const pods = `/api/v1/namespaces/${ns}/pods`;
-  const claims = `/api/v1/namespaces/${ns}/persistentvolumeclaims`;
-  const name = (id: string) => `box-${id}`;
 
   async function check<T>(what: string, call: Promise<{ status: number; data: T }>, ok: number[] = [200, 201]) {
     const res = await call;
@@ -75,83 +73,70 @@ export function kubernetesRunner(sketches: SketchesConfig): BoxRunner {
     return res;
   }
 
-  const getPod = async (id: string) => {
-    const res = await kube<Pod>("GET", `${pods}/${name(id)}`);
+  const getPod = async (name: string) => {
+    const res = await kube<Pod>("GET", `${pods}/${name}`);
     return res.status === 200 ? res.data : null;
   };
 
   const targetOf = (pod: Pod | null) =>
     pod && !pod.metadata.deletionTimestamp && pod.status.phase === "Running" && pod.status.podIP ? `http://${pod.status.podIP}:3000` : null;
 
-  async function gone(id: string) {
-    for (let i = 0; i < 120 && (await getPod(id)); i++) await new Promise((r) => setTimeout(r, 1000));
-  }
-
   return {
-    find: async (id) => targetOf(await getPod(id)),
+    find: async (name) => targetOf(await getPod(name)),
 
-    async start(id, image, env) {
-      // Its files: made the first time, and kept.
-      const claim = await kube("GET", `${claims}/${name(id)}`);
-      if (claim.status === 404) {
-        await check(
-          "making the box's volume",
-          kube("POST", claims, {
-            metadata: { name: name(id), labels: { app: "vibes-box", "vibes.box": id } },
-            spec: { accessModes: ["ReadWriteOnce"], storageClassName: "local-path", resources: { requests: { storage: "5Gi" } } },
-          }),
-        );
-      }
-      let pod = await getPod(id);
-      // One from an older image, or one that's ended, goes, and a new one is made.
-      if (pod && (pod.spec.containers[0]?.image !== image || pod.status.phase === "Failed" || pod.status.phase === "Succeeded" || pod.metadata.deletionTimestamp)) {
-        await kube("DELETE", `${pods}/${name(id)}`);
-        await gone(id);
-        pod = null;
-      }
-      if (!pod) {
-        await check(
-          "making the box",
-          kube("POST", pods, {
-            metadata: { name: name(id), labels: { app: "vibes-box", "vibes.box": id } },
-            spec: {
-              ...(sketches.runtimeClass ? { runtimeClassName: sketches.runtimeClass } : {}),
-              automountServiceAccountToken: false,
-              enableServiceLinks: false,
-              restartPolicy: "Always",
-              securityContext: { runAsUser: 1000, runAsGroup: 1000, fsGroup: 1000 },
-              containers: [
-                {
-                  name: "box",
-                  image,
-                  imagePullPolicy: "IfNotPresent",
-                  env: Object.entries(env).map(([k, v]) => ({ name: k, value: v })),
-                  ports: [{ containerPort: 3000 }],
-                  resources: { requests: { cpu: "100m", memory: "512Mi" }, limits: { cpu: "2", memory: "2Gi" } },
-                  volumeMounts: [{ name: "home", mountPath: "/home/workspace" }],
+    async boot(name, image, env) {
+      await check(
+        "making the box",
+        kube("POST", pods, {
+          metadata: { name, labels: { app: "vibes-box" } },
+          spec: {
+            ...(sketches.runtimeClass ? { runtimeClassName: sketches.runtimeClass } : {}),
+            automountServiceAccountToken: false,
+            enableServiceLinks: false,
+            // Never started again: one that ends is removed, and another booted.
+            restartPolicy: "Never",
+            containers: [
+              {
+                name: "box",
+                image,
+                imagePullPolicy: "IfNotPresent",
+                env: Object.entries(env).map(([k, v]) => ({ name: k, value: v })),
+                ports: [{ containerPort: 3000 }],
+                resources: { requests: { cpu: "100m", memory: "512Mi" }, limits: { cpu: "2", memory: "2Gi" } },
+                // Its agent starts as root, in the VM, with just what it needs to
+                // move a home in and start VS Code as its person (who has none).
+                securityContext: {
+                  runAsUser: 0,
+                  runAsGroup: 0,
+                  capabilities: { drop: ["ALL"], add: ["SYS_ADMIN", "CHOWN", "SETUID", "SETGID", "KILL"] },
                 },
-              ],
-              volumes: [{ name: "home", persistentVolumeClaim: { claimName: name(id) } }],
-            },
-          }),
-        );
-      }
+                volumeMounts: [{ name: "homes", mountPath: "/homes" }],
+              },
+            ],
+            volumes: [{ name: "homes", hostPath: { path: sketches.homes, type: "DirectoryOrCreate" } }],
+          },
+        }),
+      );
       const deadline = Date.now() + RUNNING_TIMEOUT_MS;
       for (;;) {
-        const target = targetOf(await getPod(id));
+        const pod = await getPod(name);
+        const target = targetOf(pod);
         if (target) return target;
+        if (pod?.status.phase === "Failed" || pod?.status.phase === "Succeeded") throw new Error("its pod ended as it started");
         if (Date.now() > deadline) throw new Error("its pod didn't start running in time");
-        await new Promise((r) => setTimeout(r, 1000));
+        await new Promise((r) => setTimeout(r, 500));
       }
     },
 
-    async stop(id) {
-      await check("stopping the box", kube("DELETE", `${pods}/${name(id)}`), [200, 202, 404]);
+    async remove(name) {
+      await check("removing the box", kube("DELETE", `${pods}/${name}`), [200, 202, 404]);
     },
 
-    async running() {
+    async list(image) {
       const res = await check("listing boxes", kube<{ items: Pod[] }>("GET", `${pods}?labelSelector=${encodeURIComponent("app=vibes-box")}`));
-      return res.data.items.filter((p) => targetOf(p)).map((p) => p.metadata.labels?.["vibes.box"] ?? "").filter(Boolean);
+      return res.data.items
+        .filter((p) => !p.metadata.deletionTimestamp)
+        .map((p) => ({ name: p.metadata.name, current: p.spec.containers[0]?.image === image }));
     },
   };
 }

@@ -51,7 +51,6 @@ export function createBoxProxy(config: Config, db: Db, boxes: Boxes) {
         res.writeHead(a.status, { "content-type": "text/plain; charset=utf-8" }).end(a.message);
         return;
       }
-      boxes.touch(a.id);
       const up = http.request(
         { host: a.target.hostname, port: a.target.port, method: req.method, path: req.url, headers: headersFor(req, a.id) },
         (upRes) => {
@@ -89,12 +88,7 @@ export function createBoxProxy(config: Config, db: Db, boxes: Boxes) {
         socket.write(`${lines.join("\r\n")}\r\n\r\n`);
         if (upHead.length) socket.write(upHead);
         if (head.length) upSocket.write(head);
-        boxes.socketOpened(a.id);
-        let open = true;
         const close = () => {
-          if (!open) return;
-          open = false;
-          boxes.socketClosed(a.id);
           socket.destroy();
           upSocket.destroy();
         };
