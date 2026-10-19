@@ -1256,6 +1256,30 @@ kbd {
   transform: none;
 }
 
+/* A shader's, a button when it has something to show under its row. */
+button.layer-chevron {
+  border-radius: 6px;
+  transition:
+    transform 0.2s var(--ease-out),
+    background 0.15s,
+    color 0.15s;
+}
+
+button.layer-chevron:hover {
+  background: var(--fill-2);
+  color: var(--ink);
+}
+
+/* Opened, what it shows goes under its row, lined up with its name. */
+.layer.open {
+  flex-wrap: wrap;
+}
+
+.layer-details {
+  flex-basis: 100%;
+  margin: 4px 0 12px 58px;
+}
+
 .layer.base {
   flex-wrap: wrap;
   padding: 0;

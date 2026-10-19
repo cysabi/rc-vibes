@@ -30,7 +30,7 @@ import {
   verticalListSortingStrategy,
 } from "@dnd-kit/sortable";
 import { CSS } from "@dnd-kit/utilities";
-import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import type { Channels, LightInfo } from "../../shared/arclamp.ts";
 import { baseType, isBinary, isOn, lemtoneOf, requestedOf } from "../../shared/fixtures.ts";
 import { colorName, lemtoneCode, lumensText } from "../../shared/lemtone.ts";
@@ -321,7 +321,15 @@ export function SelectionPanel({ floor, here, selected, shader, onShader, onClos
                       )}
                     </li>
                     {rows.map((row) => (
-                      <SortableRow key={row.layer.key} row={row} onSwitch={(on) => setOn(row, on)} onOpen={() => onShader(row.layer.key)} />
+                      <SortableRow
+                        key={row.layer.key}
+                        row={row}
+                        onSwitch={(on) => setOn(row, on)}
+                        onOpen={() => onShader(row.layer.key)}
+                        details={detailsOf(row.layer)}
+                        opened={opened === row.layer.key}
+                        onToggle={() => setOpened(opened === row.layer.key ? null : row.layer.key)}
+                      />
                     ))}
                     {/* On their way in, on top. */}
                     {coming.map((instance) => (
@@ -351,32 +359,48 @@ interface RowProps {
   onSwitch: (on: boolean) => void;
   /** Open it, in place of the selection. */
   onOpen: () => void;
+  /** What it shows under its row when that's opened (detailsOf), if anything. */
+  details: ReactNode | null;
+  opened: boolean;
+  onToggle: () => void;
+}
+
+/**
+ * What a shader shows under its row, opened, as room tone shows its color:
+ * its parameters, once shaders have any. Nothing yet, for any of them.
+ */
+function detailsOf(_layer: Layer): ReactNode | null {
+  return null;
 }
 
 /** A shader on these lights: draggable by its handle to another place among them. */
-function SortableRow({ row, onSwitch, onOpen }: RowProps) {
+function SortableRow(props: RowProps) {
+  const { row, details, opened } = props;
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: row.layer.key });
+  const open = opened && details !== null;
   return (
     <li
       ref={setNodeRef}
-      className={`layer${row.state === "off" ? " off" : ""}${isDragging ? " dragging" : ""}`}
+      className={`layer${row.state === "off" ? " off" : ""}${open ? " open" : ""}${isDragging ? " dragging" : ""}`}
       style={{ transform: CSS.Transform.toString(transform), transition }}
     >
       <button className="layer-grip" aria-label={`Move ${row.layer.name}`} {...attributes} {...listeners}>
         <GripIcon />
       </button>
-      <RowParts row={row} onSwitch={onSwitch} onOpen={onOpen} />
+      <RowParts {...props} />
+      {open && <div className="layer-details">{details}</div>}
     </li>
   );
 }
 
 /**
  * A shader's stop on the rail: its name, what's become of it, its arrow to
- * open it, and a switch for whether it's on for these lights (off here leaves
+ * open it, a switch for whether it's on for these lights (off here leaves
  * the rest of the room as it is; on, for one that's off everywhere, is on for
- * just these).
+ * just these), and, at the end, a toggle for what it shows under its row, if
+ * it shows anything (its place kept either way, so every row lines up).
  */
-function RowParts({ row, onSwitch, onOpen }: RowProps) {
+function RowParts({ row, onSwitch, onOpen, details, opened, onToggle }: RowProps) {
   const { layer, state } = row;
   const tip =
     state === "on"
@@ -422,6 +446,13 @@ function RowParts({ row, onSwitch, onOpen }: RowProps) {
       >
         <span className="switch-knob" />
       </button>
+      {details !== null ? (
+        <button className="layer-chevron" aria-expanded={opened} aria-label={`${layer.name}'s details`} title={opened ? "Hide" : "Show more"} onClick={onToggle}>
+          <ChevronUpIcon />
+        </button>
+      ) : (
+        <span className="layer-chevron" aria-hidden="true" />
+      )}
     </>
   );
 }
