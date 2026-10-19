@@ -23,7 +23,7 @@
 // along. Selected lights can be tagged (TagEditor).
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type ReactNode } from "react";
-import type { LightInfo, Rail, RailPoint, RailSpot } from "../../shared/arclamp.ts";
+import type { Frame, LightInfo, Rail, RailPoint, RailSpot } from "../../shared/arclamp.ts";
 import { baseType, footprintOf, lemtoneOf, orientationsOf, seenOf } from "../../shared/fixtures.ts";
 import { cssColor, lemtoneCode, lemtoneCss, lightRgb, lookOf, LUMENS_PER_BRIGHTNESS, swatch, type Lemtone, type Vec3 } from "../../shared/lemtone.ts";
 import {
@@ -45,7 +45,7 @@ import { screenGamut } from "../gamut.ts";
 import { CheckIcon, DownloadIcon, FitIcon, MinusIcon, PencilIcon, PlusIcon, RailIcon, TrashIcon, TurnIcon, UndoIcon } from "../icons.tsx";
 import { currentRails, layoutLights, placeLights, type PlacedLight } from "../layout.ts";
 import { Lighting, REACH_MM, type Source } from "../lighting.ts";
-import { latestFrame, onFrame } from "../live.ts";
+import { useFrames } from "../live.ts";
 import { useAdminMode } from "../settings.ts";
 import { visibility, type Segment } from "../shadows.ts";
 import {
@@ -117,6 +117,8 @@ interface Props {
   framing?: number;
   /** Floats over the bottom left of the map. */
   corner?: ReactNode;
+  /** Fit the building again whenever the map's size changes, rather than keeping the view (for a pane that's resized). */
+  fitOnResize?: boolean;
 }
 
 interface Size {
@@ -165,7 +167,7 @@ interface GestureEvent extends UIEvent {
   clientY: number;
 }
 
-export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSelect, dock, framing, corner }: Props) {
+export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSelect, dock, framing, corner, fitOnResize }: Props) {
   const wrap = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const planEl = useRef<HTMLDivElement>(null);
@@ -176,6 +178,10 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
   const fans = useRef(new Map<string, Float32Array>());
   const fanSpots = useRef("");
   const litFloor = useRef<number | null>(null);
+  // Where the light comes from: the room, or a sketch's preview.
+  const frames = useFrames();
+  const framesRef = useRef(frames);
+  framesRef.current = frames;
   const frame = useMemo(() => planExtent(), []);
   const [size, setSize] = useState<Size | null>(null);
   const [view, setViewState] = useState<View | null>(null);
@@ -316,7 +322,7 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
       const v = viewRef.current;
       motion.current = null;
       setView(
-        v && prev
+        v && prev && !fitOnResize
           ? { ...v, ox: v.ox + (width - prev.width) / 2, oy: v.oy + (height - prev.height) / 2 }
           : fitTo(width, height),
       );
@@ -391,7 +397,10 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
     };
   }, []);
 
-  useEffect(() => onFrame(() => void (dirty.current = true)), []);
+  useEffect(() => {
+    dirty.current = true;
+    return frames.subscribe(() => void (dirty.current = true));
+  }, [frames]);
 
   useEffect(() => {
     const sync = (e: KeyboardEvent) => setPanKey(e.metaKey || e.ctrlKey);
@@ -426,6 +435,7 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
       const view = viewRef.current;
       if (view && sizeRef.current) {
         dirty.current = false;
+        const lightFrame = framesRef.current.latest();
         placeBackdrop(wrap.current!, planEl.current, s.layout.plan, view);
         const d = drag.current;
         const lit = lighting.current && !lighting.current.lost ? lighting.current : null;
@@ -435,7 +445,7 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
             lit.setFloor(plan.walls, plan.viewBox);
             litFloor.current = plan.id;
           }
-          const { sources, flux, spots } = lightSources(s.layout.lights, s.layout.plan, (l) => positionOf(l, d), fans.current);
+          const { sources, flux, spots } = lightSources(lightFrame, s.layout.lights, s.layout.plan, (l) => positionOf(l, d), fans.current);
           if (spots !== fanSpots.current) {
             lit.setSources(sources);
             fanSpots.current = spots;
@@ -444,6 +454,7 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
         }
         const { rails, measure } = railsAsDrawn(s.layout.rails, s.railSel, d);
         draw(canvas.current!, {
+          frame: lightFrame,
           glow: !lit,
           size: sizeRef.current,
           view,
@@ -1257,8 +1268,13 @@ function fanOf(o: Point, walls: Segment[]): Float32Array {
  * now: what each can see (cached by spot, as working it out takes a moment),
  * the light each gives right now, and a key that changes when any moves.
  */
-function lightSources(lights: PlacedLight[], plan: Floor | null, at: (l: PlacedLight) => Point, cache: Map<string, Float32Array>) {
-  const frame = latestFrame();
+function lightSources(
+  frame: Frame | null,
+  lights: PlacedLight[],
+  plan: Floor | null,
+  at: (l: PlacedLight) => Point,
+  cache: Map<string, Float32Array>,
+) {
   const gamut = screenGamut();
   const sources: Source[] = [];
   const flux: number[] = [];
@@ -1345,7 +1361,7 @@ function HoverCard({ light, at, view, width, moving }: { light: PlacedLight; at:
     const t = window.setInterval(() => tick((n) => n + 1), 250);
     return () => window.clearInterval(t);
   }, []);
-  const channels = latestFrame()?.lights.get(light.id);
+  const channels = useFrames().latest()?.lights.get(light.id);
   const t = lemtoneOf(channels, light.type);
   const seen = seenOf(channels, light.type);
   const x = view.ox + at.x * view.scale;
@@ -1381,7 +1397,7 @@ function SelectionCard({ lights, at, view, width }: { lights: PlacedLight[]; at:
     const t = window.setInterval(() => tick((n) => n + 1), 250);
     return () => window.clearInterval(t);
   }, []);
-  const frame = latestFrame();
+  const frame = useFrames().latest();
   const tones = lights.map((l) => lemtoneOf(frame?.lights.get(l.id), l.type));
   const seen = lights.map((l) => seenOf(frame?.lights.get(l.id), l.type));
   const first = tones[0] ?? null;
@@ -1439,6 +1455,8 @@ function sameTone(a: Lemtone | null, b: Lemtone | null): boolean {
 }
 
 interface Scene {
+  /** What each light is making now. */
+  frame: Frame | null;
   /** Draw each light's glow (where the simulated light can't run). */
   glow: boolean;
   size: Size;
@@ -1469,7 +1487,7 @@ function draw(c: HTMLCanvasElement, s: Scene) {
 
   drawRails(ctx, s);
 
-  const frame = latestFrame();
+  const { frame } = s;
   const reach = s.spacing * view.scale;
   const items = s.lights.map((l) => {
     const p = s.positionOf(l);

@@ -80,6 +80,25 @@ export function openDb(path: string) {
       shader_name TEXT,
       detail TEXT
     );
+    -- Sketches: each is a git repo, <sketches dir>/<id>.git; its name lives here.
+    CREATE TABLE IF NOT EXISTS sketches (
+      id TEXT PRIMARY KEY,
+      name TEXT NOT NULL,
+      by_id TEXT NOT NULL,
+      by_name TEXT NOT NULL,
+      at INTEGER NOT NULL
+    );
+    -- Boxes: one person's VS Code for one sketch, with their own clone of it
+    -- on their own branch. Whether it's running is the box runner's to say.
+    CREATE TABLE IF NOT EXISTS boxes (
+      id TEXT PRIMARY KEY,
+      sketch_id TEXT NOT NULL,
+      user_id TEXT NOT NULL,
+      user_name TEXT NOT NULL,
+      branch TEXT NOT NULL,
+      at INTEGER NOT NULL,
+      UNIQUE (sketch_id, user_id)
+    );
   `);
 
   const placementColumns = db.prepare("PRAGMA table_info(placements)").all() as { name: string }[];
@@ -120,6 +139,13 @@ export function openDb(path: string) {
   const selectActivity = db.prepare("SELECT * FROM activity ORDER BY id DESC LIMIT ?");
   const lastActivity = db.prepare("SELECT * FROM activity ORDER BY id DESC LIMIT 1");
   const updateActivity = db.prepare("UPDATE activity SET ts = ?, detail = ? WHERE id = ?");
+  const selectSketches = db.prepare("SELECT * FROM sketches ORDER BY at DESC");
+  const selectSketch = db.prepare("SELECT * FROM sketches WHERE id = ?");
+  const insertSketch = db.prepare("INSERT INTO sketches (id, name, by_id, by_name, at) VALUES (?, ?, ?, ?, ?)");
+  const selectBox = db.prepare("SELECT * FROM boxes WHERE id = ?");
+  const selectBoxFor = db.prepare("SELECT * FROM boxes WHERE sketch_id = ? AND user_id = ?");
+  const insertBox = db.prepare("INSERT INTO boxes (id, sketch_id, user_id, user_name, branch, at) VALUES (?, ?, ?, ?, ?, ?)");
+  const selectBranch = db.prepare("SELECT 1 FROM boxes WHERE sketch_id = ? AND branch = ?");
 
   // Nests: an inner transaction just joins the outer one.
   let depth = 0;
@@ -269,8 +295,49 @@ export function openDb(path: string) {
       }));
     },
 
+    /** Every sketch, newest first. */
+    sketches: () => selectSketches.all() as unknown as SketchRow[],
+
+    sketch: (id: string) => selectSketch.get(id) as SketchRow | undefined,
+
+    addSketch(s: SketchRow) {
+      insertSketch.run(s.id, s.name, s.by_id, s.by_name, s.at);
+    },
+
+    box: (id: string) => selectBox.get(id) as BoxRow | undefined,
+
+    /** Someone's box for a sketch, if they've opened it before. */
+    boxFor: (sketchId: string, userId: string) => selectBoxFor.get(sketchId, userId) as BoxRow | undefined,
+
+    addBox(b: BoxRow) {
+      insertBox.run(b.id, b.sketch_id, b.user_id, b.user_name, b.branch, b.at);
+    },
+
+    /** Whether someone's box for a sketch already works on this branch. */
+    sketchBranchTaken: (sketchId: string, branch: string) => selectBranch.get(sketchId, branch) !== undefined,
+
     close: () => db.close(),
   };
+}
+
+export interface SketchRow {
+  id: string;
+  name: string;
+  by_id: string;
+  by_name: string;
+  /** When it was made, in ms. */
+  at: number;
+}
+
+export interface BoxRow {
+  id: string;
+  sketch_id: string;
+  user_id: string;
+  user_name: string;
+  /** Their branch in the sketch's repo. */
+  branch: string;
+  /** When it was first opened, in ms. */
+  at: number;
 }
 
 export type Db = ReturnType<typeof openDb>;

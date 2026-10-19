@@ -16,10 +16,13 @@
       system:
       let
         pkgs = import nixpkgs { inherit system; };
-        # The image runs on kokuzo, whatever builds it.
+        # The images run on kokuzo, whatever builds them.
         pkgsLinux = import nixpkgs { system = "x86_64-linux"; };
+        # A box image for this machine's own Docker, for local development.
+        pkgsLocalLinux = import nixpkgs {
+          system = if pkgs.stdenv.hostPlatform.isAarch64 then "aarch64-linux" else "x86_64-linux";
+        };
         nodejs = pkgsLinux.nodejs_24;
-        pnpm = pkgsLinux.pnpm_11;
         tag = self.rev or self.dirtyRev or "dev";
 
         # Just what building and running vibes needs: never .env, the
@@ -32,44 +35,151 @@
             ./pnpm-workspace.yaml
             ./tsconfig.server.json
             ./tsconfig.web.json
+            ./tsconfig.box.json
             ./vite.config.ts
             ./src
+            ./box
           ];
         };
 
+        # Built with the dependencies from the lockfile, the same for both.
+        withPnpm =
+          p: attrs:
+          p.stdenv.mkDerivation (
+            finalAttrs:
+            {
+              version = "0.0.0";
+              inherit src;
+              nativeBuildInputs = [
+                p.nodejs_24
+                p.pnpm_11
+                p.pnpmConfigHook
+              ];
+              pnpmDeps = p.fetchPnpmDeps {
+                inherit (finalAttrs) pname version src;
+                pnpm = p.pnpm_11;
+                fetcherVersion = 4;
+                hash = "sha256-wBxb6stMCZ+Vf92CGhD4QaJfdMb+p6JQNAYBYvq5fRY=";
+              };
+            }
+            // attrs
+          );
+
         # The web app built, the server's sources as they run (Node strips the
         # types), and the production dependencies.
-        vibes = pkgsLinux.stdenv.mkDerivation (finalAttrs: {
+        vibes = withPnpm pkgsLinux {
           pname = "vibes";
-          version = "0.0.0";
-          inherit src;
-
-          nativeBuildInputs = [
-            nodejs
-            pnpm
-            pkgsLinux.pnpmConfigHook
-          ];
-          pnpmDeps = pkgsLinux.fetchPnpmDeps {
-            inherit (finalAttrs) pname version src;
-            inherit pnpm;
-            fetcherVersion = 4;
-            hash = "sha256-6b0EBt7hzUq18csz+LbSeQVhDNrjCAw0tIrebEFrBew=";
-          };
-
           buildPhase = ''
             runHook preBuild
             pnpm build
             pnpm prune --prod
             runHook postBuild
           '';
-
           installPhase = ''
             runHook preInstall
             mkdir -p $out
             cp -r package.json src dist node_modules $out/
             runHook postInstall
           '';
-        });
+        };
+
+        # A sketch's box (src/server/boxes.ts): one person's VS Code for one
+        # sketch (openvscode-server), the tools a sketch might be built with,
+        # git, and vibes' extension (box/extension), started by box/start.sh.
+        boxImageFor =
+          p:
+          let
+            extension = withPnpm p {
+              pname = "vibes-box-extension";
+              buildPhase = ''
+                runHook preBuild
+                pnpm build:box
+                runHook postBuild
+              '';
+              installPhase = ''
+                runHook preInstall
+                cp -r box/dist/vibes-sketch $out
+                runHook postInstall
+              '';
+              # Plain files for VS Code to load: nothing to patch.
+              dontFixup = true;
+            };
+            # Everyone's box starts with these; a person's own settings are kept in their browser.
+            settings = p.writeText "vibes-box-settings.json" (
+              builtins.toJSON {
+                "workbench.colorTheme" = "Default Dark Modern";
+                "workbench.startupEditor" = "none";
+                "workbench.secondarySideBar.defaultVisibility" = "hidden";
+                "chat.disableAIFeatures" = true;
+                "files.autoSave" = "afterDelay";
+                "git.autofetch" = true;
+                "git.confirmSync" = false;
+                "terminal.integrated.hideOnStartup" = "always";
+                "window.commandCenter" = false;
+                "editor.minimap.enabled" = false;
+                "telemetry.telemetryLevel" = "off";
+              }
+            );
+            start = p.writeShellApplication {
+              name = "vibes-box-start";
+              runtimeInputs = [
+                p.openvscode-server
+                p.git
+                p.jq
+                p.coreutils
+                p.findutils
+              ];
+              text = builtins.readFile ./box/start.sh;
+            };
+            # The person, as uid 1000 (VS Code and git look themselves up).
+            users = p.runCommand "vibes-box-users" { } ''
+              mkdir -p $out/etc
+              printf '%s\n' 'root:x:0:0:root:/root:/bin/sh' 'vibes:x:1000:1000:vibes:/home/workspace:/bin/bash' 'nobody:x:65534:65534:nobody:/var/empty:/bin/sh' >$out/etc/passwd
+              printf '%s\n' 'root:x:0:' 'vibes:x:1000:' 'nobody:x:65534:' >$out/etc/group
+              printf '%s\n' 'hosts: files dns' >$out/etc/nsswitch.conf
+            '';
+          in
+          p.dockerTools.buildLayeredImage {
+            name = "kokuzo.tailc38f.ts.net/vibes-box";
+            inherit tag;
+            contents = [
+              p.dockerTools.binSh
+              p.dockerTools.usrBinEnv
+              p.dockerTools.caCertificates
+              p.bashInteractive
+              p.coreutils
+              p.gnused
+              p.gnugrep
+              p.findutils
+              p.less
+              p.procps
+              p.git
+              p.nodejs_24
+              p.pnpm_11
+            ];
+            # Its home is the box's volume, which starts out owned by the person.
+            # Who's who as real files, which Docker reads to run commands in it.
+            fakeRootCommands = ''
+              mkdir -p home/workspace tmp etc
+              chown 1000:1000 home/workspace
+              chmod 1777 tmp
+              cp ${users}/etc/passwd ${users}/etc/group ${users}/etc/nsswitch.conf etc/
+            '';
+            config = {
+              User = "1000:1000";
+              Entrypoint = [ (p.lib.getExe start) ];
+              WorkingDir = "/home/workspace";
+              Env = [
+                "HOME=/home/workspace"
+                "PATH=/bin:/usr/bin"
+                "SSL_CERT_FILE=/etc/ssl/certs/ca-bundle.crt"
+                "VIBES_EXTENSION=${extension}"
+                "VIBES_SETTINGS=${settings}"
+              ];
+              ExposedPorts."3000/tcp" = { };
+            };
+          };
+        boxImage = boxImageFor pkgsLinux;
       in
       {
         devShells.default = pkgs.mkShell {
@@ -87,6 +197,9 @@
           dockerImage = pkgsLinux.dockerTools.buildLayeredImage {
             name = "kokuzo.tailc38f.ts.net/vibes";
             inherit tag;
+            # git, for sketches' repos; a /tmp, for making them.
+            contents = [ pkgsLinux.git ];
+            extraCommands = "mkdir -m 1777 tmp";
             config = {
               Entrypoint = [
                 "${nodejs}/bin/node"
@@ -102,19 +215,25 @@
             };
           };
 
-          # From a runner on kokuzo, to kokuzo's registry. skopeo rather than
-          # the runner image's own push-docker-image, whose uploads the
-          # registry (distribution v3) refuses as "size invalid". The
-          # registry's certificate is for kokuzo.tailc38f.ts.net, hence no
+          inherit boxImage;
+          # For this machine's Docker: nix build .#boxImageLocal && docker load < result
+          boxImageLocal = boxImageFor pkgsLocalLinux;
+
+          # Both images, from a runner on kokuzo, to kokuzo's registry. skopeo
+          # rather than the runner image's own push-docker-image, whose
+          # uploads the registry (distribution v3) refuses as "size invalid".
+          # The registry's certificate is for kokuzo.tailc38f.ts.net, hence no
           # TLS verification, as with push-docker-image's --insecure. The
           # runner image has no /var/tmp, skopeo's default.
           pushDockerImageActions = pkgs.writeShellScriptBin "push-docker-image" ''
             echo "pushing ${tag}"
             tmp=$(mktemp -d)
             trap 'rm -rf "$tmp"' EXIT
-            ${pkgs.skopeo}/bin/skopeo --insecure-policy --tmpdir "$tmp" copy --dest-tls-verify=false \
-              docker-archive:${dockerImage} \
-              docker://kokuzo-access.arc-runners.svc.cluster.local/vibes:${tag}
+            for image in vibes:${dockerImage} vibes-box:${boxImage}; do
+              ${pkgs.skopeo}/bin/skopeo --insecure-policy --tmpdir "$tmp" copy --dest-tls-verify=false \
+                "docker-archive:''${image#*:}" \
+                "docker://kokuzo-access.arc-runners.svc.cluster.local/''${image%%:*}:${tag}"
+            done
           '';
         };
       }

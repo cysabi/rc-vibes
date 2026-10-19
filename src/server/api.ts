@@ -33,7 +33,30 @@ export interface ApiDeps {
   db: Db;
   relay: StreamRelay;
   origins: string[];
+  lights: LightsSource;
+  /** Sketches' routes, while sketches are on. */
+  sketches: Hono<AuthEnv> | null;
 }
+
+/**
+ * The lights as vibes has them: arclamp's (asked for at most once a minute),
+ * with the positions, rails, orientations and tags set in vibes applied.
+ */
+export function createLights(arclamp: Arclamp, db: Db) {
+  let cache: { at: number; value: LightsResponse } | null = null;
+  async function arclampLights(): Promise<LightsResponse> {
+    if (!cache || Date.now() - cache.at > LIGHTS_TTL_MS) {
+      cache = { at: Date.now(), value: normalizeLights(await arclamp.lights()) };
+    }
+    return cache.value;
+  }
+  async function currentLights(): Promise<Lights> {
+    return applyEdits(await arclampLights(), { rails: db.rails(), placements: db.placements(), types: db.types(), tags: db.tags() });
+  }
+  return { arclampLights, currentLights };
+}
+
+export type LightsSource = ReturnType<typeof createLights>;
 
 export const handleError: ErrorHandler = (err, c) => {
   if (err instanceof ArclampError) {
@@ -74,7 +97,7 @@ const badBody = (result: { success: boolean; error?: unknown }, c: Context) => {
   }
 };
 
-export function apiRoutes({ config, arclamp, db, relay, origins }: ApiDeps) {
+export function apiRoutes({ config, arclamp, db, relay, origins, lights, sketches }: ApiDeps) {
   const api = new Hono<AuthEnv>();
   api.onError(handleError);
   // Browsers already refuse cross-site JSON requests without CORS headers,
@@ -92,19 +115,8 @@ export function apiRoutes({ config, arclamp, db, relay, origins }: ApiDeps) {
   });
   api.use("*", requireUser(config));
 
-  let lightsCache: { at: number; value: LightsResponse } | null = null;
-
-  async function arclampLights(): Promise<LightsResponse> {
-    if (!lightsCache || Date.now() - lightsCache.at > LIGHTS_TTL_MS) {
-      lightsCache = { at: Date.now(), value: normalizeLights(await arclamp.lights()) };
-    }
-    return lightsCache.value;
-  }
-
-  /** arclamp's lights and rails with the positions, rails, orientations and tags set in vibes applied. */
-  async function currentLights(): Promise<Lights> {
-    return applyEdits(await arclampLights(), { rails: db.rails(), placements: db.placements(), types: db.types(), tags: db.tags() });
-  }
+  const { arclampLights, currentLights } = lights;
+  if (sketches) api.route("/sketches", sketches);
 
   const nameOf = (d: ShaderDescriptor) => `Shader #${d.id}`;
 
@@ -119,7 +131,7 @@ export function apiRoutes({ config, arclamp, db, relay, origins }: ApiDeps) {
         if (!(err instanceof ArclampError)) throw err;
         status = err.status === 401 || err.status === 403 ? "rejected" : "unreachable";
       }
-      return c.json<Status>({ arclamp: status, stream: relay.connected() });
+      return c.json<Status>({ arclamp: status, stream: relay.connected(), sketches: sketches !== null });
     })
 
     .get("/lights", async (c) => c.json(await currentLights()))

@@ -1,0 +1,111 @@
+{
+  "name": "vibes-sketch",
+  "displayName": "vibes",
+  "description": "A sketch's preview on the plan, and its console, in a vibes box.",
+  "publisher": "vibes",
+  "version": "0.1.0",
+  "private": true,
+  "license": "UNLICENSED",
+  "engines": {
+    "vscode": "^1.109.0"
+  },
+  "extensionKind": [
+    "workspace"
+  ],
+  "main": "./extension.js",
+  "activationEvents": [
+    "onStartupFinished"
+  ],
+  "contributes": {
+    "viewsContainers": {
+      "panel": [
+        {
+          "id": "vibes",
+          "title": "Sketch",
+          "icon": "media/icon.svg"
+        }
+      ]
+    },
+    "views": {
+      "vibes": [
+        {
+          "type": "webview",
+          "id": "vibes.preview",
+          "name": "Preview"
+        },
+        {
+          "type": "webview",
+          "id": "vibes.console",
+          "name": "Console"
+        }
+      ]
+    },
+    "commands": [
+      {
+        "command": "vibes.play",
+        "title": "Play",
+        "category": "Sketch",
+        "icon": "$(play)"
+      },
+      {
+        "command": "vibes.pause",
+        "title": "Pause",
+        "category": "Sketch",
+        "icon": "$(debug-pause)"
+      },
+      {
+        "command": "vibes.restart",
+        "title": "Restart",
+        "category": "Sketch",
+        "icon": "$(debug-restart)"
+      },
+      {
+        "command": "vibes.toggle",
+        "title": "Play or Pause",
+        "category": "Sketch"
+      },
+      {
+        "command": "vibes.clear",
+        "title": "Clear the Console",
+        "category": "Sketch",
+        "icon": "$(clear-all)"
+      }
+    ],
+    "menus": {
+      "view/title": [
+        {
+          "command": "vibes.pause",
+          "when": "view == vibes.preview && vibes.playing",
+          "group": "navigation@1"
+        },
+        {
+          "command": "vibes.play",
+          "when": "view == vibes.preview && !vibes.playing",
+          "group": "navigation@1"
+        },
+        {
+          "command": "vibes.restart",
+          "when": "view == vibes.preview",
+          "group": "navigation@2"
+        },
+        {
+          "command": "vibes.clear",
+          "when": "view == vibes.console",
+          "group": "navigation@1"
+        }
+      ]
+    },
+    "keybindings": [
+      {
+        "command": "vibes.toggle",
+        "key": "ctrl+alt+p",
+        "mac": "cmd+alt+p"
+      },
+      {
+        "command": "vibes.restart",
+        "key": "ctrl+alt+r",
+        "mac": "cmd+alt+r"
+      }
+    ]
+  }
+}

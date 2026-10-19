@@ -45,6 +45,13 @@ lighting system at the Recurse Center, served at `vibes.recurse.com`.
 | `VIBES_DEV_LOGIN` | no | `1` allows logging in as any name; refused when `NODE_ENV=production` |
 | `DATABASE_PATH` | no | SQLite file, default `vibes.db` |
 | `PORT` | no | default `8787` |
+| `SKETCHES` | no | `1` turns sketches on (see Sketches) |
+| `SKETCHES_DIR` | no | sketches' repos, default `<DATABASE_PATH's folder>/sketches` |
+| `BOX_IMAGE` | sketches | the box image |
+| `BOX_RUNNER` | no | `docker` (default: containers on this machine) or `kubernetes` (pods on the cluster vibes runs in) |
+| `BOX_VIBES_URL` | kubernetes | where boxes reach vibes; with Docker, `http://host.docker.internal:$PORT` |
+| `BOX_NAMESPACE`, `BOX_RUNTIME_CLASS` | no | where box pods run (default `vibes-boxes`), and with what (default `kata`; empty for the cluster's own) |
+| `BOX_IDLE_MINUTES` | no | an unused box is stopped after this long (default 30); its files are kept |
 
 Mint the production key on the arclamp host, with full access (no `-perms`):
 
@@ -195,57 +202,67 @@ lights where they are, as free lights. vibes keeps its rail changes in the
    and at `vibes.recurse.com`, RC's proxy in front of it. RC's OAuth app takes
    one callback, on `vibes.hall.ly`, so a login from `vibes.recurse.com` hops
    there and comes back with a one-time code. Each push to `main` runs `.github/workflows/deploy.yaml`: typecheck and
-   tests, then the flake's image (`kokuzo.tailc38f.ts.net/vibes:<sha>`) is
-   pushed and `.kube/version.yaml` pinned to it on the `cd` branch, which
+   tests, then the flake's images (`kokuzo.tailc38f.ts.net/vibes:<sha>`, and
+   sketches' boxes' `vibes-box:<sha>`) are pushed and `.kube/version.yaml`
+   pinned to them on the `cd` branch, which
    Argo CD (`deploy/argocd-application.yaml`) syncs. Secrets live in the
    `vibes-secrets` Secret; kokuzo's Cloudflare tunnel (nixos-config) routes
    the hostname to the Service's NodePort, 30787. `deploy/local` is the same
    on a local cluster.
+7. **Sketches.** ✅ Their pages, each person's own VS Code for a sketch (a
+   box) with the preview and console as its panels, and git to share them
+   (see Sketches). Nothing goes to the room yet.
 
 Later: key minting (keys handed out must not include `mint`, since any `mint`
 key can revoke every token, including vibes').
 
-## Sketches (in design)
+## Sketches
 
 Code made in vibes is a **sketch**; rclamp's word stays "shader". A sketch is
-a git repo, and what runs in the room will only ever be built from one of its
-commits. Agreed so far, shaped with a clickable mock (the `editor-mock`
-branch):
+a git repo whose `main` is the sketch, and what runs in the room will only
+ever be built from one of its commits. On while `SKETCHES=1`.
 
-- **Pages, not over the map.** `/sketches` lists them; `/sketches/<id>` edits
-  one: the code on top, and along the bottom the preview (the building is
-  wider than it's tall) beside the console.
-- **Simple first: no tie to the room yet.** No copies in the room, no
-  versions, nothing to put in the room. Those come later.
-- **The editor is a real VS Code** (openvscode-server or code-server), one per
-  person per sketch, each in its own sandbox: a Kata VM on kokuzo behind the
-  same network rules as builds (internet, but not the LAN, the tailnet or the
-  cluster). Its terminal is hidden, but the sandbox is the boundary: tasks and
-  extensions can run anything. vibes puts it behind its login and embeds it.
-- **Sync is git.** The sketch is `main`, kept on vibes. Each person's VS Code
-  has its own clone and branch, and plain VS Code source control brings
-  changes together. Anyone can change `main`. Saving's semantics (what
-  becomes a commit) come later.
-- **The preview runs in the browser, on its own**: the sketch in its own
-  worker, on its own clock, making its own frames, drawn on its own map. It
-  never touches the room, other pages or other tabs. Play, pause (which stops
-  calling `update()`) and restart; lights select as on the map, with what
-  they look like in the corner; and a console of what the sketch logs.
-  Later, the sketch's own build, watching in its VS Code's sandbox, hot-swaps
-  `update()` in the preview.
+- **Pages, not over the map.** `/sketches` lists them (and makes them: a first
+  commit with a gentle wave in `main.ts`, its types in `vibes.ts`, and a
+  README); `/sketches/<uuid>` is one, in your own VS Code under vibes' bar.
+- **No tie to the room yet.** No copies in the room, no versions, nothing to
+  put in the room. Those come later.
+- **Your own VS Code: a box.** Opening a sketch starts your box for it
+  (`src/server/boxes.ts`): openvscode-server with your own clone of the
+  sketch, on your own branch, and vibes' extension, from the box image
+  (`flake.nix`, started by `box/start.sh`). On kokuzo it's a pod in
+  `vibes-boxes`, in a Kata VM, reached only by vibes and reaching only DNS,
+  vibes and the public internet (`.kube/boxes.yaml`); locally, a Docker
+  container. Its files are on its own volume, kept when it's stopped after
+  `BOX_IDLE_MINUTES` unused. The terminal is hidden, but the sandbox is the
+  boundary: tasks and extensions can run anything.
+- **Through vibes only.** `/box/<id>/…` is proxied to your box's VS Code, for
+  you only (`src/server/box-proxy.ts`). The box never sees vibes' cookies,
+  only its VS Code's connection token, which vibes adds (and sets for the
+  box's own path, for VS Code's page); nothing the box sets as a cookie
+  reaches the browser.
+- **Sync is git.** The sketch's canonical repo is on vibes' volume
+  (`/data/sketches/<uuid>.git`), served over HTTP at `/git/<uuid>.git` to its
+  boxes, each with its own token (`src/server/git.ts`). Plain VS Code source
+  control brings changes together; anyone can change `main`. What saving
+  commits comes later.
+- **The preview runs in the browser, on its own** (`src/web/preview`), in a
+  "Sketch" panel in VS Code beside the console (`box/extension`). The
+  extension builds the sketch with esbuild on start and on each save, and the
+  preview swaps each build in on the same clock: hot reload. The sketch runs
+  in its own worker, on its own clock, drawn on its own map from the lights'
+  layout (which the extension gets from vibes with the box's token); it never
+  touches the room. Play, pause (which stops calling `update()`) and restart
+  in the panel's title bar, the clock in the status bar; lights select as on
+  the map, with what they look like in the corner. Build errors go to
+  Problems, and the preview keeps running what last built.
 
-Phases, each laid out for agreement before it's built:
-
-1. **Spike:** a VS Code in Docker on OrbStack with its own clone of a sketch,
-   embedded in the mock, to try embedding, proxying, start-up and git.
-2. **Sketches on the server:** the canonical repos, and git over HTTP for the
-   VS Codes to clone from and push to.
-3. **Dev boxes:** a sandboxed VS Code per person per sketch, started when
-   opened and stopped when idle, proxied through vibes.
-4. **The preview,** from the mock's runner, then hot-swapping from the box.
-5. **Later, the room:** the trusted builder, the stamp (an HMAC over the
-   built script, so an edited copy shows as edited), and putting sketches in
-   the room.
+Still to come: VS Code's own defaults that only its product configuration
+sets (no welcome page, no AI chat), its webviews served from our own domain
+rather than Microsoft's CDN, boxes on their own origin (now their page shares
+vibes'), what saving commits, and the room: the trusted builder, the stamp (an
+HMAC over the built script, so an edited copy shows as edited), and putting
+sketches in the room.
 
 ## Gaps in arclamp (PRs to rclamp)
 
@@ -278,6 +295,14 @@ pnpm dev             # vibes server + Vite, http://localhost:5173
 
 `pnpm arclamp:radio` drives a base station plugged into the Mac, on
 production's channel; every bulb in range follows it.
+
+Sketches locally: build the box image for this Mac's Docker (through a Linux
+builder, e.g. OrbStack's) and run with `SKETCHES=1 BOX_IMAGE=vibes-box:dev`.
+
+```sh
+nix build .#boxImageLocal && docker load < result   # then: docker tag <loaded image> vibes-box:dev
+pnpm build:box   # just the extension and its preview, into box/dist
+```
 
 ## To confirm
 

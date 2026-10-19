@@ -1,5 +1,6 @@
-# On every push to main: check it, build the image with Nix, push it to
-# kokuzo's registry, and hand Argo CD a cd branch whose .kube points at it.
+# On every push to main: check it, build the images (vibes, and sketches'
+# boxes) with Nix, push them to kokuzo's registry, and hand Argo CD a cd
+# branch whose .kube points at them.
 name: deploy
 on:
   push:
@@ -14,7 +15,8 @@ jobs:
     - uses: actions/checkout@v4
     - run: nix develop -c bash -c 'pnpm install --frozen-lockfile && pnpm typecheck && pnpm test'
     - run: nix run -j32 -L '.#pushDockerImageActions'
-    - run: nu -c 'open .kube/version.yaml -r | from yaml | update value $"kokuzo.tailc38f.ts.net/vibes:${{ github.sha }}" | to yaml | save .kube/version.yaml -f'
+    # Both images, the server's and sketches' boxes'.
+    - run: nu -c 'open .kube/version.yaml -r | from yaml | update 0.value "kokuzo.tailc38f.ts.net/vibes:${{ github.sha }}" | update 1.value.value "kokuzo.tailc38f.ts.net/vibes-box:${{ github.sha }}" | to yaml | save .kube/version.yaml -f'
     - run: |
         git config --global user.name 'GitHub Actions'
         git config --global user.email 'actions@github.com'

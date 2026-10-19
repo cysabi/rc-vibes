@@ -5,7 +5,7 @@ import { useEffect, useState } from "react";
 import type { LightInfo } from "../../shared/arclamp.ts";
 import { seenOf } from "../../shared/fixtures.ts";
 import { lookOf, swatch } from "../../shared/lemtone.ts";
-import { latestFrame } from "../live.ts";
+import { useFrames } from "../live.ts";
 
 export function Brand({ lights }: { lights: LightInfo[] }) {
   return (
@@ -21,10 +21,11 @@ export function Brand({ lights }: { lights: LightInfo[] }) {
  * set as --room on the page, for anything else that wants to follow the room.
  */
 function RoomGlow({ lights }: { lights: LightInfo[] }) {
+  const frames = useFrames();
   const [color, setColor] = useState("rgb(60 56 50)");
   useEffect(() => {
     const t = window.setInterval(() => {
-      const frame = latestFrame();
+      const frame = frames.latest();
       if (!frame || lights.length === 0) return;
       // The room's average look: each light's color, dimmed by how bright it looks.
       const sum = [0, 0, 0];
@@ -38,7 +39,7 @@ function RoomGlow({ lights }: { lights: LightInfo[] }) {
       setColor(`rgb(${r} ${g} ${b})`);
     }, 400);
     return () => window.clearInterval(t);
-  }, [lights]);
+  }, [lights, frames]);
   useEffect(() => {
     document.documentElement.style.setProperty("--room", color);
   }, [color]);

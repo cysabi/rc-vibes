@@ -1,0 +1,45 @@
+/* The preview panel: the map fills the webview (VS Code pads a webview's body
+   by default), cooler than the room's map, as simulated mode is, so a preview
+   never passes for the room. It's also an .app, for the color readout, so
+   these outrank .app's own. */
+
+html,
+body,
+#root {
+  height: 100%;
+}
+
+body {
+  margin: 0;
+  padding: 0 !important;
+  overflow: hidden;
+  background: var(--void);
+}
+
+.preview-map.app {
+  --gap: 10px;
+  --hud-h: 10px;
+  --inset-top: 10px;
+  --inset-right: 10px;
+  --inset-bottom: 48px;
+  --inset-left: 10px;
+  --void: #06070a;
+  --glass: rgb(19 21 27 / 0.62);
+  --edge: rgb(170 200 255 / 0.16);
+  --plan-line: #2a2e36;
+  --plan-text: #4f5561;
+  position: fixed;
+  inset: 0;
+  height: auto;
+  overflow: hidden;
+}
+
+/* With lights selected, what they look like sits in the bottom left, over
+   the same dusk as on the map. */
+.preview-map.app.selecting {
+  --inset-bottom: max(48px, calc(var(--preview-h, 0px) + var(--gap) * 2));
+}
+
+.preview-map.selecting .map-scrim {
+  opacity: 1;
+}

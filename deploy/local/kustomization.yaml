@@ -1,5 +1,6 @@
-# The same, on a local cluster (OrbStack's Kubernetes): a locally built
-# image and its own public URL.
+# The same, on a local cluster (OrbStack's Kubernetes): locally built images,
+# its own public URL, and boxes without Kata (there's none).
+#   nix build .#boxImageLocal && docker load < result   (and tag it vibes-box:dev)
 #   kubectl create namespace vibes
 #   kubectl -n vibes create secret generic vibes-secrets --from-literal=...
 #   kubectl apply -k deploy/local
@@ -22,3 +23,7 @@ patches:
             env:
             - name: PUBLIC_URL
               value: http://localhost:30787
+            - name: BOX_IMAGE
+              value: vibes-box:dev
+            - name: BOX_RUNTIME_CLASS
+              value: ""

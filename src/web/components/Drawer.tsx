@@ -11,7 +11,7 @@ import { baseType, seenOf } from "../../shared/fixtures.ts";
 import { lemtoneCss } from "../../shared/lemtone.ts";
 import { screenGamut } from "../gamut.ts";
 import { ChevronUpIcon } from "../icons.tsx";
-import { latestFrame } from "../live.ts";
+import { useFrames } from "../live.ts";
 
 // More than this and the drawer starts closed, so it doesn't cover the map.
 const OPEN_UP_TO = 12;
@@ -45,7 +45,7 @@ export function Drawer({ lights, onDrop, children, lead }: Props) {
     const t = window.setInterval(() => tick((n) => n + 1), 1000);
     return () => window.clearInterval(t);
   }, [open]);
-  const frame = latestFrame();
+  const frame = useFrames().latest();
   const colorOf = (l: LightInfo) => lemtoneCss(seenOf(frame?.lights.get(l.id), l.type), screenGamut());
   const groups = [
     ...GROUPS,

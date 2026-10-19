@@ -5,7 +5,7 @@
 // refresh at most. They live outside React: the map draws straight from the
 // store, and React only hears about connection changes.
 
-import { useEffect, useSyncExternalStore } from "react";
+import { createContext, useContext, useEffect, useSyncExternalStore } from "react";
 import { decodeFrame, frameTime, type Frame, type LightsResponse } from "../shared/arclamp.ts";
 import { Playout, type PlayoutStats } from "./playout.ts";
 
@@ -53,6 +53,25 @@ export function onFrame(listener: (f: Frame) => void) {
     frameListeners.delete(listener);
   };
 }
+
+/**
+ * Where a map, and whatever reads its lights, gets the light from: the room
+ * (as above), or a sketch's own preview (preview/runner.ts). They take theirs
+ * from context, so a sketch's preview runs on its own and touches nothing else.
+ */
+export interface FrameSource {
+  /** The frame to show now, if there is one yet. */
+  latest(): Frame | null;
+  /** Called for every new frame. Returns an unsubscribe function. */
+  subscribe(listener: (f: Frame) => void): () => void;
+}
+
+/** The room: live, or the preview of pending edits while there are some. */
+export const roomFrames: FrameSource = { latest: latestFrame, subscribe: onFrame };
+
+const FramesContext = createContext<FrameSource>(roomFrames);
+export const FramesProvider = FramesContext.Provider;
+export const useFrames = () => useContext(FramesContext);
 
 function setConnected(value: boolean) {
   connected = value;

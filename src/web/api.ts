@@ -4,12 +4,14 @@ import { QueryCache, QueryClient, useMutation, useQuery } from "@tanstack/react-
 import type { HealthResponse } from "../shared/arclamp.ts";
 import type {
   ApiError,
+  BoxState,
   Lights,
   LoginOptions,
   Me,
   Placement,
   RailChange,
   SceneNode,
+  Sketch,
   Status,
   TagChange,
   TypeChange,
@@ -104,6 +106,32 @@ export function useLogout() {
     },
   });
 }
+
+export const useSketches = () =>
+  useQuery({ queryKey: ["sketches"], queryFn: () => request<{ sketches: Sketch[] }>("GET", "/api/sketches").then((r) => r.sketches) });
+
+export const useSketch = (id: string) =>
+  useQuery({ queryKey: ["sketches", id], queryFn: () => request<Sketch>("GET", `/api/sketches/${encodeURIComponent(id)}`) });
+
+export function useCreateSketch() {
+  return useMutation({
+    mutationFn: (name: string) => request<Sketch>("POST", "/api/sketches", { name }),
+    onSuccess: () => queryClient.invalidateQueries({ queryKey: ["sketches"] }),
+  });
+}
+
+/**
+ * Your box for a sketch, started if it isn't running, and asked after until
+ * it's ready (or has failed).
+ */
+export const useBox = (sketchId: string) =>
+  useQuery({
+    queryKey: ["box", sketchId],
+    // A JSON body, so it's never taken for a form posted from another site.
+    queryFn: () => request<BoxState>("POST", `/api/sketches/${encodeURIComponent(sketchId)}/box`, {}),
+    refetchInterval: (q) => (q.state.data?.state === "starting" ? 1000 : false),
+    refetchOnWindowFocus: false,
+  });
 
 const invalidateLights = () => queryClient.invalidateQueries({ queryKey: ["lights"] });
 

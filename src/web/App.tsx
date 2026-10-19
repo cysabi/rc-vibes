@@ -17,16 +17,19 @@ import { useNarrow } from "./narrow.ts";
 import { usePeek } from "./peek.ts";
 import { savedFloor, saveFloor, useLiveMode } from "./settings.ts";
 import { useSimulation } from "./sim.ts";
+import { usePath } from "./route.ts";
+import { SketchesLink, SketchPages } from "./sketches/SketchPages.tsx";
 
 const NO_RAILS: Rail[] = [];
 const NO_NODES: SceneNode[] = [];
 
 export function App() {
   const me = useMe();
+  const path = usePath();
   if (me.isPending) return <div className="splash" />;
   if (me.isError) return <div className="splash">Couldn't reach vibes: {me.error.message}</div>;
   if (!me.data) return <Login />;
-  return <Shell />;
+  return path === "/sketches" || path.startsWith("/sketches/") ? <SketchPages path={path} /> : <Shell />;
 }
 
 function Shell() {
@@ -187,6 +190,7 @@ function Shell() {
           ) : (
             <TagChips lights={here} selected={selectedHere} onSelect={selectByTag} />
           )}
+          <SketchesLink />
           <UserMenu />
         </div>
       </div>

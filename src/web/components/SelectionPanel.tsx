@@ -39,7 +39,7 @@ import type { SceneNode } from "../../shared/vibes.ts";
 import { useLights, useScene } from "../api.ts";
 import { drafts, layersOf, reorderWithin, templateOf, useDraft, type Layer } from "../draft.ts";
 import { ChevronUpIcon, CloseIcon, GripIcon } from "../icons.tsx";
-import { latestFrame } from "../live.ts";
+import { useFrames } from "../live.ts";
 import { useNarrow } from "../narrow.ts";
 import { useLayerEffects } from "../sim.ts";
 import { RoomToneEditor } from "./RoomToneEditor.tsx";
@@ -469,7 +469,7 @@ function LightNow({ light }: { light: LightInfo }) {
     const t = window.setInterval(() => tick((n) => n + 1), 250);
     return () => window.clearInterval(t);
   }, []);
-  const channels = latestFrame()?.lights.get(light.id);
+  const channels = useFrames().latest()?.lights.get(light.id);
   let state: string;
   if (isBinary(light.type)) state = isOn(channels) ? "on" : "off";
   else {

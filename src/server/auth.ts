@@ -5,6 +5,7 @@
 import { randomBytes } from "node:crypto";
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
+import { parseSigned } from "hono/utils/cookie";
 import { z } from "zod";
 import type { LoginOptions, Me } from "../shared/vibes.ts";
 import type { Config } from "./env.ts";
@@ -39,7 +40,16 @@ async function startSession(c: Context, config: Config, user: Me) {
 }
 
 export async function readSession(c: Context, config: Config): Promise<Me | null> {
-  const raw = await getSignedCookie(c, config.sessionSecret, SESSION_COOKIE);
+  return sessionOf(await getSignedCookie(c, config.sessionSecret, SESSION_COOKIE), config);
+}
+
+/** The session in a raw Cookie header, for what's handled outside Hono (the box proxy). */
+export async function sessionFromCookies(header: string | undefined, config: Config): Promise<Me | null> {
+  const cookies = await parseSigned(header ?? "", config.sessionSecret, SESSION_COOKIE);
+  return sessionOf(cookies[SESSION_COOKIE], config);
+}
+
+function sessionOf(raw: string | false | undefined, config: Config): Me | null {
   if (!raw) return null;
   let parsed;
   try {

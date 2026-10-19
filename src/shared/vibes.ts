@@ -56,7 +56,29 @@ export interface Status {
   arclamp: "ok" | "unreachable" | "rejected";
   /** Whether vibes is connected to arclamp's live light stream. */
   stream: boolean;
+  /** Whether sketches are on here (SKETCHES=1). */
+  sketches: boolean;
 }
+
+/** A sketch: code made in vibes, kept as a git repo whose `main` is the sketch. */
+export interface Sketch {
+  id: string;
+  name: string;
+  createdBy: Person;
+  createdAt: number;
+  /** The latest commit on main: when, and by whom (the commit's author). */
+  updatedAt: number;
+  updatedBy: string;
+}
+
+/**
+ * Your box for a sketch: your own VS Code with your own clone of it. `url` is
+ * where to open it, once it's ready.
+ */
+export type BoxState =
+  | { state: "starting" }
+  | { state: "ready"; url: string }
+  | { state: "failed"; error: string };
 
 export type ActivityAction =
   | "shader.create"

@@ -15,6 +15,8 @@ export default defineConfig({
     proxy: {
       "/api/": { target: server, ws: true },
       "/auth/": server,
+      // Sketches' boxes: their VS Code, through vibes.
+      "/box/": { target: server, ws: true },
     },
   },
 });

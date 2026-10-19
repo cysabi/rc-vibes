@@ -16,7 +16,7 @@ import type { LightInfo } from "../../shared/arclamp.ts";
 import { isBinary, isOn, madeOf, requestedOf } from "../../shared/fixtures.ts";
 import { cssColor, kelvinOf, lemtoneCss, lookOf, lumensText, swatch, whiteAB, type Gamut, type Lemtone, type Vec3 } from "../../shared/lemtone.ts";
 import { screenGamut } from "../gamut.ts";
-import { latestFrame } from "../live.ts";
+import { useFrames } from "../live.ts";
 import { dotsOf, exact, gather, titleOf, type Placed } from "../marks.ts";
 import { wheelColor, wheelSpot } from "../wheel.ts";
 import { Goo } from "./Goo.tsx";
@@ -61,7 +61,7 @@ export function ColorPreview({ lights }: Props) {
     return () => window.clearInterval(t);
   }, []);
   const gamut = screenGamut();
-  const frame = latestFrame();
+  const frame = useFrames().latest();
 
   const colored: Spot[] = [];
   let oldOn = 0;
