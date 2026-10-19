@@ -57,6 +57,7 @@ import { useFrames } from "../live.ts";
 import { useNarrow } from "../narrow.ts";
 import { usePendingInstances, useScene } from "../scene.ts";
 import { listOf, ordinal } from "../words.ts";
+import { Reveal } from "./Reveal.tsx";
 import { RoomToneEditor } from "./RoomToneEditor.tsx";
 import { ComingBody, ComingTitle, ShaderBody, ShaderTitle } from "./ShaderPanel.tsx";
 
@@ -316,9 +317,9 @@ export function SelectionPanel({ floor, here, selected, shader, onShader, onClos
                           <ChevronUpIcon />
                         </span>
                       </div>
-                      {opened === "roomtone" && (
+                      <Reveal open={opened === "roomtone"}>
                         <RoomToneEditor lights={chosen} template={template} over={rows.filter((r) => r.state !== "off").map((r) => r.layer.name)} />
-                      )}
+                      </Reveal>
                     </li>
                     {rows.map((row) => (
                       <SortableRow
@@ -404,7 +405,11 @@ function SortableRow(props: RowProps) {
       ) : (
         head
       )}
-      {open && <div className="layer-details">{details}</div>}
+      {expandable && (
+        <Reveal open={open}>
+          <div className="layer-details">{details}</div>
+        </Reveal>
+      )}
     </li>
   );
 }
