@@ -157,6 +157,9 @@ export function openDb(path: string) {
   if (!sketchColumns.some((c) => c.name === "deleted_at")) {
     db.exec("ALTER TABLE sketches ADD COLUMN deleted_at INTEGER; ALTER TABLE sketches ADD COLUMN deleted_by_id TEXT; ALTER TABLE sketches ADD COLUMN deleted_by_name TEXT");
   }
+  // The branch an instance was put in from (all of them main, before there was a choice).
+  const instanceColumns = db.prepare("PRAGMA table_info(instances)").all() as { name: string }[];
+  if (!instanceColumns.some((c) => c.name === "branch")) db.exec("ALTER TABLE instances ADD COLUMN branch TEXT NOT NULL DEFAULT 'main'");
 
   const selectPlacements = db.prepare("SELECT light_id, mm_x, mm_y, floor, rail_id, mm_along FROM placements");
   const upsertPlacement = db.prepare(`
@@ -211,7 +214,7 @@ export function openDb(path: string) {
   const selectBuilding = db.prepare("SELECT * FROM builds WHERE state = 'building'");
   const updateBuild = db.prepare("UPDATE builds SET state = ?, finished_at = ?, plan = ?, error = ?, log = ?, script = ? WHERE id = ? AND state = 'building'");
   const insertInstance = db.prepare(
-    "INSERT INTO instances (id, sketch_id, build_id, home, shader_id, state, error, next_build_id, by_id, by_name, at) VALUES (?, ?, ?, ?, NULL, 'building', NULL, NULL, ?, ?, ?)",
+    "INSERT INTO instances (id, sketch_id, branch, build_id, home, shader_id, state, error, next_build_id, by_id, by_name, at) VALUES (?, ?, ?, ?, ?, NULL, 'building', NULL, NULL, ?, ?, ?)",
   );
   const selectInstance = db.prepare("SELECT * FROM instances WHERE id = ?");
   const selectInstances = db.prepare("SELECT * FROM instances ORDER BY at");
@@ -434,9 +437,9 @@ export function openDb(path: string) {
       return updateBuild.run(end.state, end.finished_at, end.plan, end.error, end.log, end.script, id).changes > 0;
     },
 
-    /** A new instance, building. */
-    addInstance(i: Pick<InstanceRow, "id" | "sketch_id" | "build_id" | "home" | "by_id" | "by_name" | "at">) {
-      insertInstance.run(i.id, i.sketch_id, i.build_id, JSON.stringify(i.home), i.by_id, i.by_name, i.at);
+    /** A new instance, building: from main, unless it says otherwise. */
+    addInstance(i: Pick<InstanceRow, "id" | "sketch_id" | "build_id" | "home" | "by_id" | "by_name" | "at"> & { branch?: string }) {
+      insertInstance.run(i.id, i.sketch_id, i.branch ?? "main", i.build_id, JSON.stringify(i.home), i.by_id, i.by_name, i.at);
     },
 
     instance: (id: string) => instanceOf(selectInstance.get(id)),
@@ -529,6 +532,8 @@ export interface BuildRow {
 export interface InstanceRow {
   id: string;
   sketch_id: string;
+  /** The branch it was put in from: trying again, or updating, moves it to that branch's head. */
+  branch: string;
   /** The build it runs, or will once it's built. */
   build_id: string;
   /** The lights it was put on, by id. */

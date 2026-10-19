@@ -1,7 +1,7 @@
-// Sketches being added (Draft.added): each one's main, built on vibes' server
-// (its builder), and watched until it's built, when its stamped script is
-// fetched for the preview, or until it fails. Runs on the map's page, so a
-// build started before a reload is picked up again after it.
+// Sketches being added (Draft.added): each one's branch's head, built on
+// vibes' server (its builder), and watched until it's built, when its
+// stamped script is fetched for the preview, or until it fails. Runs on the
+// map's page, so a build started before a reload is picked up again after it.
 
 import { useEffect } from "react";
 import type { Build } from "../shared/vibes.ts";
@@ -23,7 +23,8 @@ async function look(a: Adding) {
   try {
     let build: Build;
     if (!a.build) {
-      build = await request<Build>("POST", `/api/sketches/${encodeURIComponent(a.sketchId)}/builds`, {});
+      // Its branch's head.
+      build = await request<Build>("POST", `/api/sketches/${encodeURIComponent(a.sketchId)}/builds`, { commit: a.branch });
     } else {
       build = await request<Build>("GET", `/api/sketches/${encodeURIComponent(a.sketchId)}/builds/${encodeURIComponent(a.build.id)}`);
     }

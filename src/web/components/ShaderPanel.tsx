@@ -14,17 +14,18 @@ import { useState } from "react";
 import type { LightInfo } from "../../shared/arclamp.ts";
 import { tagLabel } from "../../shared/tags.ts";
 import type { Instance, ShaderSketch } from "../../shared/vibes.ts";
-import { request, useSketch } from "../api.ts";
+import { request, useBranchHead } from "../api.ts";
 import { drafts, reachOf, switchEverywhere, switchState, type Adding, type Layer } from "../draft.ts";
 import { ChevronLeftIcon, OpenIcon, TrashIcon } from "../icons.tsx";
 import { navigate } from "../route.ts";
 import { invalidateScene } from "../scene.ts";
 import { useLiveMode } from "../settings.ts";
-import { count, listOf, ordinal } from "../words.ts";
+import { commitName, count, listOf, ordinal } from "../words.ts";
 
 /** Its head: back to the selection, its name, and where it's from. */
 export function ShaderTitle({ layer, onBack }: { layer: Layer; onBack: () => void }) {
   const sketch = layer.node.sketch;
+  const instance = layer.instance;
   return (
     <>
       <BackButton onBack={onBack} />
@@ -32,7 +33,9 @@ export function ShaderTitle({ layer, onBack }: { layer: Layer; onBack: () => voi
         <h2>{layer.name}</h2>
         <p className="muted">
           {/* A sketch's, vibes made (with its own key, which arclamp names as who did). */}
-          {sketch ? `@ ${sketch.commit.slice(0, 7)}` : `Made outside vibes · by ${layer.by}`}
+          {sketch
+            ? `@ ${instance ? commitName(sketch.commit, instance.branch, instance.head) : sketch.commit.slice(0, 7)}`
+            : `Made outside vibes · by ${layer.by}`}
           {sketch?.deleted && <span className="layer-badge">deleted</span>}
           {sketch?.edited && (
             <span className="layer-badge" title="Changed since vibes built it, so it isn't what its sketch's commit says">
@@ -203,11 +206,10 @@ function Home({ instance, lights, selected }: { instance: Instance; lights: Ligh
   );
 }
 
-/** Its sketch's latest commit, when that's not what it runs: built, then swapped in. */
+/** Its branch's head, when that's not what it runs: built, then swapped in. */
 function Update({ instance }: { instance: Instance }) {
-  const sketch = useSketch(instance.sketchId);
   const [asked, setAsked] = useState(false);
-  const head = sketch.data?.head;
+  const head = instance.head;
   if (!head || head === instance.commit || instance.next?.state === "building") return null;
   const update = async () => {
     setAsked(true);
@@ -219,7 +221,7 @@ function Update({ instance }: { instance: Instance }) {
     }
   };
   return (
-    <button className="quiet shader-action" disabled={asked} onClick={() => void update()} title={`Build ${head.slice(0, 7)}, main's latest, and swap it in`}>
+    <button className="quiet shader-action" disabled={asked} onClick={() => void update()} title={`Build ${head.slice(0, 7)}, ${instance.branch}'s latest, and swap it in`}>
       Update to {head.slice(0, 7)}
     </button>
   );
@@ -233,7 +235,7 @@ export function ComingTitle({ instance, onBack }: { instance: Instance; onBack: 
       <div className="selection-title">
         <h2>{instance.sketchName ?? "Unknown sketch"}</h2>
         <p className="muted">
-          @ {instance.commit.slice(0, 7)}
+          @ {commitName(instance.commit, instance.branch, instance.head)}
           <span className="layer-badge">{instance.state === "failed" ? "couldn't go in" : "building"}</span>
         </p>
       </div>
@@ -242,9 +244,10 @@ export function ComingTitle({ instance, onBack }: { instance: Instance; onBack: 
 }
 
 /**
- * One on its way in: building, or why it couldn't go in, and trying again or
- * letting it go. Tried again, it's a new instance, which the panel goes on
- * showing (onRetried, with its key).
+ * One on its way in: building, or why it couldn't go in, and trying again (at
+ * its branch's head, so a fix pushed there is what's built) or letting it go.
+ * Tried again, it's a new instance, which the panel goes on showing
+ * (onRetried, with its key).
  */
 export function ComingBody({ instance, lights, onRetried }: { instance: Instance; lights: LightInfo[]; onRetried: (key: string) => void }) {
   const [busy, setBusy] = useState(false);
@@ -258,10 +261,10 @@ export function ComingBody({ instance, lights, onRetried }: { instance: Instance
       setBusy(false);
     }
   };
-  // Put in afresh, on the same lights, then this one let go.
+  // Put in afresh, from its branch's head, on the same lights; then this one let go.
   const retry = async () => {
     const made = await act(async () => {
-      const again = await request<Instance>("POST", "/api/instances", { sketch: instance.sketchId, commit: instance.commit, home: instance.home });
+      const again = await request<Instance>("POST", "/api/instances", { sketch: instance.sketchId, branch: instance.branch, home: instance.home });
       await request("DELETE", `/api/instances/${instance.id}`);
       return again;
     });
@@ -272,7 +275,7 @@ export function ComingBody({ instance, lights, onRetried }: { instance: Instance
       {instance.state === "failed" ? (
         <Failure what="Couldn't go in" error={instance.error} />
       ) : (
-        <p className="shader-status">Building {instance.commit.slice(0, 7)}. It goes in on top once it's built.</p>
+        <p className="shader-status">Building {commitName(instance.commit, instance.branch, instance.head)}. It goes in on top once it's built.</p>
       )}
       <ul className="shader-facts">
         <li>
@@ -287,7 +290,7 @@ export function ComingBody({ instance, lights, onRetried }: { instance: Instance
           <OpenIcon /> Open its sketch
         </button>
         {instance.state === "failed" && (
-          <button className="quiet shader-action" disabled={busy} onClick={() => void retry()}>
+          <button className="quiet shader-action" disabled={busy} onClick={() => void retry()} title={`Build ${instance.branch}'s latest and put that in`}>
             Try again
           </button>
         )}
@@ -302,13 +305,14 @@ export function ComingBody({ instance, lights, onRetried }: { instance: Instance
 /** The head of one you're adding: back to the selection, its sketch's name, and how its build's going. */
 export function AddingTitle({ adding, onBack }: { adding: Adding; onBack: () => void }) {
   const build = adding.build;
+  const head = useBranchHead(adding.sketchId, adding.branch);
   return (
     <>
       <BackButton onBack={onBack} />
       <div className="selection-title">
         <h2>{adding.sketchName}</h2>
         <p className="muted">
-          {build?.state === "built" ? `@ ${build.commit.slice(0, 7)}` : "main"}
+          @ {build?.state === "built" ? commitName(build.commit, adding.branch, head) : adding.branch}
           {build?.state === "failed" ? (
             <span className="layer-badge">couldn't build</span>
           ) : (
@@ -321,20 +325,27 @@ export function AddingTitle({ adding, onBack }: { adding: Adding; onBack: () => 
 }
 
 /**
- * One you're adding (a pending edit): its main building on the server, then
- * previewed on the map until you apply, or why it couldn't build, and trying
- * again or not adding it after all.
+ * One you're adding (a pending edit): its branch's head building on the
+ * server, then previewed on the map until you apply, or why it couldn't
+ * build, and trying again (at the branch's head again) or not adding it
+ * after all.
  */
 export function AddingBody({ adding, lights, onGone }: { adding: Adding; lights: LightInfo[]; onGone: () => void }) {
   const build = adding.build;
+  const head = useBranchHead(adding.sketchId, adding.branch);
   return (
     <div className="shader-body">
       {build?.state === "failed" ? (
-        <Failure what="Couldn't build main" error={build.error} />
+        <Failure what={`Couldn't build ${adding.branch}`} error={build.error} />
       ) : build?.state === "built" ? (
-        <p className="shader-status">The map shows {build.commit.slice(0, 7)}, main's latest. It goes in, on top, when you apply.</p>
+        <p className="shader-status">
+          {build.commit === head
+            ? `The map shows ${adding.branch}'s latest, ${build.commit.slice(0, 7)}.`
+            : `The map shows ${build.commit.slice(0, 7)}, from ${adding.branch}, which has moved on since.`}{" "}
+          It goes in, on top, when you apply.
+        </p>
       ) : (
-        <p className="shader-status">Building main. The map shows it once it's built, before it goes in.</p>
+        <p className="shader-status">Building {adding.branch}. The map shows it once it's built, before it goes in.</p>
       )}
       <ul className="shader-facts">
         <li>
@@ -349,7 +360,7 @@ export function AddingBody({ adding, lights, onGone }: { adding: Adding; lights:
           <OpenIcon /> Open its sketch
         </button>
         {build?.state === "failed" && (
-          <button className="quiet shader-action" onClick={() => drafts.rebuild(adding.key)}>
+          <button className="quiet shader-action" onClick={() => drafts.rebuild(adding.key)} title={`Build ${adding.branch}'s latest`}>
             Try again
           </button>
         )}

@@ -47,6 +47,8 @@ export interface Adding {
   key: LayerKey;
   sketchId: string;
   sketchName: string;
+  /** The branch it's from (main, so far): built at its head, and built again there on trying again. */
+  branch: string;
   home: number[];
   /** Every light outside its home, which the preview keeps it off, as the room will. */
   mask: number[];
@@ -98,6 +100,8 @@ function layerOfAdding(a: Adding, i: number): Layer {
     sketchName: a.sketchName,
     commit,
     buildId: a.build?.id ?? "",
+    branch: a.branch,
+    head: null,
     home: a.home,
     shaderId: null,
     state: a.build?.state === "failed" ? "failed" : "building",
@@ -299,7 +303,10 @@ const listeners = new Set<() => void>();
 function load(): Draft {
   try {
     const raw = localStorage.getItem(STORAGE);
-    return raw ? { ...EMPTY, ...(JSON.parse(raw) as Partial<Draft>) } : EMPTY;
+    if (!raw) return EMPTY;
+    const saved = { ...EMPTY, ...(JSON.parse(raw) as Partial<Draft>) };
+    // Saved before sketches being added had a branch: all of them were main.
+    return { ...saved, added: saved.added.map((a) => ({ ...a, branch: a.branch ?? "main" })) };
   } catch {
     return EMPTY;
   }
@@ -350,7 +357,7 @@ export const drafts = {
     set({ ...draft, removed: draft.removed.filter((k) => k !== key) });
   },
   /** A sketch to put in, on `home`, its build asked for next (adding.ts); its key. */
-  add(a: Pick<Adding, "sketchId" | "sketchName" | "home" | "mask">): LayerKey {
+  add(a: Pick<Adding, "sketchId" | "sketchName" | "branch" | "home" | "mask">): LayerKey {
     const key = `+${crypto.randomUUID().slice(0, 8)}`;
     set({ ...draft, added: [...draft.added, { ...a, key, build: null }] });
     return key;
@@ -360,7 +367,7 @@ export const drafts = {
     if (script !== undefined) addedScripts.set(build.id, script);
     set({ ...draft, added: draft.added.map((a) => (a.key === key ? { ...a, build } : a)) });
   },
-  /** A sketch being added, built again (after its build failed). */
+  /** A sketch being added, built again (after its build failed), at its branch's head. */
   rebuild(key: LayerKey) {
     set({ ...draft, added: draft.added.map((a) => (a.key === key ? { ...a, build: null } : a)) });
   },
@@ -435,11 +442,12 @@ async function sendDraft(live: SceneNode[], d: Draft, onStep: (next: Draft) => v
     step({ ...d, removed: d.removed.filter((k) => k !== key), edits: omit(d.edits, key) });
   }
 
-  // In, on top, each on its home: the commit previewed, or main's latest if
-  // it wasn't built yet (vibes builds it, and puts it in once built).
+  // In, on top, each on its home, from its branch: at the commit previewed,
+  // or the branch's head if it wasn't built yet (vibes builds it, and puts it
+  // in once built).
   for (const a of d.added) {
     const commit = a.build?.state === "built" ? a.build.commit : undefined;
-    await request("POST", "/api/instances", { sketch: a.sketchId, ...(commit ? { commit } : {}), home: a.home });
+    await request("POST", "/api/instances", { sketch: a.sketchId, branch: a.branch, ...(commit ? { commit } : {}), home: a.home });
     step({ ...d, added: d.added.filter((x) => x.key !== a.key) });
   }
 

@@ -49,6 +49,13 @@ export interface Instance {
   /** The commit it runs (or will, once built), and its build. */
   commit: string;
   buildId: string;
+  /**
+   * The branch it was put in from, and that branch's head right now (null if
+   * the branch is gone). While they're its commit, it's shown by the branch's
+   * name; once the branch moves on, by its commit.
+   */
+  branch: string;
+  head: string | null;
   /** The lights it was put on, by id: it's masked off every other. */
   home: number[];
   /** Its shader in arclamp, once it's there. */

@@ -6,7 +6,7 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
-import { createRepo, headOf, serveGit } from "./git.ts";
+import { branchHead, createRepo, headOf, isBranchName, resolveCommit, serveGit } from "./git.ts";
 
 const run = promisify(execFile);
 const git = (cwd: string, ...args: string[]) =>
@@ -59,5 +59,37 @@ describe("sketch repos", () => {
     await git(work, "-c", "user.name=Grace", "-c", "user.email=grace@x.invalid", "commit", "--quiet", "-am", "Two");
     await git(work, "push", "--quiet", "origin", "main");
     expect((await headOf(repos, "shared"))?.by).toBe("Grace");
+  });
+
+  it("know each branch's head, loose or packed, as it moves", async () => {
+    const repos = path.join(dir, "repos");
+    await createRepo(repos, "branchy", { name: "Ada", email: "ada@x.invalid" }, "Start it", { "main.ts": "1\n" });
+    const bare = path.join(repos, "branchy.git");
+    const first = (await headOf(repos, "branchy"))!.commit;
+    expect(branchHead(repos, "branchy", "main")).toBe(first);
+    expect(await resolveCommit(repos, "branchy", "main")).toBe(first);
+
+    await git(bare, "branch", "ada/try", "main");
+    expect(branchHead(repos, "branchy", "ada/try")).toBe(first);
+    expect(await resolveCommit(repos, "branchy", "ada/try")).toBe(first);
+    await git(bare, "pack-refs", "--all");
+    expect(branchHead(repos, "branchy", "ada/try")).toBe(first);
+    expect(branchHead(repos, "branchy", "nope")).toBeNull();
+
+    const work = path.join(dir, "branchy-work");
+    await git(dir, "clone", "--quiet", `${base}/git/branchy.git`, work);
+    await writeFile(path.join(work, "main.ts"), "2\n");
+    await git(work, "-c", "user.name=Grace", "-c", "user.email=grace@x.invalid", "commit", "--quiet", "-am", "Two");
+    await git(work, "push", "--quiet", "origin", "main");
+    const second = (await headOf(repos, "branchy"))!.commit;
+    expect(second).not.toBe(first);
+    expect(branchHead(repos, "branchy", "main")).toBe(second);
+  });
+
+  it("take only plain branch names", () => {
+    for (const ok of ["main", "rose-kodsi-hall", "ada/try.2"]) expect(isBranchName(ok)).toBe(true);
+    for (const bad of ["", "../x", "a/../b", "-x", "--upload-pack=x", ".hidden", "a/.b", "a//b", "a/", "a.", "a.lock", "a b", "a~1", "a^"]) {
+      expect(isBranchName(bad)).toBe(false);
+    }
   });
 });

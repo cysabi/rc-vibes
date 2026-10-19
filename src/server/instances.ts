@@ -6,13 +6,15 @@
 // (stamped, edited or not) are its to change or remove.
 //
 // An instance is a sketch put in the room from vibes, on a home: the lights
-// it was put on. It's here from the moment it's asked for, building its
-// commit (or using the build there is); once that's built, it's a shader in
-// arclamp, on top, masked off every light outside its home, so its home is
-// all it can ever light (its code still picks which of those it does).
-// Updating it builds a newer commit and swaps that in once built, the old one
-// running meanwhile. Its home can move. Taking it out, or its shader going
-// some other way, is the end of it.
+// it was put on, from a branch (main, so far), at a commit (the branch's head
+// then, unless asked for another). It's here from the moment it's asked for,
+// building its commit (or using the build there is); once that's built, it's
+// a shader in arclamp, on top, masked off every light outside its home, so
+// its home is all it can ever light (its code still picks which of those it
+// does). Updating it builds a newer commit (its branch's head, unless asked
+// for another) and swaps that in once built, the old one running meanwhile.
+// Its home can move. Taking it out, or its shader going some other way, is
+// the end of it.
 
 import { zValidator } from "@hono/zod-validator";
 import { Hono, type Context } from "hono";
@@ -25,11 +27,13 @@ import type { AuthEnv } from "./auth.ts";
 import { plainText, type Builds } from "./builds.ts";
 import type { BuildRow, Db, InstanceRow, SketchRow } from "./db.ts";
 import type { Config } from "./env.ts";
+import { branchHead, isBranchName } from "./git.ts";
 import { readStamp } from "./stamp.ts";
 
 const fromBuild = z.object({ build: z.string().min(1) });
 const idParam = z.object({ id: z.coerce.number().int().positive() });
 const home = z.array(z.number().int()).min(1).max(2000);
+const branch = z.string().refine(isBranchName).default("main");
 
 type Status = 400 | 404 | 409 | 410 | 503;
 const refuse = (c: Context, status: Status, error: string, code: string) => c.json({ error, code }, status);
@@ -64,6 +68,8 @@ export function createInstances({ config, db, arclamp, builds, lightIds, changed
       sketchName: db.sketch(row.sketch_id)?.name ?? null,
       commit: build?.commit_sha ?? "",
       buildId: row.build_id,
+      branch: row.branch,
+      head: config.sketches ? branchHead(config.sketches.dir, row.sketch_id, row.branch) : null,
       home: row.home,
       shaderId: row.shader_id,
       state: row.state,
@@ -159,28 +165,31 @@ export function createInstances({ config, db, arclamp, builds, lightIds, changed
   return {
     view,
 
-    /** A sketch, at a commit (main's latest by default), put in the room on `home`: building first, if it isn't built. */
-    async create(sketchId: string, rev: string, homeLights: number[], user: Me): Promise<{ instance: Instance } | Refusal> {
+    /**
+     * A sketch from a branch, put in the room on `home`: at a commit (the
+     * branch's head, if none is given), building first if it isn't built.
+     */
+    async create(sketchId: string, from: { branch: string; commit?: string }, homeLights: number[], user: Me): Promise<{ instance: Instance } | Refusal> {
       const sketch = db.sketch(sketchId);
       if (!sketch) return refusal("no such sketch", 404, "not_found");
       if (sketch.deleted_at !== null) return refusal("its sketch was deleted", 410, "deleted");
       const bad = await badHome(homeLights);
       if (bad) return refusal(bad, 400, "bad_home");
-      const started = await builds.start(sketchId, rev, user);
+      const started = await builds.start(sketchId, from.commit ?? from.branch, user);
       if ("refused" in started) return refusal(started.refused, started.status, "cant_build");
       const id = randomUUID();
-      db.addInstance({ id, sketch_id: sketchId, build_id: started.build.id, home: sorted(homeLights), by_id: user.id, by_name: user.name, at: Date.now() });
+      db.addInstance({ id, sketch_id: sketchId, branch: from.branch, build_id: started.build.id, home: sorted(homeLights), by_id: user.id, by_name: user.name, at: Date.now() });
       changed();
       if (started.build.state !== "building") await place(id);
       return { instance: view(db.instance(id)!) };
     },
 
-    /** A live instance, moved on to another commit (main's latest by default): built, then swapped in. */
-    async update(id: string, rev: string, user: Me): Promise<{ instance: Instance } | Refusal> {
+    /** A live instance, moved on to another commit (its branch's head by default): built, then swapped in. */
+    async update(id: string, rev: string | undefined, user: Me): Promise<{ instance: Instance } | Refusal> {
       const inst = db.instance(id);
       if (!inst) return refusal("no such instance", 404, "not_found");
       if (inst.state !== "live") return refusal("it isn't in the room yet", 409, "not_live");
-      const started = await builds.start(inst.sketch_id, rev, user);
+      const started = await builds.start(inst.sketch_id, rev ?? inst.branch, user);
       if ("refused" in started) return refusal(started.refused, started.status, "cant_build");
       if (started.build.id !== inst.build_id) {
         db.updateInstance(id, { next_build_id: started.build.id, error: null });
@@ -301,14 +310,15 @@ export function instanceRoutes(config: Config, arclamp: Pick<Arclamp, "shader" |
   if (!instances) return routes;
   return (
     routes
-      // A sketch, put in the room on the lights given (its home).
-      .post("/instances", zValidator("json", z.object({ sketch: z.string().min(1), commit: z.string().min(1).optional(), home }), badInstance), async (c) => {
-        const { sketch, commit, home } = c.req.valid("json");
-        return answer(c, await instances.create(sketch, commit ?? "main", home, c.get("user")), 202);
+      // A sketch, put in the room on the lights given (its home): from a
+      // branch (main, unless it says), at a commit (the branch's head, unless it says).
+      .post("/instances", zValidator("json", z.object({ sketch: z.string().min(1), branch, commit: z.string().min(1).optional(), home }), badInstance), async (c) => {
+        const { sketch, branch, commit, home } = c.req.valid("json");
+        return answer(c, await instances.create(sketch, { branch, ...(commit ? { commit } : {}) }, home, c.get("user")), 202);
       })
 
       .post("/instances/:id/update", zValidator("json", z.object({ commit: z.string().min(1).optional() }), badInstance), async (c) => {
-        return answer(c, await instances.update(c.req.param("id"), c.req.valid("json").commit ?? "main", c.get("user")), 202);
+        return answer(c, await instances.update(c.req.param("id"), c.req.valid("json").commit, c.get("user")), 202);
       })
 
       .put("/instances/:id/home", zValidator("json", z.object({ home }), badInstance), async (c) => {

@@ -14,6 +14,9 @@ export function listOf(names: string[]): string {
   return `${names.slice(0, 2).join(", ")} & ${names.length - 2} more`;
 }
 
+/** A commit, as it's shown: by its branch's name while it's that branch's head ("main"), else by its short hash ("4722142"). */
+export const commitName = (commit: string, branch: string, head: string | null) => (head !== null && head === commit ? branch : commit.slice(0, 7));
+
 /** "1 light", "3 lights". */
 export const count = (n: number, one: string, many = `${one}s`) => `${n} ${n === 1 ? one : many}`;
 

@@ -108,6 +108,15 @@ export const useSketches = () =>
 export const useSketch = (id: string) =>
   useQuery({ queryKey: ["sketches", id], queryFn: () => request<Sketch>("GET", `/api/sketches/${encodeURIComponent(id)}`) });
 
+/**
+ * A sketch's branch's head, as the browser knows it: main's (a sketch says
+ * only main's so far, and main is all that's added from), else null.
+ */
+export function useBranchHead(sketchId: string, branch: string): string | null {
+  const sketch = useSketch(sketchId);
+  return branch === "main" ? (sketch.data?.head ?? null) : null;
+}
+
 /** The deleted sketches that can still be restored. */
 export const useDeletedSketches = () =>
   useQuery({ queryKey: ["sketches", "deleted"], queryFn: () => request<{ sketches: Sketch[] }>("GET", "/api/sketches/deleted").then((r) => r.sketches) });

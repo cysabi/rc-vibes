@@ -22,6 +22,8 @@ let finish: (id: string) => void;
 let changes: number;
 // What builds.start answers next: built at once, or still building.
 let nextBuild: { id: string; commit: string; built: boolean };
+// What builds.start was asked to build: a branch, or a commit.
+let asked: string[];
 
 const scriptOf = (commit: string) => stamp(`function update(p) { return p; } // ${commit}\n`, { sketch: SKETCH, commit, builder: "1" }, KEY);
 
@@ -64,8 +66,10 @@ beforeEach(() => {
     setMask: async (id: number, mask: number[]) => void shaders.set(id, { ...shaders.get(id)!, mask }),
     deleteShader: async (id: number) => void shaders.delete(id),
   };
+  asked = [];
   const builds = {
-    start: async (_sketch: string, _rev: string, user: Me) => {
+    start: async (_sketch: string, rev: string, user: Me) => {
+      asked.push(rev);
       if (!db.build(nextBuild.id)) addBuild(nextBuild.id, nextBuild.commit, nextBuild.built);
       const b = db.build(nextBuild.id)!;
       return { build: { id: b.id, sketchId: SKETCH, commit: b.commit_sha, state: b.state, by: user.name } as unknown as Build };
@@ -122,6 +126,24 @@ describe("an instance", () => {
     expect(instances.view(db.instance(inst.id)!)).toMatchObject({ state: "failed", error: "it didn't compile", shaderId: null });
     expect((await send("DELETE", `/instances/${inst.id}`)).status).toBe(204);
     expect(db.instance(inst.id)).toBeUndefined();
+  });
+
+  it("is from a branch, main unless it says, at its head unless a commit's given", async () => {
+    nextBuild = { id: "b8", commit: "2".repeat(40), built: false };
+    expect(await (await send("POST", "/instances", { sketch: SKETCH, home: [1] })).json()).toMatchObject({ branch: "main" });
+    expect(await (await send("POST", "/instances", { sketch: SKETCH, branch: "ada/try", home: [1] })).json()).toMatchObject({ branch: "ada/try" });
+    expect(await (await send("POST", "/instances", { sketch: SKETCH, branch: "ada/try", commit: "2222222", home: [1] })).json()).toMatchObject({ branch: "ada/try" });
+    expect(asked).toEqual(["main", "ada/try", "2222222"]);
+    expect((await send("POST", "/instances", { sketch: SKETCH, branch: "../x", home: [1] })).status).toBe(400);
+  });
+
+  it("updates to its branch's head, unless it's given a commit", async () => {
+    nextBuild = { id: "b9", commit: "3".repeat(40), built: true };
+    const inst = (await (await send("POST", "/instances", { sketch: SKETCH, branch: "ada/try", home: [1] })).json()) as Instance;
+    nextBuild = { id: "b10", commit: "4".repeat(40), built: false };
+    await send("POST", `/instances/${inst.id}/update`, {});
+    await send("POST", `/instances/${inst.id}/update`, { commit: "4444444" });
+    expect(asked).toEqual(["ada/try", "ada/try", "4444444"]);
   });
 
   it("needs a sketch, and a home of real lights", async () => {

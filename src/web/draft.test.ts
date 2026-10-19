@@ -207,12 +207,13 @@ describe("apply", () => {
 });
 
 describe("adding a sketch", () => {
-  const aurora = () => drafts.add({ sketchId: "s1", sketchName: "Aurora", home: [1, 2], mask: [64] });
+  const aurora = () => drafts.add({ sketchId: "s1", sketchName: "Aurora", branch: "main", home: [1, 2], mask: [64] });
+  const rain = () => drafts.add({ sketchId: "s2", sketchName: "Rain", branch: "ada/try", home: [1], mask: [2, 64] });
   const built = { id: "b1", commit: "abc1234def", state: "built" as const, error: null };
 
   it("goes on top, the latest topmost, each counted once", () => {
     const first = aurora();
-    const second = drafts.add({ sketchId: "s2", sketchName: "Rain", home: [1], mask: [2, 64] });
+    const second = rain();
     expect(keys()).toEqual([second, first, "#12", "#11"]);
     expect(pendingCount(live, currentDraft())).toBe(2);
     const [top] = layersOf(live, currentDraft());
@@ -237,11 +238,14 @@ describe("adding a sketch", () => {
     expect(pendingCount(live, currentDraft())).toBe(0);
   });
 
-  it("goes in on its home, at the commit previewed, or main's latest if it wasn't built yet", async () => {
+  it("goes in on its home, from its branch: at the commit previewed, or the branch's head if it wasn't built yet", async () => {
     drafts.built(aurora(), built, "function update() {}");
-    drafts.add({ sketchId: "s2", sketchName: "Rain", home: [1], mask: [2, 64] });
+    rain();
     await applyDraft(live);
-    expect(calls).toEqual(['POST /api/instances {"sketch":"s1","commit":"abc1234def","home":[1,2]}', 'POST /api/instances {"sketch":"s2","home":[1]}']);
+    expect(calls).toEqual([
+      'POST /api/instances {"sketch":"s1","branch":"main","commit":"abc1234def","home":[1,2]}',
+      'POST /api/instances {"sketch":"s2","branch":"ada/try","home":[1]}',
+    ]);
     expect(currentDraft()).toBe(EMPTY);
   });
 
@@ -255,7 +259,7 @@ describe("adding a sketch", () => {
 
 describe("switching a shader on and off", () => {
   const ALL = [1, 2, 3, 4, 5, 6];
-  const instance = { id: "i", sketchId: "s", sketchName: "Wave", commit: "c", buildId: "b", home: [1, 2, 3], shaderId: 9, state: "live", error: null, next: null, by: { id: "u", name: "U" }, at: 0 } as const;
+  const instance = { id: "i", sketchId: "s", sketchName: "Wave", commit: "c", buildId: "b", branch: "main", head: "c", home: [1, 2, 3], shaderId: 9, state: "live", error: null, next: null, by: { id: "u", name: "U" }, at: 0 } as const;
   // An instance homed on 1–3 (masked off 4–6), and a shader from elsewhere that's lit 1 and 2.
   const homed = () => layerOf([roomtone, shader(9, 1, { instance: { ...instance, home: [1, 2, 3] }, mask: [4, 5, 6] })], EMPTY, "#9")!;
   const other = () => layerOf([roomtone, shader(8, 1, { footprint: [1, 2] })], EMPTY, "#8")!;

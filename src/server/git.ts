@@ -1,8 +1,9 @@
 // Sketches' canonical repos, with the real git: making one with its first
-// commit, reading main's latest commit, and serving them over HTTP (git's
-// own http-backend) for boxes to clone from and push to.
+// commit, reading main's latest commit (or any branch's), and serving them
+// over HTTP (git's own http-backend) for boxes to clone from and push to.
 
 import { execFile, spawn } from "node:child_process";
+import { readFileSync } from "node:fs";
 import { mkdtemp, rm, writeFile, mkdir } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -62,14 +63,49 @@ export async function createRepo(dir: string, id: string, author: Author, messag
   }
 }
 
-/** A commit's full hash: of main, or of a hash (whole or short) the repo has; null if it hasn't. */
+/**
+ * Whether a name is a plain branch name, as vibes takes one: letters, digits
+ * and . _ - /, in parts that don't start with a dot. Git allows more; this is
+ * enough, and never a path out of the repo or an option.
+ */
+export const isBranchName = (s: string) =>
+  s.length <= 200 && /^[A-Za-z0-9][A-Za-z0-9._/-]*$/.test(s) && !/\.\.|\/\/|\/\.|\.lock$|[/.]$/.test(s);
+
+/** A commit's full hash: a branch's head, or a hash (whole or short) the repo has; null if it hasn't. */
 export async function resolveCommit(dir: string, id: string, rev: string): Promise<string | null> {
-  if (rev !== "main" && !/^[0-9a-f]{4,40}$/.test(rev)) return null;
+  const hash = /^[0-9a-f]{4,40}$/.test(rev);
+  if (!hash && !isBranchName(rev)) return null;
   try {
-    return (await git(["-C", repoPath(dir, id), "rev-parse", "--verify", "--quiet", `${rev}^{commit}`])).trim() || null;
+    const ref = hash ? rev : `refs/heads/${rev}`;
+    return (await git(["-C", repoPath(dir, id), "rev-parse", "--verify", "--quiet", `${ref}^{commit}`])).trim() || null;
   } catch {
     return null;
   }
+}
+
+/**
+ * A branch's head right now, read from the repo's own files rather than by
+ * running git (it's asked for every look at the scene); null if there's no
+ * such branch.
+ */
+export function branchHead(dir: string, id: string, branch: string): string | null {
+  if (!isBranchName(branch)) return null;
+  const repo = repoPath(dir, id);
+  const sha = (s: string | undefined) => (s && /^[0-9a-f]{40,64}$/.test(s) ? s : null);
+  try {
+    return sha(readFileSync(path.join(repo, "refs", "heads", branch), "utf8").trim());
+  } catch {
+    // Not a loose ref: packed, maybe.
+  }
+  try {
+    for (const line of readFileSync(path.join(repo, "packed-refs"), "utf8").split("\n")) {
+      const [hash, ref] = line.split(" ");
+      if (ref === `refs/heads/${branch}`) return sha(hash);
+    }
+  } catch {
+    // No packed refs either.
+  }
+  return null;
 }
 
 /** A commit's files, as a tar, as git makes it. */

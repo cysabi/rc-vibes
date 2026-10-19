@@ -36,7 +36,7 @@ import { baseType, isBinary, isOn, lemtoneOf, requestedOf } from "../../shared/f
 import { colorName, lemtoneCode, lumensText } from "../../shared/lemtone.ts";
 import { tagLabel } from "../../shared/tags.ts";
 import type { Instance, SceneNode } from "../../shared/vibes.ts";
-import { useLights, useStatus } from "../api.ts";
+import { useBranchHead, useLights, useStatus } from "../api.ts";
 import {
   drafts,
   layerOf,
@@ -57,7 +57,7 @@ import { ChevronUpIcon, CloseIcon, GripIcon, OpenIcon, PlusIcon } from "../icons
 import { useFrames } from "../live.ts";
 import { useNarrow } from "../narrow.ts";
 import { usePendingInstances, useScene } from "../scene.ts";
-import { listOf, ordinal } from "../words.ts";
+import { commitName, listOf, ordinal } from "../words.ts";
 import { AddSketch } from "./AddSketch.tsx";
 import { Reveal } from "./Reveal.tsx";
 import { RoomToneEditor } from "./RoomToneEditor.tsx";
@@ -128,7 +128,8 @@ export function SelectionPanel({ floor, here, selected, shader, onShader, onClos
   const add = (sketch: { id: string; name: string }) => {
     setPicking(false);
     const home = new Set(ids);
-    drafts.add({ sketchId: sketch.id, sketchName: sketch.name, home: ids, mask: all.filter((id) => !home.has(id)) });
+    // From main, for now: there's no picking a branch yet.
+    drafts.add({ sketchId: sketch.id, sketchName: sketch.name, branch: "main", home: ids, mask: all.filter((id) => !home.has(id)) });
   };
 
   // The shader open in place of the selection: one in the room, one on its way in, or one you're adding.
@@ -510,11 +511,12 @@ function RowParts({ row, onSwitch, onOpen, details, opened, onToggle }: RowProps
   );
 }
 
-/** Under a shader's name: its commit, if it's a sketch's, and anything that's become of it. */
+/** Under a shader's name: its commit (or branch), if it's a sketch's, and anything that's become of it. */
 function metaOf({ layer, state }: Row): string | null {
   const parts: string[] = [];
   const sketch = layer.node.sketch;
-  if (sketch) parts.push(sketch.commit.slice(0, 7));
+  const instance = layer.instance;
+  if (sketch) parts.push(instance ? commitName(sketch.commit, instance.branch, instance.head) : sketch.commit.slice(0, 7));
   const status = statusOf(layer);
   if (status) parts.push(status);
   else if (state === "mixed") parts.push("on for some of these");
@@ -532,7 +534,7 @@ function ComingRow({ instance, onOpen }: { instance: Instance; onOpen: () => voi
       <span className="layer-text">
         <span className="layer-name">{name}</span>
         <span className={instance.state === "failed" ? "layer-meta bad" : "layer-meta"}>
-          {instance.commit.slice(0, 7)} · {instance.state === "failed" ? "couldn't go in" : "building…"}
+          {commitName(instance.commit, instance.branch, instance.head)} · {instance.state === "failed" ? "couldn't go in" : "building…"}
         </span>
       </span>
       <button className="icon-button layer-open" aria-label={`Open ${name}`} title={`Open ${name}`} onClick={onOpen}>
@@ -554,8 +556,13 @@ const RowEnd = () => (
 /** A sketch you're adding to these lights (a pending edit): building on the server, built (and previewed), or why it couldn't. */
 function AddingRow({ adding, onOpen }: { adding: Adding; onOpen: () => void }) {
   const build = adding.build;
+  const head = useBranchHead(adding.sketchId, adding.branch);
   const meta =
-    build?.state === "failed" ? "couldn't build" : build?.state === "built" ? `${build.commit.slice(0, 7)} · new here` : "building main…";
+    build?.state === "failed"
+      ? `${adding.branch} · couldn't build`
+      : build?.state === "built"
+        ? `${commitName(build.commit, adding.branch, head)} · new here`
+        : `building ${adding.branch}…`;
   return (
     <li className={build?.state === "built" ? "layer coming adding built" : "layer coming adding"}>
       <span className="layer-grip" aria-hidden="true" />
