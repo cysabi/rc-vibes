@@ -412,6 +412,12 @@ function RowParts({ row, n, onSwitch }: RowProps) {
       <span className="layer-text">
         <span className="layer-name">
           {layer.name}
+          {/* Not built by vibes (no stamp): made in rclamp some other way. Just its name. */}
+          {!sketch && (
+            <span className="layer-badge external" title="Made outside vibes, not from a sketch">
+              external
+            </span>
+          )}
           {sketch?.deleted && <span className="layer-badge">deleted</span>}
           {sketch?.edited && (
             <span className="layer-badge" title="Changed since vibes built it, so it isn't what its sketch's commit says">
@@ -419,7 +425,7 @@ function RowParts({ row, n, onSwitch }: RowProps) {
             </span>
           )}
         </span>
-        <span className="layer-meta">{layerMeta(row, n)}</span>
+        {sketch && <span className="layer-meta">{layerMeta(row, n)}</span>}
       </span>
       {sketch?.name != null && <OpenSketch sketch={sketch} />}
       <button
@@ -475,9 +481,9 @@ function OpenSketch({ sketch }: { sketch: ShaderSketch }) {
   );
 }
 
+/** Under a sketch's shader: its commit, who put it in, and what it's doing here. */
 function layerMeta({ layer, aimed, lighting, keptOff }: Row, n: number): string {
-  // Built from a sketch: which commit first.
-  const parts = layer.node.sketch ? [layer.node.sketch.commit.slice(0, 7), layer.by] : [layer.by];
+  const parts = [layer.node.sketch!.commit.slice(0, 7), layer.by];
   if (layer.muted) parts.push("muted");
   // Out of the whole selection, which the head already counts.
   const of = (k: number, verb: string) => (k === n ? (n === 1 ? `${verb} this light` : `${verb} all ${n}`) : `${verb} ${k}`);

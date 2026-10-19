@@ -1083,6 +1083,11 @@ kbd {
   vertical-align: 1px;
 }
 
+/* Not a warning, just where it's from. */
+.layer-badge.external {
+  color: var(--mute);
+}
+
 /* And its sketch, opened. */
 .layer-open {
   width: 26px;
