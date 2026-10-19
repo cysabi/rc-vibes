@@ -159,68 +159,49 @@ export function boxApiRoutes(config: Config, sketches: SketchesConfig, db: Db, l
     });
 }
 
-/** A new sketch's first commit: a gentle wave to start from, its types, and a README. */
+/** The standard library a new sketch starts on (packages/vibes, on npm). */
+const LIBRARY = "@roobscoob/vibes";
+const LIBRARY_VERSION = "^0.2.1";
+
+/** A new sketch's first commit: a gentle wave to start from, on the standard library, and a README. */
 function starter(name: string): Record<string, string> {
   return {
     "README.md": `# ${name}
 
 A sketch for the lights at the Recurse Center, made in vibes.
 
-\`update()\` in \`main.ts\` runs about a hundred times a second, with every
-light, and says what each should be making now. The Sketch panel below the
-code runs it on the plan as you save, only on your screen; play, pause and
-restart it from the panel's title bar.
+\`main.ts\` says what each light should be making, about a hundred times a
+second, with [${LIBRARY}](https://www.npmjs.com/package/${LIBRARY}): colors,
+where each light is, and time. The Sketch panel below the code runs it on the
+plan as you save, only on your screen; play, pause and restart it from the
+panel's title bar.
 
 This is your own copy, on your own branch. Commit, and merge into \`main\` to
 share it: \`main\` is the sketch.
 `,
     "main.ts": `// ${name}: a slow, warm wave that rolls across the room.
 //
-// Colors are lemtones: a and b are OKLab's a and b at full lightness (0, 0 is
-// white), and brightness is in thousands of lumens. Old bulbs only go on and
-// off, with \`on\`.
-import type { Out, Prev } from "./vibes";
+// sketch() asks your function about each light, about a hundred times a
+// second, and gives it \`here\`: where the light is (x and y, in meters), the
+// time (t, in seconds), the light itself, and the whole room. It answers with
+// a color, in anything that says one: white(2700, 400), "#f80", "orange · 120 lm".
+// Old bulbs only switch on and off, so they have a look of their own.
+//
+// All the library can do: https://www.npmjs.com/package/${LIBRARY}
+import { sketch, wave, white, type Here } from "${LIBRARY}";
 
+/** Seconds for the wave to come round again. */
 const PERIOD_S = 8;
 
-export function update(prev: Prev, nowMs: number, initialMs: number): Out {
-  // initialMs is this frame's time, the same for every layer, so animate by it
-  // (nowMs is only this layer's own clock, a little later).
-  const t = initialMs / 1000;
-  return {
-    lights: prev.lights.map((light) => {
-      const x = (light.coords?.mm_x ?? 0) / 1000;
-      const wave = 0.5 + 0.5 * Math.sin((2 * Math.PI * t) / PERIOD_S - x / 2);
-      return {
-        id: light.id,
-        channels: { a: 0.03, b: 0.07, brightness: 0.02 + 0.25 * wave, on: wave > 0.5 ? 1 : 0 },
-      };
-    }),
-  };
-}
+// 0 to 1 and back, rolling left to right, a crest every 12 meters.
+const swell = ({ x, t }: Here) => wave(t / PERIOD_S - x / 12);
+
+export const update = sketch({
+  color: (here) => white(2700, 20 + 250 * swell(here)),
+  switch: (here) => swell(here) > 0.5,
+});
 `,
-    "vibes.ts": `// What update() is given, and gives back: arclamp's shader contract.
-
-export interface Light {
-  id: number;
-  /** A color bulb's or panel's a, b, brightness and fidelity, or an old bulb's on. */
-  channels: Record<string, number>;
-  tags: string[];
-  /** Where it is, in millimeters from the building's top-left corner. */
-  coords?: { mm_x: number; mm_y: number; floor: number };
-  /** The rail it hangs on, and how far along it. */
-  rail?: { id: string; mm_along: number };
-}
-
-export interface Prev {
-  initial_time: number;
-  lights: Light[];
-}
-
-/** The lights to change, and their channels; anything left out keeps its value. */
-export interface Out {
-  lights: { id: number; channels: Record<string, number> }[];
-}
-`,
+    "package.json": `${JSON.stringify({ private: true, type: "module", dependencies: { [LIBRARY]: LIBRARY_VERSION } }, null, 2)}\n`,
+    ".gitignore": "node_modules/\n",
   };
 }

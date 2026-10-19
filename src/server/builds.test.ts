@@ -110,7 +110,7 @@ describe("a build", () => {
     expect(b).toMatchObject({ state: "built", by: "Ada", plan: "vite main.ts", log: "built it", error: null });
     // A tar of the commit, with the starter's files in it.
     expect(source).toContain("main.ts");
-    expect(source).toContain("export function update");
+    expect(source).toContain("export const update = sketch(");
     const head = await headOf(dir, s.id);
     expect(head).not.toBeNull();
     const script = await (await app.request(`/sketches/${s.id}/builds/${b.id}/script`)).text();
