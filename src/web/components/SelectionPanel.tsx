@@ -373,21 +373,37 @@ function detailsOf(_layer: Layer): ReactNode | null {
   return null;
 }
 
-/** A shader on these lights: draggable by its handle to another place among them. */
+/**
+ * A shader on these lights: draggable by its handle to another place among
+ * them. One with something to show opens and closes it from anywhere on its
+ * head, as room tone's does (its buttons still do their own things).
+ */
 function SortableRow(props: RowProps) {
-  const { row, details, opened } = props;
+  const { row, details, opened, onToggle } = props;
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: row.layer.key });
-  const open = opened && details !== null;
-  return (
-    <li
-      ref={setNodeRef}
-      className={`layer${row.state === "off" ? " off" : ""}${open ? " open" : ""}${isDragging ? " dragging" : ""}`}
-      style={{ transform: CSS.Transform.toString(transform), transition }}
-    >
+  const expandable = details !== null;
+  const open = opened && expandable;
+  const head = (
+    <>
       <button className="layer-grip" aria-label={`Move ${row.layer.name}`} {...attributes} {...listeners}>
         <GripIcon />
       </button>
       <RowParts {...props} />
+    </>
+  );
+  return (
+    <li
+      ref={setNodeRef}
+      className={`layer${row.state === "off" ? " off" : ""}${expandable ? " expandable" : ""}${open ? " open" : ""}${isDragging ? " dragging" : ""}`}
+      style={{ transform: CSS.Transform.toString(transform), transition }}
+    >
+      {expandable ? (
+        <div className="layer-head" onClick={(e) => !(e.target as Element).closest("button") && onToggle()}>
+          {head}
+        </div>
+      ) : (
+        head
+      )}
       {open && <div className="layer-details">{details}</div>}
     </li>
   );
@@ -397,8 +413,9 @@ function SortableRow(props: RowProps) {
  * A shader's stop on the rail: its name, what's become of it, its arrow to
  * open it, a switch for whether it's on for these lights (off here leaves the
  * rest of the room as it is; on, for one that's off everywhere, is on for
- * just these), and, at the end, under room tone's, a toggle for what it shows
- * under its row, if it shows anything. One that doesn't ends at its switch.
+ * just these), and, at the end, under room tone's chevron, a toggle for what
+ * it shows under its row, or, if it shows nothing, a quiet dot in its place,
+ * so every row ends in the same column.
  */
 function RowParts({ row, onSwitch, onOpen, details, opened, onToggle }: RowProps) {
   const { layer, state } = row;
@@ -446,10 +463,12 @@ function RowParts({ row, onSwitch, onOpen, details, opened, onToggle }: RowProps
       >
         <span className="switch-knob" />
       </button>
-      {details !== null && (
+      {details !== null ? (
         <button className="layer-chevron" aria-expanded={opened} aria-label={`${layer.name}'s details`} title={opened ? "Hide" : "Show more"} onClick={onToggle}>
           <ChevronUpIcon />
         </button>
+      ) : (
+        <span className="layer-chevron layer-end" aria-hidden="true" />
       )}
     </>
   );

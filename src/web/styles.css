@@ -1241,12 +1241,14 @@ kbd {
   text-align: left;
 }
 
+/* As wide as a shader's arrow, which ends a row where this would: room
+   tone's and every shader's last icon in one column. */
 .layer-chevron {
   display: grid;
   flex: none;
   place-items: center;
-  width: 22px;
-  height: 22px;
+  width: 26px;
+  height: 26px;
   color: var(--mute);
   transform: rotate(180deg);
   transition: transform 0.2s var(--ease-out);
@@ -1280,11 +1282,30 @@ button.layer-chevron:hover {
   height: 2000px;
 }
 
+/* A shader with something to show: like room tone's, its head is the row
+   (all of it opens and closes it), and what it shows goes under that. */
+.layer.expandable {
+  flex-wrap: wrap;
+  padding: 0;
+}
+
+.layer.expandable:hover {
+  background: none;
+}
+
 .layer-details {
   flex-basis: 100%;
-  margin: 4px 0 12px 58px;
+  margin: -4px 14px 16px 64px;
 }
-.layer.base {
+
+/* In a chevron's place, on a shader with nothing to show: the row ends here. */
+.layer-end::before {
+  content: "";
+  width: 3px;
+  height: 3px;
+  border-radius: 50%;
+  background: var(--faint);
+}.layer.base {
   flex-wrap: wrap;
   padding: 0;
 }
