@@ -394,11 +394,12 @@ function SortableRow(props: RowProps) {
 }
 
 /**
- * A shader's stop on the rail: its name, what's become of it, its arrow to
- * open it, a switch for whether it's on for these lights (off here leaves
- * the rest of the room as it is; on, for one that's off everywhere, is on for
- * just these), and, at the end, a toggle for what it shows under its row, if
- * it shows anything (its place kept either way, so every row lines up).
+ * A shader's stop on the rail: its name, what's become of it, a toggle for
+ * what it shows under its row (only if it shows anything: just before its
+ * arrow, so the arrows and switches line up whether there's one or not), its
+ * arrow to open it, and a switch for whether it's on for these lights (off
+ * here leaves the rest of the room as it is; on, for one that's off
+ * everywhere, is on for just these).
  */
 function RowParts({ row, onSwitch, onOpen, details, opened, onToggle }: RowProps) {
   const { layer, state } = row;
@@ -433,6 +434,11 @@ function RowParts({ row, onSwitch, onOpen, details, opened, onToggle }: RowProps
         </span>
         {meta && <span className="layer-meta">{meta}</span>}
       </span>
+      {details !== null && (
+        <button className="layer-chevron" aria-expanded={opened} aria-label={`${layer.name}'s details`} title={opened ? "Hide" : "Show more"} onClick={onToggle}>
+          <ChevronUpIcon />
+        </button>
+      )}
       <button className="icon-button layer-open" aria-label={`Open ${layer.name}`} title={`Open ${layer.name}`} onClick={onOpen}>
         <OpenIcon />
       </button>
@@ -446,13 +452,6 @@ function RowParts({ row, onSwitch, onOpen, details, opened, onToggle }: RowProps
       >
         <span className="switch-knob" />
       </button>
-      {details !== null ? (
-        <button className="layer-chevron" aria-expanded={opened} aria-label={`${layer.name}'s details`} title={opened ? "Hide" : "Show more"} onClick={onToggle}>
-          <ChevronUpIcon />
-        </button>
-      ) : (
-        <span className="layer-chevron" aria-hidden="true" />
-      )}
     </>
   );
 }
