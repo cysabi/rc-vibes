@@ -36,11 +36,15 @@ git -C "$VIBES_FOLDER" remote set-url origin "$VIBES_GIT_URL"
 
 # vibes' extension, this image's version of it, in place of any older one.
 # VS Code only loads the extensions its list names, so it's listed too
-# (beside any others the person has installed).
+# (beside any others the person has installed). Its folder is named for this
+# build (its Nix hash): the browser keeps what the preview's webview loads by
+# path and ETag, and an ETag is only mtime and size, the mtime always 1970 in
+# Nix, so a new build at the same path and size would be taken for the old.
 data=/home/workspace/.openvscode-server
 mkdir -p "$data/extensions" "$data/data/Machine"
 version=$(jq -r .version "$VIBES_EXTENSION/package.json")
-here="vibes.vibes-sketch-$version"
+build=$(basename "$VIBES_EXTENSION")
+here="vibes.vibes-sketch-$version-${build%%-*}"
 find "$data/extensions" -maxdepth 1 -name 'vibes.vibes-sketch-*' ! -name "$here" -exec rm -rf {} +
 ln -sfn "$VIBES_EXTENSION" "$data/extensions/$here"
 list="$data/extensions/extensions.json"
