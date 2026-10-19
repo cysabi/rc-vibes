@@ -1,4 +1,4 @@
-import { afterEach, describe, expect, it, vi } from "vitest";
+import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
 import type { Prev, PrevLight } from "./arclamp.ts";
 import { lemtone, palettes, white, type ColorInput } from "./color.ts";
 import { field, osc } from "./field.ts";
@@ -7,6 +7,12 @@ import { square } from "./shape.ts";
 import { sketch } from "./sketch.ts";
 
 afterEach(() => vi.restoreAllMocks());
+
+// Where t starts is kept on globalThis, to outlive an edit; each test starts afresh.
+beforeEach(() => delete (globalThis as Record<string, unknown>).__vibesStart);
+
+// As arclamp calls update(): the frame's time, and this layer's own clock a little after it.
+const DELAY = 60;
 
 // The library sees no DOM or Node, so no console type either; vitest's is there all the same.
 const { console } = globalThis as unknown as { console: { warn(...data: unknown[]): void } };
@@ -34,7 +40,7 @@ const prevOf = (list = lights()): Prev => ({ initial_time: 0, lights: list });
 function once(look: (here: Here) => ColorInput | null | undefined, list = lights()) {
   const seen = new Map<number, Here>();
   const update = sketch({ color: (here) => (seen.set(here.light.id, here), look(here)), switch: (here) => (seen.set(here.light.id, here), null) });
-  const out = update(prevOf(list), 5000, 1000);
+  const out = update(prevOf(list), 1000 + DELAY, 1000);
   return { seen, out };
 }
 
@@ -66,7 +72,7 @@ describe("sketch()", () => {
   });
 
   it("takes the switch look as a function, a field, or one answer for every old bulb", () => {
-    const onOfThree = (update: ReturnType<typeof sketch>, now = 0) => update(prevOf(), now, 0).lights.find((l) => l.id === 3)?.channels.on;
+    const onOfThree = (update: ReturnType<typeof sketch>, frame = 0) => update(prevOf(), frame + DELAY, frame).lights.find((l) => l.id === 3)?.channels.on;
     expect(onOfThree(sketch({ switch: true }))).toBe(1);
     expect(onOfThree(sketch({ switch: "off" }))).toBe(0);
     expect(onOfThree(sketch("#f80", { switch: 1 }))).toBe(1);
@@ -152,8 +158,8 @@ describe("sketch()", () => {
   it("tells the look where and when it is", () => {
     const { seen } = once(() => null);
     const here = seen.get(4)!;
-    expect(here.t).toBe(4);
-    expect(here.now).toBe(5000);
+    expect(here.t).toBe(0);
+    expect(here.now).toBe(1000);
     expect(here.dt).toBe(0);
     expect([here.x, here.y]).toEqual([12, 5]);
     // The room the lights fill: 2 to 12 m across, 1 to 5 m down.
@@ -165,11 +171,38 @@ describe("sketch()", () => {
     expect([unplaced.x, unplaced.y]).toEqual([7, 3]);
   });
 
-  it("counts dt from tick to tick, but not a long gap", () => {
+  it("counts dt from frame to frame, but not a long gap", () => {
     const dts: number[] = [];
     const update = sketch((here) => (here.light.id === 1 && dts.push(here.dt), null));
-    for (const now of [0, 10, 40, 5040]) update(prevOf(), now, 0);
+    // This layer's own clock wanders; the frames' times are what count.
+    const frames = [0, 10, 40, 5040];
+    frames.forEach((frame, i) => update(prevOf(), frame + DELAY + 7 * i, frame));
     expect(dts).toEqual([0, 0.01, 0.03, 0.25]);
+  });
+
+  it("keeps time by the frames, as arclamp stamps them", () => {
+    const ts: number[] = [];
+    const update = sketch((here) => (here.light.id === 1 && ts.push(here.t), null));
+    // nowMs - initialMs stays the same (the delay through the stack); the frames move on.
+    for (const frame of [1_760_000_000_000, 1_760_000_001_000, 1_760_000_002_500]) update(prevOf(), frame + DELAY, frame);
+    expect(ts).toEqual([0, 1, 2.5]);
+  });
+
+  it("carries on from where it was when the sketch is run again, as an edit does", () => {
+    const ts: number[] = [];
+    const look = (here: Here) => (here.light.id === 1 && ts.push(here.t), null);
+    sketch(look)(prevOf(), 1000 + DELAY, 1000);
+    // The module runs again (HMR): a new sketch(), the same start.
+    sketch(look)(prevOf(), 4000 + DELAY, 4000);
+    expect(ts).toEqual([0, 3]);
+  });
+
+  it("falls back to its own clock when it isn't given a frame's time", () => {
+    const ts: number[] = [];
+    const update = sketch((here) => (here.light.id === 1 && ts.push(here.t), null));
+    update(prevOf(), 1000, NaN);
+    update(prevOf(), 1500, undefined as never);
+    expect(ts).toEqual([0, 0.5]);
   });
 
   it("knows each light: its kind, tags, rail, and its own random number", () => {

@@ -121,11 +121,11 @@ export class Here {
   /** Where it's looking, in meters (the light's own place, unless a transform moved it). */
   readonly x: number;
   readonly y: number;
-  /** Seconds since the sketch started (unless a transform moved it). */
+  /** Seconds since the sketch started (unless a transform moved it), by the frames' own time. */
   readonly t: number;
   /** Seconds since the last tick: about 0.01 in the room, 0.03 in the preview. */
   readonly dt: number;
-  /** The clock, in milliseconds since 1970: for things that follow the time of day. */
+  /** The frame's time, in milliseconds since 1970 (the same for every layer of it): for things that follow the time of day. */
   readonly now: number;
   readonly light: Light;
   readonly room: Room;

@@ -26,7 +26,7 @@ A sketch says what each light should make, a hundred times a second.
 | `u`, `v` | the same, 0 to 1 across the room the lights fill (left to right, top to bottom) |
 | `t` | seconds since the sketch started |
 | `dt` | seconds since the last tick (about 0.01 in the room, 0.03 in the preview) |
-| `now` | the clock, in ms since 1970 |
+| `now` | the frame's time, in ms since 1970 |
 | `light` | the light itself: `id`, `kind` (`"color"` or `"switch"`), `tags`, `has(tag)`, `rail`, `random`, `below`, `state` |
 | `room` | every light: `lights`, `rails`, `rail(id)`, `tagged(tag)`, `width`, `depth`, `center` |
 | `at({ x, y, t })` | the same light, looking from somewhere else or at another time |
@@ -267,6 +267,11 @@ write yourself: it gets every light (`id`, `channels`, `tags`, `coords`,
 are `a`, `b`, `brightness` (1.0 = 1000 lm) and `fidelity`; old bulbs' is `on`.
 `color(light.channels)` reads a light's channels, and `c.channels` writes
 them. The types are `Prev`, `Out` and `Update`.
+
+Animate by `initialMs`: it's the frame's time, when the room tone made it,
+the same for every layer, so layers stay in step. `nowMs` is only this
+layer's own clock, a few tens of milliseconds later, and not when the
+shader started: `nowMs - initialMs` stays about the same forever.
 
 ## Working on this library
 

@@ -56,6 +56,23 @@ export interface SketchOptions {
 // A tick after a long gap (the sketch paused, or held up) counts as at most this long.
 const MAX_DT = 0.25;
 
+// Time is the frame's: arclamp's initialMs is when the room tone made this
+// frame (the tick's wall-clock time), the same for every layer of it, so
+// layers stay in step (nowMs is only this layer's own clock, a little later).
+// t counts from the first frame any sketch() here saw, kept on globalThis so
+// that an edit in the editor, which runs the sketch's module again in the
+// same worker, carries on rather than starting over. In the room each script
+// gets a fresh sandbox, so it starts over there.
+const START = "__vibesStart";
+
+function startOf(frame: number): number {
+  const g = globalThis as Record<string, unknown>;
+  const start = g[START];
+  if (typeof start === "number" && Number.isFinite(start)) return start;
+  g[START] = frame;
+  return frame;
+}
+
 /** Your color look (a function of here, or a field) as arclamp's update(); old bulbs are left alone, unless given `switch`. */
 export function sketch(look: (here: Here) => LookResult, options?: SketchOptions): Update;
 /** A look for each kind of light: { color, switch }. */
@@ -80,9 +97,10 @@ export function sketch(given: Looks | Look, options: SketchOptions = {}): Update
   return (prev: Prev, nowMs: number, initialMs: number): Out => {
     const list = Array.isArray(prev?.lights) ? prev.lights : [];
     if (!room || !sameLayout(prev, room)) room = roomOf(prev, room);
-    const t = (nowMs - initialMs) / 1000;
-    const dt = last === null ? 0 : Math.min(MAX_DT, Math.max(0, (nowMs - last) / 1000));
-    last = nowMs;
+    const frame = Number.isFinite(initialMs) ? initialMs : nowMs;
+    const t = (frame - startOf(frame)) / 1000;
+    const dt = last === null ? 0 : Math.min(MAX_DT, Math.max(0, (frame - last) / 1000));
+    last = frame;
 
     const lights: Out["lights"] = [];
     for (let i = 0; i < list.length; i++) {
@@ -91,7 +109,7 @@ export function sketch(given: Looks | Look, options: SketchOptions = {}): Update
       light.belowOn = light.below.lm > 0;
       const ask = light.kind === "switch" ? askSwitch : askColor;
       if (!ask) continue;
-      const v = ask(new Here(light.x, light.y, t, dt, nowMs, light, room));
+      const v = ask(new Here(light.x, light.y, t, dt, frame, light, room));
 
       if (light.kind === "switch") {
         const on = readOn(v);

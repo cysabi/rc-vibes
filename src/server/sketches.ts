@@ -183,7 +183,9 @@ import type { Out, Prev } from "./vibes";
 const PERIOD_S = 8;
 
 export function update(prev: Prev, nowMs: number, initialMs: number): Out {
-  const t = (nowMs - initialMs) / 1000;
+  // initialMs is this frame's time, the same for every layer, so animate by it
+  // (nowMs is only this layer's own clock, a little later).
+  const t = initialMs / 1000;
   return {
     lights: prev.lights.map((light) => {
       const x = (light.coords?.mm_x ?? 0) / 1000;
