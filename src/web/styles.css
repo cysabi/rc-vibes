@@ -1791,15 +1791,24 @@ kbd {
   accent-color: var(--warn);
 }
 
-.menu-switch span {
+.menu-switch span,
+.menu-field > span {
   display: grid;
   gap: 2px;
 }
 
-.menu-switch small {
+.menu-switch small,
+.menu-field small {
   color: var(--mute);
   font-size: 11.5px;
   line-height: 1.45;
+}
+
+/* A choice of a few, under what it's for. */
+.menu-field {
+  display: grid;
+  gap: 8px;
+  padding: 9px 10px;
 }
 
 .menu-item {
@@ -2017,8 +2026,8 @@ kbd {
   background-color: var(--void);
 }
 
-/* The simulated light on the floor (lighting.ts), under the plan's lines,
-   adding to the grid beneath it. */
+/* The simulated light on the floor (lighting.ts), under the grid and the
+   plan's lines, adding to the floor beneath it. */
 .map-light {
   position: absolute;
   inset: 0;
@@ -2026,6 +2035,23 @@ kbd {
   height: 100%;
   pointer-events: none;
   mix-blend-mode: screen;
+}
+
+/* Past white (lighting-hdr.ts), the light is opaque and paints the floor
+   under it itself, in this color: browsers aren't held to keeping what's
+   past white through a blend. */
+.map-light.hdr {
+  mix-blend-mode: normal;
+  background-color: var(--void);
+}
+
+/* The grid on the floor, faint lines over the light, fading out toward the
+   edges of the map. placeBackdrop places its lines. */
+.map-grid {
+  position: absolute;
+  inset: 0;
+  pointer-events: none;
+  mask-image: radial-gradient(ellipse 70% 75% at 50% 50%, black 40%, transparent 100%);
 }
 
 .floorplan {

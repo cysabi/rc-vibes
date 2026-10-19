@@ -11,7 +11,9 @@
 // round corners. It's worked out again only when the lights change.
 //
 // Everything adds up in linear light in float buffers, which are then
-// tone-mapped for the screen (in Display P3 where the screen shows it).
+// tone-mapped for the screen (in Display P3 where the screen shows it). This
+// is WebGL, which stops at white; lighting-hdr.ts is the same on WebGPU,
+// going past it.
 
 import type { Gamut } from "../shared/lemtone.ts";
 import { bucketsOf, reachOf, type Grid, type Segment } from "./shadows.ts";
@@ -22,23 +24,23 @@ export const MOUNT_MM = 2400;
 /** How far a light's pool is drawn, in millimeters: by here it's under 0.5% of what's below it. */
 export const REACH_MM = 5 * MOUNT_MM;
 // Screen brightness per lux, before tone mapping.
-const EXPOSURE = 0.0012;
+export const EXPOSURE = 0.0012;
 // Light that lands on the floor again after bouncing, as a share of what
 // lands there directly (in a room that keeps it all in).
-const BOUNCE = 0.35;
+export const BOUNCE = 0.35;
 // The bounce grid's cells (mm), and the strides (in cells) of the passes
 // that spread light across it. Each pass along an axis spreads it by
 // stride² / 2 cells² of variance: about 2.2 m in all, near the ceiling's
 // height above the floor, where light off it lands.
 const CELL_MM = 100;
-const STRIDES = [1, 2, 3, 4, 6, 8, 12, 16, 20];
+export const STRIDES = [1, 2, 3, 4, 6, 8, 12, 16, 20];
 // The bounce is read from at least CLEARANCE_MM off the nearest wall, so
 // the cells it blends (up to 1.41 cells away, corner to corner) never reach
 // across one or into one, which would leave a dark fringe along every wall.
 // Each pixel finds that wall itself, exactly, among the walls filed under
 // its BUCKET_MM square (see bucketsOf), so it's as sharp at any zoom. Inside
 // walls, the plan's own filled wall shapes cover the light.
-const CLEARANCE_MM = 1.5 * CELL_MM;
+export const CLEARANCE_MM = 1.5 * CELL_MM;
 const BUCKET_MM = 250;
 // Lists (the walls, and which are in each bucket) go in textures this wide.
 const ROW = 1024;
@@ -60,6 +62,46 @@ export interface Box {
   y: number;
   width: number;
   height: number;
+}
+
+/** What draws the light on the floor: Lighting here, or HdrLighting (lighting-hdr.ts). */
+export interface Renderer {
+  /** Set once its context is lost: the map draws glows instead. */
+  lost: boolean;
+  setFloor(walls: Segment[], box: Box): void;
+  setSources(sources: Source[]): void;
+  render(view: View, width: number, height: number, flux: Float32Array, gamut: Gamut): void;
+  dispose(): void;
+}
+
+/** What the bounce needs to know about a floor's walls (see setFloor). */
+export interface Walls {
+  /** The bounce grid, and the buckets the walls are filed under. */
+  grid: Grid;
+  buckets: Grid;
+  /** How far light spreads from each cell before a wall (reachOf). */
+  reach: Uint8Array;
+  /** Each wall, as x1, y1, x2, y2; each bucket's first wall in `list` and how many; and the list. */
+  segs: Float32Array;
+  cells: Int32Array;
+  list: Int32Array;
+}
+
+// Worked out once for each floor's walls (it takes a moment).
+const wallData = new WeakMap<Segment[], Omit<Walls, "grid" | "buckets">>();
+
+/** A floor's walls, for the bounce, on grids over its extent. */
+export function wallsOf(walls: Segment[], box: Box): Walls {
+  const grid: Grid = { x: box.x, y: box.y, cell: CELL_MM, width: Math.ceil(box.width / CELL_MM), height: Math.ceil(box.height / CELL_MM) };
+  const buckets: Grid = { ...grid, cell: BUCKET_MM, width: Math.ceil(box.width / BUCKET_MM), height: Math.ceil(box.height / BUCKET_MM) };
+  let data = wallData.get(walls);
+  if (!data) {
+    const { cells, list } = bucketsOf(walls, buckets, CLEARANCE_MM);
+    const segs = new Float32Array(walls.length * 4);
+    walls.forEach((w, n) => segs.set([w.x1, w.y1, w.x2, w.y2], n * 4));
+    wallData.set(walls, (data = { reach: reachOf(walls, grid), segs, cells, list }));
+  }
+  return { grid, buckets, ...data };
 }
 
 // `u_flip` is 1 drawing to the screen (rows from the top) and -1 drawing to
@@ -189,15 +231,12 @@ void main() {
   color = vec4(encode(c) + (noise - 0.5) / 255.0, 1.0);
 }`;
 
-// What the bounce needs to know about each floor's walls, worked out once (it takes a moment).
-const wallData = new WeakMap<Segment[], { reach: Uint8Array; segs: Float32Array; cells: Int32Array; list: Int32Array }>();
-
 interface Target {
   texture: WebGLTexture;
   fbo: WebGLFramebuffer;
 }
 
-export class Lighting {
+export class Lighting implements Renderer {
   private readonly gl: WebGL2RenderingContext;
   private readonly light: { program: WebGLProgram; u: Uniforms };
   private readonly spreader: { program: WebGLProgram; u: Uniforms };
@@ -216,20 +255,19 @@ export class Lighting {
   lost = false;
 
   /** A renderer for this canvas, or null where WebGL 2 or float buffers aren't there (the map falls back to drawn glows). */
-  static create(canvas: HTMLCanvasElement, gamut: Gamut): Lighting | null {
+  static create(canvas: HTMLCanvasElement): Lighting | null {
     const gl = canvas.getContext("webgl2", { alpha: false, antialias: false, depth: false, stencil: false });
     if (!gl || !(gl.getExtension("EXT_color_buffer_float") || gl.getExtension("EXT_color_buffer_half_float"))) return null;
     try {
-      return new Lighting(canvas, gl, gamut);
+      return new Lighting(canvas, gl);
     } catch (err) {
       console.warn("no simulated light:", err);
       return null;
     }
   }
 
-  private constructor(canvas: HTMLCanvasElement, gl: WebGL2RenderingContext, gamut: Gamut) {
+  private constructor(canvas: HTMLCanvasElement, gl: WebGL2RenderingContext) {
     this.gl = gl;
-    if ("drawingBufferColorSpace" in gl) gl.drawingBufferColorSpace = gamut;
     canvas.addEventListener("webglcontextlost", () => (this.lost = true));
     this.light = program(gl, LIGHT_VS, LIGHT_FS, ["u_view", "u_size", "u_flip", "u_light", "u_flux", "u_bare", "u_height", "u_reach"]);
     this.spreader = program(gl, FULL_VS, SPREAD_FS, ["u_light", "u_reach", "u_step"]);
@@ -250,15 +288,8 @@ export class Lighting {
   setFloor(walls: Segment[], box: Box) {
     const gl = this.gl;
     this.dropFloor();
-    const grid: Grid = { x: box.x, y: box.y, cell: CELL_MM, width: Math.ceil(box.width / CELL_MM), height: Math.ceil(box.height / CELL_MM) };
-    const buckets: Grid = { ...grid, cell: BUCKET_MM, width: Math.ceil(box.width / BUCKET_MM), height: Math.ceil(box.height / BUCKET_MM) };
-    let data = wallData.get(walls);
-    if (!data) {
-      const { cells, list } = bucketsOf(walls, buckets, CLEARANCE_MM);
-      const segs = new Float32Array(walls.length * 4);
-      walls.forEach((w, n) => segs.set([w.x1, w.y1, w.x2, w.y2], n * 4));
-      wallData.set(walls, (data = { reach: reachOf(walls, grid), segs, cells, list }));
-    }
+    const data = wallsOf(walls, box);
+    const { grid, buckets } = data;
     const reach = gl.createTexture()!;
     gl.bindTexture(gl.TEXTURE_2D, reach);
     gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA8, grid.width, grid.height, 0, gl.RGBA, gl.UNSIGNED_BYTE, data.reach);
@@ -289,12 +320,16 @@ export class Lighting {
 
   /**
    * Draw the floor's light for this view (`width` × `height` CSS pixels).
-   * `flux` is each source's light in lumens as linear RGB, three per source,
-   * in the order setSources had them.
+   * `flux` is each source's light in lumens as linear RGB in `gamut`, three
+   * per source, in the order setSources had them.
    */
-  render(view: View, width: number, height: number, flux: Float32Array) {
+  render(view: View, width: number, height: number, flux: Float32Array, gamut: Gamut) {
     const gl = this.gl;
     if (this.lost) return;
+    // In the gamut the flux is in, which changes as the window moves between
+    // screens (or it's chosen). Changing it clears the drawing buffer, so
+    // only when it does.
+    if ("drawingBufferColorSpace" in gl && gl.drawingBufferColorSpace !== gamut) gl.drawingBufferColorSpace = gamut;
     if (this.floor && !(this.spreadFor && same(this.spreadFor, flux))) {
       this.spread(flux);
       this.spreadFor = flux.slice();

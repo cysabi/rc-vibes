@@ -341,6 +341,7 @@ export function Goo({ marks, width, height, gamut }: Props) {
   return (
     <>
       <canvas
+        key={gamut}
         ref={canvas}
         className="goo"
         style={{ left: -PAD, top: -PAD, width: width + 2 * PAD, height: height + 2 * PAD }}

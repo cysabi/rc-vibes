@@ -9,7 +9,7 @@ import { useEffect, useRef, useState, type PointerEvent, type ReactNode } from "
 import type { LightInfo } from "../../shared/arclamp.ts";
 import { baseType, seenOf } from "../../shared/fixtures.ts";
 import { lemtoneCss } from "../../shared/lemtone.ts";
-import { screenGamut } from "../gamut.ts";
+import { useGamut } from "../display.ts";
 import { ChevronUpIcon } from "../icons.tsx";
 import { useFrames } from "../live.ts";
 
@@ -46,7 +46,8 @@ export function Drawer({ lights, onDrop, children, lead }: Props) {
     return () => window.clearInterval(t);
   }, [open]);
   const frame = useFrames().latest();
-  const colorOf = (l: LightInfo) => lemtoneCss(seenOf(frame?.lights.get(l.id), l.type), screenGamut());
+  const gamut = useGamut();
+  const colorOf = (l: LightInfo) => lemtoneCss(seenOf(frame?.lights.get(l.id), l.type), gamut);
   const groups = [
     ...GROUPS,
     ...[...new Set(lights.map((l) => baseType(l.type)))].filter((b) => !GROUPS.some((g) => g.base === b)).map((b) => ({ base: b, title: b })),

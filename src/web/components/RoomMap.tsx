@@ -41,10 +41,11 @@ import {
 import type { Placement, Spot, TagChange, TypeChange } from "../../shared/vibes.ts";
 import { useChangeLayout, type LayoutChange } from "../api.ts";
 import { FLOORS, planExtent, type Floor } from "../floors.ts";
-import { screenGamut } from "../gamut.ts";
+import { screenGamut, setHdrCanvas, useDisplay, useGamut } from "../display.ts";
 import { CheckIcon, DownloadIcon, FitIcon, MinusIcon, PencilIcon, PlusIcon, RailIcon, TrashIcon, TurnIcon, UndoIcon } from "../icons.tsx";
 import { currentRails, layoutLights, placeLights, type PlacedLight } from "../layout.ts";
-import { Lighting, REACH_MM, type Source } from "../lighting.ts";
+import { HdrLighting } from "../lighting-hdr.ts";
+import { Lighting, REACH_MM, type Renderer, type Source } from "../lighting.ts";
 import { useFrames } from "../live.ts";
 import { useAdminMode } from "../settings.ts";
 import { visibility, type Segment } from "../shadows.ts";
@@ -172,9 +173,14 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
   const canvas = useRef<HTMLCanvasElement>(null);
   const planEl = useRef<HTMLDivElement>(null);
   const lightCanvas = useRef<HTMLCanvasElement>(null);
-  // The simulated light, if this browser can run it, with each light's view
-  // of the floor (worked out once per spot) and the spots it last drew from.
-  const lighting = useRef<Lighting | null>(null);
+  const gridEl = useRef<HTMLDivElement>(null);
+  // The simulated light, if this browser can run it (past white, where the
+  // screen and browser show that), with each light's view of the floor
+  // (worked out once per spot) and the spots it last drew from.
+  const { gamut, hdr } = useDisplay();
+  const lighting = useRef<Renderer | null>(null);
+  // While the light past white is being set up: no glows meanwhile, it's moments away.
+  const lightPending = useRef(false);
   const fans = useRef(new Map<string, Float32Array>());
   const fanSpots = useRef("");
   const litFloor = useRef<number | null>(null);
@@ -253,11 +259,11 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
 
   useEffect(() => {
     dirty.current = true;
-  }, [layout, selected, hover, moving, railSel, railHover]);
+  }, [layout, selected, hover, moving, railSel, railHover, gamut]);
 
   // A new floor's plan goes where the view says before it's ever painted.
   useLayoutEffect(() => {
-    if (viewRef.current) placeBackdrop(wrap.current!, planEl.current, layout.plan, viewRef.current);
+    if (viewRef.current) placeBackdrop(gridEl.current!, planEl.current, layout.plan, viewRef.current);
   }, [layout.plan]);
 
   useEffect(() => () => window.clearTimeout(longPress.current), []);
@@ -297,6 +303,20 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
     return s ? fitTo(s.width, s.height).scale * 0.5 : 0;
   };
 
+  /** Size the canvases to the map's `width` × `height` CSS pixels. */
+  const sizeCanvases = (width: number, height: number) => {
+    const c = canvas.current!;
+    const dpr = window.devicePixelRatio || 1;
+    c.width = Math.round(width * dpr);
+    c.height = Math.round(height * dpr);
+    c.style.width = `${width}px`;
+    c.style.height = `${height}px`;
+    // The light at the screen's resolution, up to 2×: past that it costs more than it shows.
+    const lightDpr = Math.min(2, dpr);
+    lightCanvas.current!.width = Math.round(width * lightDpr);
+    lightCanvas.current!.height = Math.round(height * lightDpr);
+  };
+
   // Size the canvas; fit on first layout, and keep the center on resize.
   // Resizing a canvas blanks it, and this runs after the frame's drawing but
   // before it's shown, so it draws again at once (else each step of a resize
@@ -307,16 +327,7 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
       const { width, height } = el.getBoundingClientRect();
       if (!width || !height) return;
       const prev = sizeRef.current;
-      const c = canvas.current!;
-      const dpr = window.devicePixelRatio || 1;
-      c.width = Math.round(width * dpr);
-      c.height = Math.round(height * dpr);
-      c.style.width = `${width}px`;
-      c.style.height = `${height}px`;
-      // The light at the screen's resolution, up to 2×: past that it costs more than it shows.
-      const lightDpr = Math.min(2, dpr);
-      lightCanvas.current!.width = Math.round(width * lightDpr);
-      lightCanvas.current!.height = Math.round(height * lightDpr);
+      sizeCanvases(width, height);
       sizeRef.current = { width, height };
       setSize({ width, height });
       const v = viewRef.current;
@@ -415,16 +426,41 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
     };
   }, []);
 
+  // A canvas keeps the color space it's first opened in, and the light's is
+  // WebGL or WebGPU for good, so each is new when the gamut or HDR changes
+  // (they're keyed on them): sized before it's shown, then drawn.
+  useLayoutEffect(() => {
+    const s = sizeRef.current;
+    if (s) sizeCanvases(s.width, s.height);
+    dirty.current = true;
+  }, [gamut, hdr]);
+
   useEffect(() => {
-    lighting.current = Lighting.create(lightCanvas.current!, screenGamut());
+    const c = lightCanvas.current!;
+    let gone = false;
     fanSpots.current = "";
     litFloor.current = null;
     dirty.current = true;
+    if (hdr) {
+      lightPending.current = true;
+      void HdrLighting.create(c, screenGamut()).then((made) => {
+        if (gone) return made?.dispose();
+        lightPending.current = false;
+        lighting.current = made;
+        dirty.current = true;
+        // Without it, the map goes back to WebGL, on a new canvas.
+        setHdrCanvas(!!made);
+      });
+    } else {
+      lighting.current = Lighting.create(c);
+    }
     return () => {
+      gone = true;
+      lightPending.current = false;
       lighting.current?.dispose();
       lighting.current = null;
     };
-  }, []);
+  }, [hdr]);
 
   // Each frame: move the view along if it's gliding or flying, then (if
   // anything changed) place the plan and grid and draw the lights, together.
@@ -436,7 +472,7 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
       if (view && sizeRef.current) {
         dirty.current = false;
         const lightFrame = framesRef.current.latest();
-        placeBackdrop(wrap.current!, planEl.current, s.layout.plan, view);
+        placeBackdrop(gridEl.current!, planEl.current, s.layout.plan, view);
         const d = drag.current;
         const lit = lighting.current && !lighting.current.lost ? lighting.current : null;
         if (lit) {
@@ -450,12 +486,12 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
             lit.setSources(sources);
             fanSpots.current = spots;
           }
-          lit.render(view, sizeRef.current.width, sizeRef.current.height, flux);
+          lit.render(view, sizeRef.current.width, sizeRef.current.height, flux, screenGamut());
         }
         const { rails, measure } = railsAsDrawn(s.layout.rails, s.railSel, d);
         draw(canvas.current!, {
           frame: lightFrame,
-          glow: !lit,
+          glow: !lit && !lightPending.current,
           size: sizeRef.current,
           view,
           lights: s.layout.lights,
@@ -1101,10 +1137,12 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
   const plan = layout.plan;
   return (
     <div ref={wrap} className="map">
-      <canvas ref={lightCanvas} className="map-light" aria-hidden="true" />
+      <canvas key={hdr ? "hdr" : "sdr"} ref={lightCanvas} className={hdr ? "map-light hdr" : "map-light"} aria-hidden="true" />
+      <div ref={gridEl} className="map-grid" aria-hidden="true" />
       {/* Placed by the draw loop, in step with the canvas. */}
       {plan && <div key={plan.id} ref={planEl} className="floorplan" aria-hidden="true" dangerouslySetInnerHTML={{ __html: plan.svg }} />}
       <canvas
+        key={gamut}
         ref={canvas}
         className={`map-canvas${cursor ? ` ${cursor}` : ""}`}
         onPointerDown={down}
@@ -1298,8 +1336,8 @@ function lightSources(
 }
 
 /** Put the plan and the grid under it where the view says. */
-function placeBackdrop(wrap: HTMLElement, el: HTMLElement | null, plan: Floor | null, view: View) {
-  Object.assign(wrap.style, gridStyle(view));
+function placeBackdrop(grid: HTMLElement, el: HTMLElement | null, plan: Floor | null, view: View) {
+  Object.assign(grid.style, gridStyle(view));
   if (!el || !plan) return;
   const box = plan.viewBox;
   el.style.left = `${view.ox + box.x * view.scale}px`;
@@ -1311,8 +1349,8 @@ function placeBackdrop(wrap: HTMLElement, el: HTMLElement | null, plan: Floor | 
 const midpoint = (a: Point, b: Point): Point => ({ x: (a.x + b.x) / 2, y: (a.y + b.y) / 2 });
 
 /**
- * A grid in plan millimeters behind everything, its spacing following the
- * zoom, fading out toward the edges of the map.
+ * A grid in plan millimeters under the plan, its spacing following the zoom
+ * (it fades out toward the edges of the map: see .map-grid).
  */
 function gridStyle(view: View): CSSProperties {
   const { minor, major, minorAlpha } = gridFor(view.scale);
@@ -1321,15 +1359,9 @@ function gridStyle(view: View): CSSProperties {
   const M = major * view.scale;
   const at = `${view.ox}px ${view.oy}px`;
   return {
-    backgroundImage: [
-      "radial-gradient(ellipse 70% 75% at 50% 50%, transparent 40%, var(--void) 100%)",
-      line(0.06, "to right"),
-      line(0.06, "to bottom"),
-      line(0.03 * minorAlpha, "to right"),
-      line(0.03 * minorAlpha, "to bottom"),
-    ].join(", "),
-    backgroundSize: `100% 100%, ${M}px ${M}px, ${M}px ${M}px, ${m}px ${m}px, ${m}px ${m}px`,
-    backgroundPosition: `0 0, ${at}, ${at}, ${at}, ${at}`,
+    backgroundImage: [line(0.06, "to right"), line(0.06, "to bottom"), line(0.03 * minorAlpha, "to right"), line(0.03 * minorAlpha, "to bottom")].join(", "),
+    backgroundSize: `${M}px ${M}px, ${M}px ${M}px, ${m}px ${m}px, ${m}px ${m}px`,
+    backgroundPosition: `${at}, ${at}, ${at}, ${at}`,
   };
 }
 
@@ -1361,6 +1393,7 @@ function HoverCard({ light, at, view, width, moving }: { light: PlacedLight; at:
     const t = window.setInterval(() => tick((n) => n + 1), 250);
     return () => window.clearInterval(t);
   }, []);
+  const gamut = useGamut();
   const channels = useFrames().latest()?.lights.get(light.id);
   const t = lemtoneOf(channels, light.type);
   const seen = seenOf(channels, light.type);
@@ -1377,7 +1410,7 @@ function HoverCard({ light, at, view, width, moving }: { light: PlacedLight; at:
       style={{ left: flip ? x - 16 : x + 16, top: y, transform: flip ? "translate(-100%, -50%)" : "translateY(-50%)" }}
     >
       <span className="hover-title">
-        <span className="dot" style={{ background: lemtoneCss(seen, screenGamut()) }} />
+        <span className="dot" style={{ background: lemtoneCss(seen, gamut) }} />
         <span className="mono">{light.id}</span>
         <span className="muted">{light.type === "4x1-horizontal" ? `${name}, horizontal` : name}</span>
       </span>
@@ -1443,14 +1476,15 @@ function SelectionCard({ lights, at, view, width }: { lights: PlacedLight[]; at:
 
 /** A line of the selection card: the lights' light, one dot when they're alike (else a strip of them), and what it is. */
 function ToneLine({ seen, alike, text }: { seen: (Lemtone | null)[]; alike: boolean; text: string }) {
+  const gamut = useGamut();
   return (
     <span className="mono hover-value selection-tone">
       {alike ? (
-        <span className="dot" style={{ background: lemtoneCss(seen[0] ?? null, screenGamut()) }} />
+        <span className="dot" style={{ background: lemtoneCss(seen[0] ?? null, gamut) }} />
       ) : (
         <span className="slivers" aria-hidden="true">
           {seen.slice(0, 24).map((t, i) => (
-            <span key={i} style={{ background: lemtoneCss(t, screenGamut()) }} />
+            <span key={i} style={{ background: lemtoneCss(t, gamut) }} />
           ))}
         </span>
       )}

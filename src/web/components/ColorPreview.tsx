@@ -15,7 +15,7 @@ import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from
 import type { LightInfo } from "../../shared/arclamp.ts";
 import { isBinary, isOn, madeOf, requestedOf } from "../../shared/fixtures.ts";
 import { cssColor, kelvinOf, lemtoneCss, lookOf, lumensText, swatch, whiteAB, type Gamut, type Lemtone, type Vec3 } from "../../shared/lemtone.ts";
-import { screenGamut } from "../gamut.ts";
+import { useGamut } from "../display.ts";
 import { useFrames } from "../live.ts";
 import { dotsOf, exact, gather, titleOf, type Placed } from "../marks.ts";
 import { wheelColor, wheelSpot } from "../wheel.ts";
@@ -60,7 +60,7 @@ export function ColorPreview({ lights }: Props) {
     const t = window.setInterval(() => tick((n) => n + 1), TICK_MS);
     return () => window.clearInterval(t);
   }, []);
-  const gamut = screenGamut();
+  const gamut = useGamut();
   const frame = useFrames().latest();
 
   const colored: Spot[] = [];
@@ -197,7 +197,7 @@ function Wheel({ spots, gamut, size }: { spots: Spot[]; gamut: Gamut; size: numb
   });
   return (
     <div className="wheel" style={{ width: size, height: size }}>
-      <canvas ref={canvas} style={{ width: size, height: size }} aria-hidden="true" />
+      <canvas key={gamut} ref={canvas} style={{ width: size, height: size }} aria-hidden="true" />
       <Goo marks={dotsOf(placed)} width={size} height={size} gamut={gamut} />
     </div>
   );
@@ -264,7 +264,7 @@ function WhiteField({ spots, gamut, size, hidden }: { spots: WhiteSpot[]; gamut:
     // Its scale, and the lights it leaves out, written small in its own corners, under the dots.
     <div className="white-view">
       <div className="white-strip" style={{ width: size, height: size }}>
-        <canvas ref={canvas} aria-hidden="true" />
+        <canvas key={gamut} ref={canvas} aria-hidden="true" />
         <span className="field-note warm">warm</span>
         <span className="field-note cool">cool</span>
         {hidden > 0 && (

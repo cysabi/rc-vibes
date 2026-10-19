@@ -24,7 +24,7 @@ import type { Output } from "../../shared/bulb.ts";
 import { madeOf, solvesLemtones } from "../../shared/fixtures.ts";
 import { abOf, colorName, cssColor, hueChroma, kelvinOf, lemtoneCode, lookOf, lumensText, swatch, whiteAB, type Gamut, type Lemtone, type Vec3 } from "../../shared/lemtone.ts";
 import { paintOnGpu } from "../backdrop.ts";
-import { screenGamut } from "../gamut.ts";
+import { useGamut } from "../display.ts";
 import { exact } from "../marks.ts";
 import { chromaAt, WHEEL_CHROMA, wheelColor, wheelSpot } from "../wheel.ts";
 import { Segmented } from "./Segmented.tsx";
@@ -70,7 +70,7 @@ interface Circle {
 
 export function ColorEditor({ values, onChange, types }: Props) {
   const made = (t: Lemtone, i: number) => (types ? madeOf(t, types[i]!) : asked(t));
-  const gamut = screenGamut();
+  const gamut = useGamut();
   const circles = circlesOf(values, made);
   // The active circle, known by one of its values, so it stays itself as it moves and merges.
   const [activeAt, setActiveAt] = useState<number | null>(null);
@@ -88,10 +88,10 @@ export function ColorEditor({ values, onChange, types }: Props) {
   const group = active.members.map((i) => values[i]!);
   const common = valuesOf(group)[0]!;
   // What the active circle's lights would make of each color, at their brightness: the
-  // backdrops show it. They're painted again when that changes (lightKey).
+  // backdrops show it. They're painted again when that or the gamut changes (lightKey).
   const sample = active.members[0]!;
   const lightAt = (a: number, b: number) => made({ a, b, brightness: common.brightness, fidelity: common.fidelity }, sample);
-  const lightKey = `${common.brightness} ${common.fidelity} ${sample}`;
+  const lightKey = `${common.brightness} ${common.fidelity} ${sample} ${gamut}`;
   const light = { brightness: common.brightness, fidelity: common.fidelity, solves: !!types && solvesLemtones(types[sample]!) };
   const limit = limitText(active.members.map((i) => ({ asked: values[i]!, out: made(values[i]!, i) })));
 
@@ -225,7 +225,7 @@ function Wheel(props: PickerProps) {
   };
   return (
     <Picker {...props} className="wheel-picker" width={WHEEL} height={WHEEL} at={at} colorAt={colorAt} step={step} label="Color">
-      <canvas ref={canvas} style={{ width: WHEEL, height: WHEEL }} aria-hidden="true" />
+      <canvas key={props.gamut} ref={canvas} style={{ width: WHEEL, height: WHEEL }} aria-hidden="true" />
     </Picker>
   );
 }
@@ -264,7 +264,7 @@ function WhiteStrip(props: PickerProps) {
         outside={(a, b) => !isWhite(a, b)}
         label="Color temperature and tint"
       >
-        <canvas ref={canvas} className="white-picker-field" aria-hidden="true" />
+        <canvas key={props.gamut} ref={canvas} className="white-picker-field" aria-hidden="true" />
       </Picker>
       <div className="white-picker-scale mono">
         {[2700, 4000, 5000, 6500].map((k) => (

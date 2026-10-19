@@ -10,7 +10,8 @@
 // chroma) is the sketch library's (packages/vibes), so sketches and vibes
 // agree on every color.
 
-import { hueChroma, kelvinOf, LUMENS_PER_BRIGHTNESS, mul3, type Vec3 } from "../../packages/vibes/src/lemtone.ts";
+import { hueChroma, kelvinOf, LUMENS_PER_BRIGHTNESS, mul3, xyzToLms, type Vec3 } from "../../packages/vibes/src/lemtone.ts";
+import { decode, encode, linearSrgbToXyz } from "../../packages/vibes/src/spaces.ts";
 
 export {
   abOf,
@@ -88,6 +89,13 @@ export function lightRgb(a: number, b: number, gamut: Gamut = "srgb"): Vec3 {
   const rgb = linearOf(a, b, gamut);
   const y = rgb[0] * LUMA[gamut][0] + rgb[1] * LUMA[gamut][1] + rgb[2] * LUMA[gamut][2] || 1;
   return rgb.map((v) => v / y) as Vec3;
+}
+
+/** Gamma-encoded sRGB (0–1) as the same color, gamma-encoded, in `gamut`. */
+export function fromSrgb(rgb: Vec3, gamut: Gamut): Vec3 {
+  if (gamut === "srgb") return rgb;
+  const lms = xyzToLms(linearSrgbToXyz(rgb.map(decode) as Vec3));
+  return mul3(LMS_RGB[gamut], lms).map(encode) as Vec3;
 }
 
 /** A CSS color for gamma-encoded RGB (0–1) in `gamut`, optionally translucent. */
