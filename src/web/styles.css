@@ -3332,6 +3332,13 @@ button.apply:hover:not(:disabled) {
   color: var(--mute);
 }
 
+.splash-unreachable {
+  place-content: center;
+  gap: 14px;
+  padding: 24px;
+  text-align: center;
+}
+
 .splash:empty::before {
   content: "";
   width: 10px;

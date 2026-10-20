@@ -69,6 +69,11 @@ export const useMe = () =>
         throw err;
       }
     },
+    // Not reaching vibes at all (no network yet, as a wall display that's
+    // just booted; vibes restarting) is worth waiting out: everything else
+    // waits on this. Up to 30 s apart, and at once when the network's back.
+    retry: (_, err) => !(err instanceof RequestError),
+    retryDelay: (attempt) => Math.min(1000 * 2 ** attempt, 30_000),
   });
 
 export const useStatus = () =>

@@ -1,6 +1,6 @@
 import { serve } from "@hono/node-server";
 import { serveStatic } from "@hono/node-server/serve-static";
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { csrf } from "hono/csrf";
 import http from "node:http";
 import { WebSocketServer } from "ws";
@@ -67,8 +67,16 @@ if (builds) app.route("/", buildApiRoutes(config, builds));
 const sketchApi = sketches && boxes && builds ? sketchRoutes(sketches, db, boxes, builds) : null;
 app.route("/api", apiRoutes({ config, arclamp: noted, db, relay, origins, lights, feed, sketches: sketchApi, instances, health }));
 if (config.production) {
-  app.use("/*", serveStatic({ root: "./dist/web" }));
-  app.get("*", serveStatic({ path: "./dist/web/index.html" }));
+  // The built files' dates are Nix's (1970), which browsers take to mean the
+  // page is fresh for years: a cached page then loads without the network
+  // (after a deploy, naming scripts that are gone; on a device booting before
+  // its Wi-Fi is up, never noticing it's offline). So the page is checked
+  // every time; Vite's assets are named by their contents, so they never change.
+  const caching = (path: string, c: Context) => {
+    c.header("Cache-Control", /(^|\/)assets\//.test(path) ? "public, max-age=31536000, immutable" : "no-cache");
+  };
+  app.use("/*", serveStatic({ root: "./dist/web", onFound: caching }));
+  app.get("*", serveStatic({ path: "./dist/web/index.html", onFound: caching }));
 }
 
 // With dev login on, anyone who can reach vibes can log in as anyone, so only

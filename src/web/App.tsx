@@ -29,9 +29,21 @@ export function App() {
   const me = useMe();
   const path = usePath();
   if (me.isPending) return <div className="splash" />;
-  if (me.isError) return <div className="splash">Couldn't reach vibes: {me.error.message}</div>;
+  // Still trying (see useMe), but say so, in case it's for a while.
+  if (me.isError || me.failureCount > 0) return <Unreachable error={me.error ?? me.failureReason} trying={!me.isError} retry={() => void me.refetch()} />;
   if (!me.data) return <Login />;
   return path === "/sketches" || path.startsWith("/sketches/") ? <SketchPages path={path} /> : <Shell />;
+}
+
+function Unreachable({ error, trying, retry }: { error: Error | null; trying: boolean; retry: () => void }) {
+  return (
+    <div className="splash splash-unreachable">
+      <p>
+        Couldn't reach vibes{error ? `: ${error.message}` : ""}.{trying ? " Trying again…" : ""}
+      </p>
+      <button onClick={retry}>Try now</button>
+    </div>
+  );
 }
 
 function Shell() {
