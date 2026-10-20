@@ -12,7 +12,9 @@
 // The wheel is OKLCh at L = 1, the canonical Lemtone plane: hue goes round,
 // chroma goes out from white, as far as the bulbs' bluest blue (wheel.ts).
 // Brightness is absolute (1.0 = 1000 lm) on a cube-root track, roughly how
-// bright it looks, so the dim end, where saturated colors live, gets room.
+// bright it looks, so the dim end, where saturated colors live, gets room. The
+// track tops out at the active lights' rated output: 1000 lm for color bulbs,
+// 4000 lm for 4×1 panels (the brighter, if they're mixed).
 // Where the active lights, at their brightness, can't make colors as asked,
 // the wheel and the strip show what they make instead, striped, bordered
 // round what they can. A circle asked for there sits where its light lands,
@@ -24,7 +26,7 @@
 
 import { Fragment, useEffect, useId, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode, type RefObject } from "react";
 import type { Output } from "../../shared/bulb.ts";
-import { madeOf, solvesLemtones } from "../../shared/fixtures.ts";
+import { madeOf, ratedBrightnessOf, solvesLemtones } from "../../shared/fixtures.ts";
 import { abOf, colorName, cssColor, hueChroma, kelvinOf, lemtoneCode, lookOf, lumensText, swatch, whiteAB, type Gamut, type Lemtone, type Vec3 } from "../../shared/lemtone.ts";
 import { paintOnGpu } from "../backdrop.ts";
 import { useGamut } from "../display.ts";
@@ -35,7 +37,7 @@ import { count, listOf } from "../words.ts";
 import { Segmented } from "./Segmented.tsx";
 import { Slider } from "./Slider.tsx";
 
-/** The top of the brightness track: the bulbs' rated output. */
+/** The top of the brightness track where the lights' types aren't known: a color bulb's rated output. */
 const B_MAX = 1;
 const WHEEL = 224;
 const STRIP_H = 96;
@@ -104,6 +106,8 @@ export function ColorEditor({ values, onChange, types }: Props) {
   const lightKey = `${common.brightness} ${common.fidelity} ${sample} ${gamut}`;
   const light = { brightness: common.brightness, solves: !!types && solvesLemtones(types[sample]!) };
   const limit = limitText(active.members.map((i) => ({ asked: values[i]!, out: made(values[i]!, i) })));
+  // The top of the brightness track: the brightest the active lights are rated for.
+  const top = types ? Math.max(...active.members.map((i) => ratedBrightnessOf(types[i]!))) : B_MAX;
 
   // Pressing a circle makes it active and picks up its values (just one, with ⌥),
   // and pressing where several land, all of theirs; pressing elsewhere picks up
@@ -159,19 +163,19 @@ export function ColorEditor({ values, onChange, types }: Props) {
 
       <Slider
         label="Brightness"
-        value={lookOf(Math.min(B_MAX, common.brightness) / B_MAX)}
+        value={lookOf(Math.min(top, common.brightness) / top)}
         min={0}
         max={1}
         step={0.005}
-        track={brightnessTrack(active.a, active.b, common.fidelity, gamut, (t) => made(t, sample).light)}
+        track={brightnessTrack(active.a, active.b, common.fidelity, top, gamut, (t) => made(t, sample).light)}
         display={rangeText(
           group.map((t) => t.brightness),
           (b) => (b > 0 ? lumensText(b) : "off"),
           " lm",
         )}
-        marks={marksOf(group.map((t) => ({ at: lookOf(t.brightness), key: exact(t.brightness), title: t.brightness > 0 ? lumensText(t.brightness) : "off" })))}
-        onChange={(look) => onChange({ brightness: brightnessAt(look) }, lumensText(brightnessAt(look)), active.members)}
-        onCommit={(look) => onChange({ brightness: brightnessAt(look) }, lumensText(brightnessAt(look)), active.members)}
+        marks={marksOf(group.map((t) => ({ at: lookOf(t.brightness / top), key: exact(t.brightness), title: t.brightness > 0 ? lumensText(t.brightness) : "off" })))}
+        onChange={(look) => onChange({ brightness: brightnessAt(look, top) }, lumensText(brightnessAt(look, top)), active.members)}
+        onCommit={(look) => onChange({ brightness: brightnessAt(look, top) }, lumensText(brightnessAt(look, top)), active.members)}
       />
       {limit && <p className="hint color-limit">{limit}</p>}
       <Slider
@@ -580,8 +584,8 @@ function rangeText(values: number[], text: (v: number) => string, unit = ""): st
   return `${strip(text(lo))}–${text(hi)}`;
 }
 
-/** The brightness at a place on the track, which runs on how bright it looks (cube root). */
-const brightnessAt = (look: number) => Math.round(look ** 3 * B_MAX * 10000) / 10000;
+/** The brightness at a place on a track up to `top`, which runs on how bright it looks (cube root). */
+const brightnessAt = (look: number, top: number) => Math.round(look ** 3 * top * 10000) / 10000;
 
 // The brightness track's dark end, and how many places along it are worked out.
 const TRACK_DARK: Vec3 = [0x1c / 255, 0x19 / 255, 0x16 / 255];
@@ -593,12 +597,12 @@ const TRACK_STOPS = 32;
  * saturated color pales toward white, and past its brightest it gets no
  * brighter.
  */
-function brightnessTrack(a: number, b: number, fidelity: number, gamut: Gamut, made: (t: Lemtone) => Lemtone): string {
+function brightnessTrack(a: number, b: number, fidelity: number, top: number, gamut: Gamut, made: (t: Lemtone) => Lemtone): string {
   const stops: string[] = [];
   for (let i = 0; i <= TRACK_STOPS; i++) {
     const x = i / TRACK_STOPS;
-    const out = made({ a, b, brightness: brightnessAt(x), fidelity });
-    const k = lookOf(out.brightness / B_MAX);
+    const out = made({ a, b, brightness: brightnessAt(x, top), fidelity });
+    const k = lookOf(out.brightness / top);
     const rgb = swatch(out.a, out.b, gamut).map((v, c) => TRACK_DARK[c]! + (v - TRACK_DARK[c]!) * k) as Vec3;
     stops.push(`${cssColor(rgb, gamut)} ${+(x * 100).toFixed(2)}%`);
   }

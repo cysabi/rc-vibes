@@ -7,7 +7,7 @@
 
 import type { Channels } from "./arclamp.ts";
 import { bulbOutput, type Output } from "./bulb.ts";
-import { whiteAB, type Lemtone } from "./lemtone.ts";
+import { LUMENS_PER_BRIGHTNESS, whiteAB, type Lemtone } from "./lemtone.ts";
 
 /** arclamp turns an old bulb on when its on channel is at least this (rclamp sink.OnThreshold). */
 export const ON_THRESHOLD = 0.5;
@@ -33,6 +33,12 @@ export function baseType(type: string): string {
 
 /** The other orientations a light of this type could be turned to (empty if it can't turn). */
 export const orientationsOf = (type: string): string[] => ORIENTATIONS[baseType(type)] ?? [];
+
+/** Rated output in lumens, where it isn't a color bulb's 1000 lm: a 4×1 panel makes 4000 lm. */
+const RATED_LM: Record<string, number> = { "4x1": 4000 };
+
+/** The brightest a light of this type is rated for, in brightness (1.0 = 1000 lm): the top of its brightness slider. */
+export const ratedBrightnessOf = (type: string) => (RATED_LM[baseType(type)] ?? 1000) / LUMENS_PER_BRIGHTNESS;
 
 /** On/off only: the old bulbs. */
 export const isBinary = (type: string) => baseType(type) === "relay";

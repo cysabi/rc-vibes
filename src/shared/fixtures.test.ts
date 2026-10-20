@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { baseType, channelsFor, footprintOf, isBinary, isOn, lemtoneOf, orientationsOf, requestedOf, seenOf, switchChannels } from "./fixtures.ts";
+import { baseType, channelsFor, footprintOf, isBinary, isOn, lemtoneOf, orientationsOf, ratedBrightnessOf, requestedOf, seenOf, switchChannels } from "./fixtures.ts";
 import { hueChroma, whiteAB } from "./lemtone.ts";
 
 describe("fixture orientations", () => {
@@ -14,6 +14,12 @@ describe("fixture orientations", () => {
     expect(orientationsOf("4x1")).toEqual(["4x1", "4x1-horizontal"]);
     expect(orientationsOf("4x1-horizontal")).toEqual(["4x1", "4x1-horizontal"]);
     expect(orientationsOf("br30")).toEqual([]);
+  });
+
+  it("rates panels at 4000 lm, standing or on their side, and color bulbs at 1000 lm", () => {
+    expect(ratedBrightnessOf("4x1")).toBe(4);
+    expect(ratedBrightnessOf("4x1-horizontal")).toBe(4);
+    expect(ratedBrightnessOf("br30")).toBe(1);
   });
 
   it("gives panels their real 1 ft × 4 ft footprint, standing or on their side", () => {
