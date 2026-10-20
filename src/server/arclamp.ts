@@ -69,7 +69,10 @@ export function createArclamp(baseUrl: string, key: string) {
     // left as they are.
     mergeRoomtone: (template: RoomTemplate) => call<ShaderDescriptor>("PUT", "/v1/shader/0", template),
     clearScene: () => call<void>("DELETE", "/v1/scene"),
-    streamUrl: () => `${baseUrl.replace(/^http/, "ws")}/v1/scene/ws`,
+    // The light stream: each frame's lights, and what each shader touched in it.
+    streamUrl: () => `${baseUrl.replace(/^http/, "ws")}/v1/scene/ws?include=frames,touched`,
+    // For its event streams (event-stream.ts).
+    url: (path: string) => baseUrl + path,
     key,
   };
 }

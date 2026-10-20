@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { decodeFrame, normalizeLights, type LightsResponse } from "./arclamp.ts";
+import { decodeFrame, decodeTouched, lightsOf, normalizeLights, type LightsResponse } from "./arclamp.ts";
 
 const layout: LightsResponse = {
   id_width: 1,
@@ -77,5 +77,52 @@ describe("decodeFrame", () => {
   it("rejects other format revisions and truncated frames", () => {
     expect(() => decodeFrame(frame([[64, 1, 1]], { rev: 2 }), layout)).toThrow(/format_rev/);
     expect(() => decodeFrame(frame([[1, 0b1111, 1, 2]]), layout)).toThrow(/truncated/);
+  });
+
+  it("reads a frame with the touched section after it as it is", () => {
+    const f = decodeFrame(withTouched(frame([[1, 0b0100, 0.5], [64, 0b1, 1]]), [{ id: 3, flags: 0, touched: [0b01], mask: [0b10] }]), layout);
+    expect(f.lights.get(1)).toEqual({ brightness: 0.5 });
+    expect(f.lights.get(64)).toEqual({ brightness: 1 });
+  });
+});
+
+/** A frame with a touched section after it: one byte per bitfield (up to 8 lights). */
+function withTouched(f: Uint8Array, shaders: { id: number; flags: number; touched: number[]; mask: number[] }[]): Uint8Array {
+  const fieldBytes = shaders[0]?.touched.length ?? 1;
+  const section = new DataView(new ArrayBuffer(4 + shaders.length * (5 + 2 * fieldBytes)));
+  section.setUint16(0, shaders.length, true);
+  section.setUint16(2, fieldBytes, true);
+  let at = 4;
+  for (const s of shaders) {
+    section.setUint32(at, s.id, true);
+    section.setUint8(at + 4, s.flags);
+    at += 5;
+    for (const b of [...s.touched, ...s.mask]) section.setUint8(at++, b);
+  }
+  return new Uint8Array([...f, ...new Uint8Array(section.buffer)]);
+}
+
+describe("decodeTouched", () => {
+  const lights = frame([[1, 0b0100, 0.5], [64, 0b1, 1]]);
+
+  it("reads what each shader touched and may not touch, by the frame's lights", () => {
+    const t = decodeTouched(
+      withTouched(lights, [
+        { id: 3, flags: 0, touched: [0b11], mask: [0b10] },
+        { id: 70000, flags: 1, touched: [0b10], mask: [0] },
+      ]),
+      layout,
+    )!;
+    expect(t.ids).toEqual([1, 64]);
+    expect(t.shaders.map((s) => ({ id: s.id, muted: s.muted, touched: lightsOf(s.touched, t.ids), mask: lightsOf(s.mask, t.ids) }))).toEqual([
+      { id: 3, muted: false, touched: [1, 64], mask: [64] },
+      { id: 70000, muted: true, touched: [64], mask: [] },
+    ]);
+  });
+
+  it("is null for a frame without one, and rejects a cut-off one", () => {
+    expect(decodeTouched(lights, layout)).toBeNull();
+    const whole = withTouched(lights, [{ id: 3, flags: 0, touched: [1], mask: [0] }]);
+    expect(() => decodeTouched(whole.subarray(0, whole.length - 1), layout)).toThrow(/truncated/);
   });
 });

@@ -1,9 +1,11 @@
 // One connection to arclamp's live light stream, shared by every browser.
-// arclamp sends a frame every beat (100 a second). Each goes on to browsers
-// as it arrives, unchanged (packed binary), and browsers play them out at a
-// steady pace by their timestamps (src/web/playout.ts). A frame that only
-// repeats the last one sent, timestamp aside, is skipped, but one still goes
-// at least every heartbeat so browsers keep their timing.
+// arclamp sends a frame every beat (100 a second): each light's state, and
+// after it, what each shader touched (?include=frames,touched; the scene
+// feed learns footprints from that). Each goes on to browsers as it arrives,
+// unchanged (packed binary), and browsers play them out at a steady pace by
+// their timestamps (src/web/playout.ts). A frame that only repeats the last
+// one sent, timestamp aside, is skipped, but one still goes at least every
+// heartbeat so browsers keep their timing.
 //
 // A connection can go quiet without ever closing: arclamp gives up on a
 // write that stalls (a Wi-Fi hiccup will do), and the close can be lost on

@@ -1,5 +1,6 @@
 // Types for arclamp's HTTP API (rclamp backend/docs/api-reference.md) and the
-// decoder for its packed binary light stream. Shared by the server and the
+// decoders for its packed binary light stream: each frame's lights, and what
+// each shader did in it (the touched section). Shared by the server and the
 // browser.
 
 /** Channel name → value. Lemtone lights: a, b, brightness (1.0 = 1000 lm), fidelity; old bulbs: brightness. */
@@ -23,6 +24,8 @@ export interface ShaderDescriptor {
   type: "roomtone" | "js";
   position: number;
   script?: string;
+  /** The sha256 of its script, in hex: scene events leave the script out and say which by this. */
+  script_hash?: string;
   template?: RoomTemplate;
   state: ShaderState;
   muted: boolean;
@@ -204,6 +207,75 @@ export function decodeFrame(data: ArrayBuffer | Uint8Array, layout: LightsRespon
     lights.set(id, channels);
   }
   return { initialTime, lights };
+}
+
+/** What one shader did in a frame, from the stream's touched section. */
+export interface ShaderTouch {
+  id: number;
+  muted: boolean;
+  /** The lights its latest render changed (output ≠ input), before its mask and mute: a bit per light, in the frame's order. */
+  touched: Uint8Array;
+  /** The lights it may not change, likewise. */
+  mask: Uint8Array;
+}
+
+/**
+ * The touched section that follows a frame's lights (with ?include=touched),
+ * and the frame's light ids in order, which its bits follow; null if the
+ * message has none:
+ *
+ *   u16 LE shader_count, u16 LE field_bytes (ceil(lights / 8)),
+ *   then per shader, in scene order: u32 LE id, u8 flags (bit 0: muted),
+ *   field_bytes of touched bits, then field_bytes of mask bits.
+ *
+ * Bit i % 8 of byte i / 8 is the i-th light. What a shader actually changed
+ * is touched & ~mask, or nothing if it's muted.
+ */
+export function decodeTouched(data: ArrayBuffer | Uint8Array, layout: LightsResponse): { ids: number[]; shaders: ShaderTouch[] } | null {
+  const bytes = data instanceof Uint8Array ? data : new Uint8Array(data);
+  const view = new DataView(bytes.buffer, bytes.byteOffset, bytes.byteLength);
+  if (bytes.byteLength < FRAME_HEADER_BYTES) throw new Error("frame shorter than header");
+  const count = view.getUint16(8, true);
+  const rev = view.getUint16(10, true);
+  if (rev !== FORMAT_REV) throw new Error(`unsupported frame format_rev ${rev}`);
+  let at = FRAME_HEADER_BYTES;
+  const need = (n: number) => {
+    if (at + n > bytes.byteLength) throw new Error("truncated frame");
+  };
+  // Past the lights, noting their ids.
+  const ids: number[] = [];
+  for (let i = 0; i < count; i++) {
+    need(layout.id_width + 1);
+    ids.push(layout.id_width === 2 ? view.getUint16(at, true) : view.getUint8(at));
+    at += layout.id_width;
+    const mask = view.getUint8(at++);
+    for (let bit = 0; bit < 8; bit++) if (mask & (1 << bit)) at += 4;
+    need(0);
+  }
+  if (at === bytes.byteLength) return null;
+  need(4);
+  const shaderCount = view.getUint16(at, true);
+  const fieldBytes = view.getUint16(at + 2, true);
+  at += 4;
+  const shaders: ShaderTouch[] = [];
+  for (let s = 0; s < shaderCount; s++) {
+    need(5 + 2 * fieldBytes);
+    const id = view.getUint32(at, true);
+    const flags = view.getUint8(at + 4);
+    at += 5;
+    const touched = bytes.subarray(at, at + fieldBytes);
+    const mask = bytes.subarray(at + fieldBytes, at + 2 * fieldBytes);
+    at += 2 * fieldBytes;
+    shaders.push({ id, muted: (flags & 1) === 1, touched, mask });
+  }
+  return { ids, shaders };
+}
+
+/** The lights a touched-section bitfield has set, by id (`ids` in the frame's order). */
+export function lightsOf(bits: Uint8Array, ids: readonly number[]): number[] {
+  const out: number[] = [];
+  for (let i = 0; i < ids.length; i++) if (bits[i >> 3]! & (1 << (i & 7))) out.push(ids[i]!);
+  return out;
 }
 
 const namesCache = new WeakMap<LightsResponse, Map<number, string[]>>();

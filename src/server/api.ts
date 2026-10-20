@@ -17,6 +17,7 @@ import { ArclampError, type Arclamp } from "./arclamp.ts";
 import { requireUser, type AuthEnv } from "./auth.ts";
 import type { Db } from "./db.ts";
 import type { Config } from "./env.ts";
+import type { HealthWatch } from "./health.ts";
 import { instanceRoutes, type Instances } from "./instances.ts";
 import { applyEdits, lightsFile } from "./lights.ts";
 import type { SceneFeedSource } from "./scene-feed.ts";
@@ -43,6 +44,8 @@ export interface ApiDeps {
   /** Sketches' routes, and their instances in the room, while sketches are on. */
   sketches: Hono<AuthEnv> | null;
   instances?: Instances | null;
+  /** arclamp's health, followed (without it, it's asked for each time). */
+  health?: HealthWatch | null;
 }
 
 // An event stream says something at least this often (a ping, if nothing
@@ -108,7 +111,7 @@ const badBody = (result: { success: boolean; error?: unknown }, c: Context) => {
   }
 };
 
-export function apiRoutes({ config, arclamp, db, relay, origins, lights, feed, sketches, instances = null }: ApiDeps) {
+export function apiRoutes({ config, arclamp, db, relay, origins, lights, feed, sketches, instances = null, health = null }: ApiDeps) {
   const api = new Hono<AuthEnv>();
   api.onError(handleError);
   // Browsers already refuse cross-site JSON requests without CORS headers,
@@ -143,13 +146,16 @@ export function apiRoutes({ config, arclamp, db, relay, origins, lights, feed, s
   return api
     .get("/me", (c) => c.json(c.get("user")))
 
+    // From following arclamp's health; asked of arclamp only until that's first connected (or failed).
     .get("/status", async (c) => {
-      let status: Status["arclamp"] = "ok";
-      try {
-        await arclamp.health();
-      } catch (err) {
-        if (!(err instanceof ArclampError)) throw err;
-        status = err.status === 401 || err.status === 403 ? "rejected" : "unreachable";
+      let status: Status["arclamp"] = health?.reach() ?? "ok";
+      if (!health?.reach()) {
+        try {
+          await arclamp.health();
+        } catch (err) {
+          if (!(err instanceof ArclampError)) throw err;
+          status = err.status === 401 || err.status === 403 ? "rejected" : "unreachable";
+        }
       }
       return c.json<Status>({ arclamp: status, stream: relay.connected(), sketches: sketches !== null });
     })
@@ -308,7 +314,7 @@ export function apiRoutes({ config, arclamp, db, relay, origins, lights, feed, s
       return c.json(Object.fromEntries(wanted.map((h) => [h, all.get(h)!])));
     })
 
-    .get("/health", async (c) => c.json(await arclamp.health()))
+    .get("/health", async (c) => c.json(health?.latest() ?? (await arclamp.health())))
 
     .get("/activity", (c) => {
       const limit = Math.min(Math.max(Number(c.req.query("limit")) || 100, 1), 500);
