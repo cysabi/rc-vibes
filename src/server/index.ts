@@ -50,10 +50,12 @@ const feed = createSceneFeed({
   instances: () => instances,
 });
 relay.subscribe((frame) => feed.touched(frame));
+// What vibes changes in the scene, it changes through this, so the feed shows it at once.
+const noted = feed.noting(arclamp);
 const health = createHealthWatch((on) => followEvents(arclamp.url("/v1/scene/health/events"), arclamp.key, on));
 if (builds) {
   const lightIds = async () => (await lights.arclampLights()).lights.map((l) => l.id);
-  instances = createInstances({ config, db, arclamp, builds, lightIds, changed: () => feed.poke() });
+  instances = createInstances({ config, db, arclamp: noted, builds, lightIds, changed: () => feed.poke() });
 }
 
 const app = new Hono();
@@ -63,7 +65,7 @@ app.route("/auth", authRoutes(config));
 if (sketches) app.route("/", boxApiRoutes(config, sketches, db, lights));
 if (builds) app.route("/", buildApiRoutes(config, builds));
 const sketchApi = sketches && boxes && builds ? sketchRoutes(sketches, db, boxes, builds) : null;
-app.route("/api", apiRoutes({ config, arclamp, db, relay, origins, lights, feed, sketches: sketchApi, instances, health }));
+app.route("/api", apiRoutes({ config, arclamp: noted, db, relay, origins, lights, feed, sketches: sketchApi, instances, health }));
 if (config.production) {
   app.use("/*", serveStatic({ root: "./dist/web" }));
   app.get("*", serveStatic({ path: "./dist/web/index.html" }));

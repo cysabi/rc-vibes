@@ -2,7 +2,7 @@ import { createHash } from "node:crypto";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { LightsResponse, ShaderDescriptor } from "../shared/arclamp.ts";
 import type { SceneFeed } from "../shared/vibes.ts";
-import { ArclampError } from "./arclamp.ts";
+import { ArclampError, type Arclamp } from "./arclamp.ts";
 import { openDb, type Db } from "./db.ts";
 import { loadConfig } from "./env.ts";
 import type { EventHandlers } from "./event-stream.ts";
@@ -47,18 +47,12 @@ function touching(shaders: { id: number; touched: number[] }[]): Uint8Array {
 }
 
 let db: Db;
-// What arclamp has, and how long it takes to say.
+// What arclamp has.
 let scene: ShaderDescriptor[];
-let slow: Promise<void> | null;
 let on: EventHandlers;
 let feed: SceneFeedSource;
 
 const arclamp = {
-  scene: async () => {
-    const now = scene;
-    await slow;
-    return now;
-  },
   shader: async (id: number) => {
     const d = scene.find((n) => n.id === id);
     if (!d) throw new ArclampError(404, "not_found", "no such shader");
@@ -66,15 +60,32 @@ const arclamp = {
   },
 };
 
+// arclamp taking vibes' changes, saying nothing of them until its events do
+// (or it's asked: a test says what it has after a mute, mask or move).
+const writes = {
+  ...arclamp,
+  createShader: async (script: string) => {
+    const d = shader(9, script, { position: 9 });
+    scene = [...scene, d];
+    return d;
+  },
+  setScript: async (id: number, script: string) => shader(id, script),
+  mergeRoomtone: async () => ({ ...roomtone, template: { lights: { "1": { brightness: 0.2 } } } }),
+  setMuted: async () => {},
+  setMask: async () => {},
+  moveShader: async () => {},
+  deleteShader: async (id: number) => void (scene = scene.filter((n) => n.id !== id)),
+  clearScene: async () => {},
+} as unknown as Arclamp;
+
 beforeEach(() => {
   db = openDb(":memory:");
   scene = [roomtone];
-  slow = null;
 });
 afterEach(() => feed.stop());
 
 const start = (instances: () => Instances | null = () => null) => {
-  feed = createSceneFeed({ config, db, arclamp, follow: (handlers) => ((on = handlers), { stop() {} }), layout: async () => layout, instances });
+  feed = createSceneFeed({ config, db, arclamp, follow: (handlers) => ((on = handlers), { stop() {} }), layout: async () => layout, instances, confirmMs: 30 });
 };
 const snapshot = () => on.event("snapshot", JSON.stringify(scene.map(sent)), null);
 const changed = (n: ShaderDescriptor) => on.event("shader", JSON.stringify(sent(n)), null);
@@ -175,31 +186,46 @@ describe("the scene feed", () => {
     expect(db.instances().map((i) => i.id)).toEqual(["i2"]);
   });
 
-  it("reads the scene back at once, when vibes has changed it, unless events overtake the read", async () => {
-    scene = [roomtone, shader(3, "one")];
+  it("shows what vibes changes at once, ahead of arclamp's events, which have the last word", async () => {
+    scene = [roomtone, shader(1, "one"), shader(2, "two"), shader(3, "three")];
     start();
     snapshot();
     await settle();
-    scene = [roomtone, shader(3, "one", { muted: true })];
-    expect((await feed.refresh())!.nodes[1]!.muted).toBe(true);
+    const room = feed.noting(writes);
+    const order = (f: SceneFeed) => f.nodes.filter((n) => n.type === "js").map((n) => `${n.id}@${n.position}`);
 
-    // A read of it unmuted, overtaken by the event of it muted again.
-    scene = [roomtone, shader(3, "one")];
-    let answer = () => {};
-    slow = new Promise((r) => (answer = r));
-    const reading = feed.refresh();
-    changed(shader(3, "one", { muted: true }));
-    answer();
-    expect((await reading)!.nodes[1]!.muted).toBe(true);
+    await room.setMuted(2, true);
+    await room.setMask(3, [6, 5, 5]);
+    await room.moveShader(3, 1);
+    let f = (await feed.now())!;
+    expect(f.nodes.find((n) => n.id === 2)!.muted).toBe(true);
+    expect(f.nodes.find((n) => n.id === 3)!.mask).toEqual([5, 6]);
+    expect(order(f)).toEqual(["3@1", "1@2", "2@3"]);
+
+    // arclamp put it somewhere else after all (someone else moving shaders at
+    // once): its events say so for 2 and 3, and 1, which no event says
+    // anything of, is asked after.
+    changed(shader(3, "three", { position: 3, mask: [5, 6] }));
+    changed(shader(2, "two", { position: 2, muted: true }));
+    await settle();
+    await settle();
+    expect(order(now())).toEqual(["1@1", "2@2", "3@3"]);
+
+    await room.setMask(3, []);
+    await room.mergeRoomtone({ lights: { "1": { brightness: 0.2 } } });
+    await room.createShader("nine");
+    await room.deleteShader(1);
+    f = (await feed.now())!;
+    expect(f.nodes.find((n) => n.id === 3)).not.toHaveProperty("mask");
+    expect(f.nodes[0]!.template).toEqual({ lights: { "1": { brightness: 0.2 } } });
+    expect(f.nodes.find((n) => n.id === 9)!.scriptHash).toBe(sha("nine"));
+    expect(feed.scripts().get(sha("nine"))).toBe("nine");
+    expect(f.nodes.map((n) => n.id)).not.toContain(1);
   });
 
-  it("keeps the last scene while arclamp's away", async () => {
-    scene = [roomtone, shader(3, "one")];
+  it("shows nothing of vibes' changes before it's heard the whole scene", async () => {
     start();
-    snapshot();
-    await settle();
-    slow = Promise.reject(new Error("down"));
-    slow.catch(() => {});
-    expect((await feed.refresh())!.nodes.map((n) => n.id)).toEqual([0, 3]);
+    await feed.noting(writes).setMuted(3, true);
+    expect(await feed.now()).toBeNull();
   });
 });

@@ -7,9 +7,12 @@
 // once, for its stamp and for the preview (which fetches the ones it needs,
 // by hash: /api/scene/scripts). So it's small.
 //
-// After vibes changes the scene itself, it reads it back at once (refresh),
-// so whoever changed it sees their change straight away rather than when its
-// event comes; a read that events overtook is dropped, as older than they are.
+// What vibes changes in the scene itself (through noting(arclamp), which
+// every route writes through) is shown at once, to every browser, as it's
+// made: arclamp only looks for changes to send ten times a second, so its
+// event comes up to a tenth of a second later. When it does, it has the last
+// word. A shader shown changed that no event confirms (a move arclamp made
+// differently, with someone else moving shaders at once) is asked after.
 //
 // A footprint is every light a shader has changed since its script last did,
 // before its mask or mute: where its code lights. Each frame of the light
@@ -38,17 +41,21 @@ const FOOTPRINT_WRITE_MS = 1000;
 const LAYOUT_RETRY_MS = 10_000;
 // Light stream messages kept until the layout comes: a couple of seconds' worth.
 const MAX_EARLY = 200;
+// A shader vibes changed is asked after if no event's said how it is by then.
+const CONFIRM_MS = 500;
 
 export interface FeedDeps {
   config: Config;
   db: Db;
-  arclamp: Pick<Arclamp, "scene" | "shader">;
+  /** For scripts the events leave out, and whether a shader's there. */
+  arclamp: Pick<Arclamp, "shader">;
   /** Follows arclamp's scene events (event-stream.ts, on /v1/scene/events). */
   follow: (on: EventHandlers) => Following;
   /** The lights, in arclamp's order: what the light stream's touched bits are over. */
   layout: () => Promise<LightsResponse>;
   /** Instances, while sketches are on. */
   instances?: () => Instances | null;
+  confirmMs?: number;
 }
 
 /**
@@ -62,12 +69,10 @@ const keep = ({ script: _script, changing: _changing, ...rest }: ShaderDescripto
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 const sorted = (ids: Iterable<number>) => [...ids].sort((a, b) => a - b);
 
-export function createSceneFeed({ config, db, arclamp, follow, layout, instances = () => null }: FeedDeps) {
+export function createSceneFeed({ config, db, arclamp, follow, layout, instances = () => null, confirmMs = CONFIRM_MS }: FeedDeps) {
   const shaders = new Map<number, Kept>();
-  // Whether it's been told (or read) the whole scene yet.
+  // Whether it's been told the whole scene yet.
   let whole = false;
-  // How many events it's heard, so a read they overtook can tell.
-  let heard = 0;
   // Scripts by hash, and the sketch each was built from (by its stamp).
   const scripts = new Map<string, string>();
   const sketches = new Map<string, ShaderSketch | undefined>();
@@ -76,6 +81,9 @@ export function createSceneFeed({ config, db, arclamp, follow, layout, instances
     db.footprints().map((f) => [f.shaderId, { hash: f.scriptHash, lights: new Set(f.lights) }]),
   );
   const unwritten = new Set<number>();
+  // Shaders shown as vibes changed them, until an event says how they are: since when.
+  const unconfirmed = new Map<number, number>();
+  let confirming: ReturnType<typeof setTimeout> | undefined;
   const listeners = new Set<(feed: SceneFeed, json: string) => void>();
   let latest: { feed: SceneFeed; json: string } | null = null;
   let lights: LightsResponse | null = null;
@@ -146,7 +154,8 @@ export function createSceneFeed({ config, db, arclamp, follow, layout, instances
     if (!whole) return;
     await fetchScripts();
     const live = instances();
-    const byShader = new Map(db.instances().flatMap((i) => (i.shader_id !== null && i.state === "live" ? [[i.shader_id, i] as const] : [])));
+    // Each instance whose shader's in the scene goes with it (however far its going in has got).
+    const byShader = new Map(db.instances().flatMap((i) => (i.shader_id !== null && shaders.has(i.shader_id) ? [[i.shader_id, i] as const] : [])));
     const inUse = new Set<string>();
     const nodes: SceneNode[] = [...shaders.values()]
       .sort((a, b) => a.position - b.position)
@@ -169,8 +178,8 @@ export function createSceneFeed({ config, db, arclamp, follow, layout, instances
       scripts.delete(hash);
       sketches.delete(hash);
     }
-    // Not in the room yet: building, couldn't go in, or just put in and its shader not heard of yet.
-    const pending = live ? db.instances().filter((i) => i.state !== "live" || i.shader_id === null || !shaders.has(i.shader_id)).map((i) => live.view(i)) : [];
+    // The rest aren't in the room yet: building, couldn't go in, or just put in and their shader not heard of yet.
+    const pending = live ? db.instances().filter((i) => i.shader_id === null || !shaders.has(i.shader_id)).map((i) => live.view(i)) : [];
     const feed: SceneFeed = { nodes, pending };
     const json = JSON.stringify(feed);
     if (json === latest?.json) return;
@@ -208,27 +217,149 @@ export function createSceneFeed({ config, db, arclamp, follow, layout, instances
   const following = follow({
     event(name, data) {
       if (name === "snapshot") {
-        heard++;
         shaders.clear();
+        unconfirmed.clear();
         for (const n of JSON.parse(data) as ShaderDescriptor[]) shaders.set(n.id, keep(n));
         whole = true;
         void sweep();
         gather();
       } else if (name === "shader") {
-        heard++;
         const n = keep(JSON.parse(data) as ShaderDescriptor);
-        const was = shaders.get(n.id);
-        shaders.set(n.id, n);
-        if (!was || JSON.stringify(was) !== JSON.stringify(n)) gather();
+        unconfirmed.delete(n.id);
+        if (put(n)) gather();
       } else if (name === "removed") {
-        heard++;
         const { id } = JSON.parse(data) as { id: number };
+        unconfirmed.delete(id);
         shaders.delete(id);
         gone(id);
         gather();
       }
     },
   });
+
+  function guessed(id: number) {
+    unconfirmed.set(id, Date.now());
+    if (!confirming && !stopped) confirming = setTimeout(confirm, confirmMs);
+  }
+  /** Asks arclamp how each shader is that's waited long enough for an event. */
+  async function confirm() {
+    confirming = undefined;
+    const due = [...unconfirmed].filter(([, at]) => Date.now() - at >= confirmMs).map(([id]) => id);
+    for (const id of due) unconfirmed.delete(id);
+    await Promise.all(
+      due.map(async (id) => {
+        try {
+          answered(await arclamp.shader(id), false);
+        } catch (err) {
+          if (!(err instanceof ArclampError && err.status === 404)) return;
+          shaders.delete(id);
+          gone(id);
+        }
+      }),
+    );
+    if (due.length > 0) gather();
+    if (unconfirmed.size > 0 && !stopped) confirming = setTimeout(confirm, confirmMs);
+  }
+
+  /** A shader as it is now; true if that's news. */
+  function put(n: Kept): boolean {
+    const was = shaders.get(n.id);
+    shaders.set(n.id, n);
+    return !was || JSON.stringify(was) !== JSON.stringify(n);
+  }
+
+  /**
+   * A shader's descriptor, as arclamp gave it (answering a change to it, or
+   * asked): its script, if it has one, learned. A change's answer waits for
+   * its event, as arclamp may have changed it again since.
+   */
+  function answered(d: ShaderDescriptor, change = true) {
+    const hash = d.type === "js" && d.script !== undefined ? learnScript(d.script) : undefined;
+    put({ ...keep(d), ...(hash ? { script_hash: hash } : {}) });
+    if (change) guessed(d.id);
+  }
+
+  /** Some of a shader changed, as vibes asked: muted, or its mask (none, if it's empty). */
+  function patch(id: number, change: Partial<Kept>) {
+    const n = shaders.get(id);
+    if (!n) return;
+    const next: Kept = { ...n, ...change };
+    if ("mask" in change && !change.mask?.length) delete next.mask;
+    put(next);
+    guessed(id);
+  }
+
+  /** A shader moved, as arclamp moves one: taken out, and put back in at `position` (1 to the last), the rest closing up around it. */
+  function move(id: number, position: number) {
+    const stack = [...shaders.values()].filter((n) => n.type !== "roomtone").sort((a, b) => a.position - b.position);
+    const moving = stack.findIndex((n) => n.id === id);
+    if (moving < 0) return;
+    const [n] = stack.splice(moving, 1);
+    stack.splice(Math.min(Math.max(position, 1), stack.length + 1) - 1, 0, n!);
+    stack.forEach((s, i) => {
+      if (s.position === i + 1) return;
+      put({ ...s, position: i + 1 });
+      guessed(s.id);
+    });
+  }
+
+  /**
+   * arclamp as vibes changes it, each change shown at once: the same client,
+   * its writes told to the feed as each one lands (ahead of its event). It's
+   * sent on with whatever comes in the same moment (putting an instance in is
+   * a shader made, masked and noted), and straight away to whoever asks (now).
+   */
+  function noting(a: Arclamp): Arclamp {
+    const then = <T>(change: () => void, value: T) => {
+      if (whole) {
+        change();
+        gather();
+      }
+      return value;
+    };
+    return {
+      ...a,
+      createShader: async (script) => {
+        const d = await a.createShader(script);
+        return then(() => answered(d), d);
+      },
+      setScript: async (id, script) => {
+        const d = await a.setScript(id, script);
+        return then(() => answered(d), d);
+      },
+      mergeRoomtone: async (template) => {
+        const d = await a.mergeRoomtone(template);
+        return then(() => answered(d), d);
+      },
+      setMuted: async (id, muted) => then(() => patch(id, { muted }), await a.setMuted(id, muted)),
+      setMask: async (id, mask) => then(() => patch(id, { mask: sorted(new Set(mask)) }), await a.setMask(id, mask)),
+      moveShader: async (id, position) => then(() => move(id, position), await a.moveShader(id, position)),
+      deleteShader: async (id) => {
+        const out = () => {
+          shaders.delete(id);
+          gone(id);
+        };
+        try {
+          await a.deleteShader(id);
+        } catch (err) {
+          // Gone already is gone.
+          if (err instanceof ArclampError && err.status === 404) then(out, undefined);
+          throw err;
+        }
+        then(out, undefined);
+      },
+      clearScene: async () => {
+        await a.clearScene();
+        then(() => {
+          for (const n of [...shaders.values()]) {
+            if (n.type === "roomtone") continue;
+            shaders.delete(n.id);
+            gone(n.id);
+          }
+        }, undefined);
+      },
+    };
+  }
 
   // The light stream's messages that came before the layout did, to read once it has.
   let early: Uint8Array[] = [];
@@ -289,26 +420,15 @@ export function createSceneFeed({ config, db, arclamp, follow, layout, instances
     /** The scene as last made, if it's been made. */
     current: () => latest,
 
-    /** The scene read from arclamp now (unless events overtake the read), sent on if it's different. */
-    async refresh(): Promise<SceneFeed | null> {
-      const before = heard;
-      try {
-        const scene = await arclamp.scene();
-        if (heard === before) {
-          shaders.clear();
-          for (const n of scene) {
-            const hash = n.type === "js" && n.script !== undefined ? learnScript(n.script) : undefined;
-            shaders.set(n.id, { ...keep(n), ...(hash ? { script_hash: hash } : {}) });
-          }
-          whole = true;
-          await sweep();
-        }
-      } catch {
-        // arclamp's away: the scene as last heard stands (the banners say so).
-      }
+    /** The scene as vibes has it now: made (with any change vibes has just made, or is making), and sent on if it's different. */
+    async now(): Promise<SceneFeed | null> {
+      clearTimeout(gathering);
+      gathering = undefined;
       await build();
       return latest?.feed ?? null;
     },
+
+    noting,
 
     /** Each shader's script, by hash (for the preview). */
     scripts: () => scripts,
@@ -328,6 +448,7 @@ export function createSceneFeed({ config, db, arclamp, follow, layout, instances
       stopped = true;
       following.stop();
       clearTimeout(gathering);
+      clearTimeout(confirming);
       clearInterval(writing);
       write();
     },

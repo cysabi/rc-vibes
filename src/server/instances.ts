@@ -110,10 +110,12 @@ export function createInstances({ config, db, arclamp, builds, lightIds, changed
       if (!readStamp(build.script, config.signingKey)?.verified) return failed(id, "its stamp doesn't check out (was vibes' key changed?): put it in again");
       const mask = await outside(inst.home);
       const d = await arclamp.createShader(build.script);
+      // Its shader, noted at once, so the scene shows it as this instance (not someone else's shader) from the start.
+      db.updateInstance(id, { shader_id: d.id });
       // Masked at once: its sandbox takes longer than this to start, so it
       // never lights anything outside its home.
       if (mask.length > 0) await arclamp.setMask(d.id, mask);
-      db.updateInstance(id, { shader_id: d.id, state: "live", error: null });
+      db.updateInstance(id, { state: "live", error: null });
       db.log({ user: { id: inst.by_id, name: inst.by_name }, action: "shader.create", shaderId: d.id, shaderName: sketch.name, detail: { ...detail(build, sketch), home: inst.home.length } });
       changed();
     } catch (err) {

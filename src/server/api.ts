@@ -128,7 +128,7 @@ export function apiRoutes({ config, arclamp, db, relay, origins, lights, feed, s
     await next();
   });
   api.use("*", requireUser(config));
-  // Whatever's changed through vibes reaches the scene feed now, not on its next look.
+  // Whatever's changed through vibes outside arclamp (an instance, say) is made into the scene feed now too.
   api.use("*", async (c, next) => {
     await next();
     if (c.req.method !== "GET" && c.res.status < 400) feed.poke();
@@ -293,7 +293,7 @@ export function apiRoutes({ config, arclamp, db, relay, origins, lights, feed, s
         const send = (json: string) => stream.writeSSE({ event: "scene", data: json });
         let unsubscribe = () => {};
         stream.onAbort(() => unsubscribe());
-        const now = feed.current() ?? (await feed.refresh(), feed.current());
+        const now = feed.current() ?? (await feed.now(), feed.current());
         if (now) await send(now.json);
         unsubscribe = feed.subscribe((_feed, json) => void send(json).catch(() => {}));
         while (!stream.aborted) {
@@ -304,8 +304,8 @@ export function apiRoutes({ config, arclamp, db, relay, origins, lights, feed, s
       });
     })
 
-    // The scene feed, looked at again now: for a browser that's just changed it.
-    .get("/scene/live", async (c) => c.json(await feed.refresh()))
+    // The scene feed now, with whatever change vibes has just made in it: for a browser that's just changed it.
+    .get("/scene/live", async (c) => c.json(await feed.now()))
 
     // Shaders' scripts, by hash (?hashes=a,b), for the preview: the feed leaves them out.
     .get("/scene/scripts", (c) => {
