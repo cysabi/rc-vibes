@@ -1,5 +1,5 @@
 // One shader, in the selection panel in place of the selection: opened from
-// its row there (its arrow), and back to the selection with ‹. Whether it's
+// its row there (its ⋯), and back to the selection with ‹. Whether it's
 // on (on everywhere it can light, or off: muted or masked, it's all off),
 // anything that's become of it (failing, updating), where it's about (its
 // home, which it can move to the selection, or where its code's lit; ringed

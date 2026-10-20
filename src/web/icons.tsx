@@ -28,6 +28,15 @@ export const GripIcon = () => (
   </Svg>
 );
 
+/** Three dots in a row: more for something (its own panel, and what can be done to it). */
+export const MoreIcon = () => (
+  <Svg strokeWidth="0" fill="currentColor">
+    {[3.5, 8, 12.5].map((x) => (
+      <circle key={x} cx={x} cy="8" r="1.25" />
+    ))}
+  </Svg>
+);
+
 export const PlusIcon = () => (
   <Svg>
     <path d="M8 3v10M3 8h10" />

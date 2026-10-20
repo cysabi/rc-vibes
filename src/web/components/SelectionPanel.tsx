@@ -11,7 +11,7 @@
 // way in, or one you're adding. Each has a switch for whether it's on for
 // these lights and a handle to drag it to another place among them; both are
 // pending edits. (One that couldn't go in has neither.)
-// Each shader's arrow opens it in the panel in place of the selection
+// Each shader's ⋯ opens it in the panel in place of the selection
 // (ShaderPanel.tsx).
 
 import {
@@ -55,7 +55,7 @@ import {
   type LayerKey,
   type SwitchState,
 } from "../draft.ts";
-import { ChevronUpIcon, CloseIcon, GripIcon, OpenIcon, PlusIcon } from "../icons.tsx";
+import { ChevronUpIcon, CloseIcon, GripIcon, MoreIcon, PlusIcon } from "../icons.tsx";
 import { useFrames } from "../live.ts";
 import { useNarrow } from "../narrow.ts";
 import { useScene, type Scene } from "../scene.ts";
@@ -445,7 +445,7 @@ function SortableRow(props: RowProps) {
 }
 
 /**
- * A shader's stop on the rail: its name, what's become of it, its arrow to
+ * A shader's stop on the rail: its name, what's become of it, its ⋯ to
  * open it, a switch for whether it's on for these lights (off here leaves the
  * rest of the room as it is; on, for one that's off everywhere, is on for
  * just these), and, at the end, under room tone's chevron, a toggle for what
@@ -485,8 +485,8 @@ function RowParts({ row, onSwitch, onOpen, details, opened, onToggle }: RowProps
         </span>
         {layer.adding ? <AddingMeta adding={layer.adding} row={row} /> : meta && <span className="layer-meta">{meta}</span>}
       </span>
-      <button className="icon-button layer-open" aria-label={`Open ${layer.name}`} title={`Open ${layer.name}`} onClick={onOpen}>
-        <OpenIcon />
+      <button className="icon-button layer-open" aria-label={`More for ${layer.name}`} title={`More for ${layer.name}`} onClick={onOpen}>
+        <MoreIcon />
       </button>
       <button
         className={`switch ${state}`}
@@ -555,8 +555,8 @@ function FailedRow({ layer, onOpen }: { layer: Layer; onOpen: () => void }) {
           couldn't go in
         </span>
       </span>
-      <button className="icon-button layer-open" aria-label={`Open ${name}`} title={`Open ${name}`} onClick={onOpen}>
-        <OpenIcon />
+      <button className="icon-button layer-open" aria-label={`More for ${name}`} title={`More for ${name}`} onClick={onOpen}>
+        <MoreIcon />
       </button>
       <RowEnd />
     </li>
