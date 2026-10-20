@@ -1,6 +1,6 @@
 import { Hono } from "hono";
 import { afterEach, beforeEach, describe, expect, it, vi } from "vitest";
-import { authRoutes } from "./auth.ts";
+import { authRoutes, readSession } from "./auth.ts";
 import { loadConfig } from "./env.ts";
 
 const config = loadConfig({
@@ -111,5 +111,52 @@ describe("RC login", () => {
     const hall = new Jar();
     await get(hall, "https://vibes.hall.ly/auth/login?origin=https%3A%2F%2Fvibes.hall.ly");
     expect((await get(hall, `${CALLBACK}?code=c&state=other`)).status).toBe(400);
+  });
+});
+
+describe("device keys", () => {
+  const KEY = "k".repeat(40);
+  const withKeys = (keys: string) =>
+    loadConfig({
+      ARCLAMP_BASE_URL: "http://127.0.0.1:8080",
+      ARCLAMP_KEY: "arclamp-vibes-x",
+      SESSION_SECRET: "x".repeat(32),
+      RC_CLIENT_ID: "id",
+      RC_CLIENT_SECRET: "secret",
+      PUBLIC_URL: "https://vibes.hall.ly",
+      VIBES_DEVICE_KEYS: keys,
+    });
+  const appFor = (cfg: ReturnType<typeof loadConfig>) =>
+    new Hono()
+      .route("/auth", authRoutes(cfg))
+      .get("/me", async (c) => c.json(await readSession(c, cfg)));
+  const me = async (a: Hono, jar: Jar) => (await a.request("/me", { headers: { cookie: jar.header } })).json();
+
+  it("logs a device in with its key, and out when the key changes or goes", async () => {
+    const cfg = withKeys(`portal=${KEY}`);
+    const jar = new Jar();
+    const res = jar.take(await appFor(cfg).request(`/auth/device?key=${KEY}`));
+    expect(res.status).toBe(302);
+    expect(res.headers.get("location")).toBe("/");
+    expect(await me(appFor(cfg), jar)).toEqual({ id: "device:portal", name: "Portal", dev: false });
+
+    expect(await me(appFor(withKeys(`portal=${"j".repeat(40)}`)), jar)).toBeNull();
+    expect(await me(appFor(withKeys("")), jar)).toBeNull();
+  });
+
+  it("refuses a key it doesn't know", async () => {
+    const a = appFor(withKeys(`portal=${KEY}`));
+    expect((await a.request(`/auth/device?key=${"z".repeat(40)}`)).status).toBe(403);
+    expect((await a.request("/auth/device")).status).toBe(403);
+    expect((await appFor(withKeys("")).request(`/auth/device?key=${KEY}`)).status).toBe(403);
+  });
+
+  it("checks the keys it's given", () => {
+    expect(withKeys(`portal=${KEY}, kitchen=${"m".repeat(32)}`).deviceKeys.size).toBe(2);
+    expect(() => withKeys("portal=short")).toThrow(/32/);
+    expect(() => withKeys(`Portal=${KEY}`)).toThrow(/name=key/);
+    expect(() => withKeys(KEY)).toThrow(/name=key/);
+    expect(() => withKeys(`portal=${KEY},portal=${"m".repeat(32)}`)).toThrow(/twice/);
+    expect(() => withKeys(`portal=${KEY},kitchen=${KEY}`)).toThrow(/another/);
   });
 });

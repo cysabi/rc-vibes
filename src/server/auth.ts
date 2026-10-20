@@ -1,8 +1,10 @@
 // Login: Recurse Center OAuth (authorization code flow) in production, or a
 // pick-your-name dev login when VIBES_DEV_LOGIN=1. Sessions are signed
 // cookies holding the user's id and name; nothing is stored server-side.
+// Devices (a wall display) log in with a key of their own instead: see
+// VIBES_DEVICE_KEYS and /auth/device.
 
-import { randomBytes } from "node:crypto";
+import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import { parseSigned } from "hono/utils/cookie";
@@ -14,6 +16,8 @@ const SESSION_COOKIE = "vibes_session";
 const STATE_COOKIE = "vibes_oauth_state";
 const HANDOFF_COOKIE = "vibes_handoff";
 const SESSION_DAYS = 30;
+// A device has no one to log it in again; taking its key away logs it out.
+const DEVICE_SESSION_DAYS = 400;
 
 const RC_AUTHORIZE = "https://www.recurse.com/oauth/authorize";
 const RC_TOKEN = "https://www.recurse.com/oauth/token";
@@ -21,7 +25,31 @@ const RC_PROFILE = "https://www.recurse.com/api/v1/profiles/me";
 
 export type AuthEnv = { Variables: { user: Me } };
 
-const sessionSchema = z.object({ id: z.string(), name: z.string(), dev: z.boolean(), exp: z.number() });
+const sessionSchema = z.object({
+  id: z.string(),
+  name: z.string(),
+  dev: z.boolean(),
+  exp: z.number(),
+  /** A device's session: which of its keys it logged in with (keyId). */
+  key: z.string().optional(),
+});
+
+const sha256 = (s: string) => createHash("sha256").update(s).digest();
+
+/** Names a device key without giving it away, so changing the key ends its sessions. */
+function keyId(key: string) {
+  return sha256(`vibes device key\0${key}`).toString("hex").slice(0, 32);
+}
+
+/** The device this key belongs to, compared in constant time. */
+export function deviceForKey(config: Config, key: string): string | null {
+  const given = sha256(key);
+  let found: string | null = null;
+  for (const [name, expected] of config.deviceKeys) {
+    if (timingSafeEqual(given, sha256(expected))) found = name;
+  }
+  return found;
+}
 
 function cookieOptions(config: Config, maxAgeSeconds: number) {
   return {
@@ -33,9 +61,13 @@ function cookieOptions(config: Config, maxAgeSeconds: number) {
   };
 }
 
-async function startSession(c: Context, config: Config, user: Me) {
-  const maxAge = SESSION_DAYS * 24 * 60 * 60;
-  const value = JSON.stringify({ ...user, exp: Date.now() + maxAge * 1000 });
+async function startSession(c: Context, config: Config, user: Me, deviceKey?: string) {
+  const maxAge = (deviceKey ? DEVICE_SESSION_DAYS : SESSION_DAYS) * 24 * 60 * 60;
+  const value = JSON.stringify({
+    ...user,
+    exp: Date.now() + maxAge * 1000,
+    ...(deviceKey ? { key: keyId(deviceKey) } : {}),
+  });
   await setSignedCookie(c, SESSION_COOKIE, value, config.sessionSecret, cookieOptions(config, maxAge));
 }
 
@@ -60,6 +92,11 @@ function sessionOf(raw: string | false | undefined, config: Config): Me | null {
   if (!parsed.success || parsed.data.exp < Date.now()) return null;
   // A dev session must not outlive turning dev login off.
   if (parsed.data.dev && !config.devLogin) return null;
+  // A device's session ends when its key is changed or taken away.
+  if (parsed.data.id.startsWith("device:") || parsed.data.key !== undefined) {
+    const key = config.deviceKeys.get(parsed.data.id.slice("device:".length));
+    if (!key || !parsed.data.id.startsWith("device:") || parsed.data.key !== keyId(key)) return null;
+  }
   const { id, name, dev } = parsed.data;
   return { id, name, dev };
 }
@@ -163,6 +200,19 @@ export function authRoutes(config: Config) {
     deleteCookie(c, HANDOFF_COOKIE, { path: "/" });
     if (!handoff || handoff.exp < Date.now() || !nonce || nonce !== handoff.nonce) return failed(c);
     await startSession(c, config, handoff.user);
+    return c.redirect("/");
+  });
+
+  // A device logs in by opening /auth/device?key=<its key> once; its session
+  // lasts until the key changes. Any address works: each keeps its own cookie.
+  auth.get("/device", async (c) => {
+    const key = c.req.query("key") ?? "";
+    const device = key ? deviceForKey(config, key) : null;
+    if (!device) return c.text("That device key isn't one vibes knows.", 403);
+    const user: Me = { id: `device:${device}`, name: device.charAt(0).toUpperCase() + device.slice(1), dev: false };
+    await startSession(c, config, user, key);
+    // Off to / so the key leaves the address bar, and isn't sent on as a referrer.
+    c.header("Referrer-Policy", "no-referrer");
     return c.redirect("/");
   });
 

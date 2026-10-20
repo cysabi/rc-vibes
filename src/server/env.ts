@@ -15,6 +15,9 @@ const schema = z.object({
   RC_CLIENT_ID: z.string().min(1).optional(),
   RC_CLIENT_SECRET: z.string().min(1).optional(),
   VIBES_DEV_LOGIN: z.enum(["0", "1"]).default("0"),
+  // Comma-separated `name=key` pairs: devices (like a wall display) that log
+  // in with a key of their own instead of RC, at /auth/device?key=<key>.
+  VIBES_DEVICE_KEYS: z.string().default(""),
   DATABASE_PATH: z.string().min(1).default("vibes.db"),
   PORT: z.coerce.number().int().positive().default(8787),
   NODE_ENV: z.string().default("development"),
@@ -68,11 +71,30 @@ export interface Config {
   publicUrls: URL[];
   rc: { clientId: string; clientSecret: string } | null;
   devLogin: boolean;
+  /** Devices that log in with a key of their own (VIBES_DEVICE_KEYS), by name. */
+  deviceKeys: Map<string, string>;
   databasePath: string;
   port: number;
   production: boolean;
   /** Sketches and their boxes, or null while they're off (SKETCHES=0). */
   sketches: SketchesConfig | null;
+}
+
+function parseDeviceKeys(raw: string): Map<string, string> {
+  const keys = new Map<string, string>();
+  for (const entry of raw.split(",").map((s) => s.trim()).filter(Boolean)) {
+    const at = entry.indexOf("=");
+    const name = entry.slice(0, at).trim();
+    const key = entry.slice(at + 1).trim();
+    if (at < 0 || !/^[a-z0-9][a-z0-9-]{0,31}$/.test(name)) {
+      throw new Error("VIBES_DEVICE_KEYS: each entry is name=key, the name lowercase letters, digits and -");
+    }
+    if (key.length < 32) throw new Error(`VIBES_DEVICE_KEYS: ${name}'s key must be at least 32 characters`);
+    if (keys.has(name)) throw new Error(`VIBES_DEVICE_KEYS: ${name} is listed twice`);
+    if ([...keys.values()].includes(key)) throw new Error(`VIBES_DEVICE_KEYS: ${name}'s key is another device's too`);
+    keys.set(name, key);
+  }
+  return keys;
 }
 
 export function loadConfig(source: Record<string, string | undefined> = process.env): Config {
@@ -93,6 +115,7 @@ export function loadConfig(source: Record<string, string | undefined> = process.
   if (!rc && !devLogin) {
     throw new Error("set RC_CLIENT_ID and RC_CLIENT_SECRET (or VIBES_DEV_LOGIN=1 for local development)");
   }
+  const deviceKeys = parseDeviceKeys(env.VIBES_DEVICE_KEYS);
   let sketches: SketchesConfig | null = null;
   if (env.SKETCHES === "1") {
     if (!env.BOX_IMAGE) throw new Error("SKETCHES=1 needs BOX_IMAGE, the box image to run");
@@ -120,6 +143,7 @@ export function loadConfig(source: Record<string, string | undefined> = process.
     publicUrls: env.PUBLIC_URL.map((u) => new URL(u)),
     rc,
     devLogin,
+    deviceKeys,
     databasePath: env.DATABASE_PATH,
     port: env.PORT,
     production,

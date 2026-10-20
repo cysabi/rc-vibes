@@ -42,6 +42,7 @@ lighting system at the Recurse Center, served at `vibes.recurse.com`.
 | `SESSION_SECRET` | yes | ≥ 32 chars; signs login cookies |
 | `PUBLIC_URL` | prod | where people reach vibes, comma-separated, main one first, e.g. `https://vibes.hall.ly,https://vibes.recurse.com` |
 | `RC_CLIENT_ID`, `RC_CLIENT_SECRET` | prod | RC OAuth app; callback is `<main address>/auth/callback` |
+| `VIBES_DEVICE_KEYS` | no | `name=key,…`: devices that log in with a key (≥ 32 chars) instead of RC, by opening `/auth/device?key=<key>` once; they're `device:<name>`, can do what anyone can, and are logged out when their key changes or goes |
 | `VIBES_DEV_LOGIN` | no | `1` allows logging in as any name; refused when `NODE_ENV=production` |
 | `DATABASE_PATH` | no | SQLite file, default `vibes.db` |
 | `PORT` | no | default `8787` |
