@@ -3,8 +3,9 @@
 // room tone; sent whenever it's different. It's made from arclamp's scene,
 // followed as it changes (/v1/scene/events: the whole scene to start, then
 // each shader as it's added or changes, and each one removed), each shader
-// with its sketch (by its stamp), footprint and instance; and, on top, the
-// instances not in arclamp yet, on their way in (or that couldn't go in).
+// with its sketch (by its stamp), footprint and instance; and the instances
+// not in arclamp yet, on their way in (or that couldn't go in), each where
+// it's to go in: just above the shader it's to be above, or on top.
 // Each shader has vibes' key (shader-keys.ts), never arclamp's id. Scripts
 // are left out, as arclamp's events leave them out, saying which by hash:
 // vibes fetches each new one once, for its stamp and for the preview (which
@@ -29,13 +30,13 @@
 
 import { createHash } from "node:crypto";
 import { decodeTouched, lightsOf, type LightsResponse, type RoomTemplate, type ShaderDescriptor } from "../shared/arclamp.ts";
-import type { Instance, SceneFeed, Shader, ShaderSketch } from "../shared/vibes.ts";
+import type { SceneFeed, Shader, ShaderSketch } from "../shared/vibes.ts";
 import { ArclampError, type Arclamp } from "./arclamp.ts";
-import type { Db } from "./db.ts";
+import type { Db, InstanceRow } from "./db.ts";
 import type { Config } from "./env.ts";
 import type { EventHandlers, Following } from "./event-stream.ts";
 import type { Instances } from "./instances.ts";
-import { rclampKey } from "./shaders.ts";
+import { rclampKey, shaderOfKey } from "./shaders.ts";
 import { sketchOf } from "./stamp.ts";
 
 // Events that come together (a move shifts several shaders) go on as one.
@@ -195,31 +196,57 @@ export function createSceneFeed({ config, db, arclamp, follow, layout, instances
       sketches.delete(hash);
     }
     // The rest aren't in the room yet: building, couldn't go in, or just put
-    // in and their shader not heard of yet. They go in on top, the latest topmost.
-    const coming = live
-      ? db
-          .instances()
-          .filter((i) => i.shader_id === null || !shaders.has(i.shader_id))
-          .sort((a, b) => b.at - a.at)
-          .map((i) => comingOf(live.view(i)))
-      : [];
-    const feed: SceneFeed = { shaders: [...coming, ...inRoom], roomtone };
+    // in and their shader not heard of yet.
+    const coming = live ? db.instances().filter((i) => i.shader_id === null || !shaders.has(i.shader_id)) : [];
+    const feed: SceneFeed = { shaders: live ? stacked(inRoom, coming, live) : inRoom, roomtone };
     const json = JSON.stringify(feed);
     if (json === latest?.json) return;
     latest = { feed, json };
     for (const listener of listeners) listener(feed, json);
   }
 
-  /** An instance on its way in (or that couldn't go in), as a shader in the stack. */
-  function comingOf(i: Instance): Shader {
+  /**
+   * The shaders in the room (top first) with those on their way in among
+   * them, each where it's to go in: just above the one it's to be above (as
+   * instances.ts puts it there), or at the bottom; on top, the latest topmost,
+   * if it's to go on top or what it's to be above is gone.
+   */
+  function stacked(inRoom: Shader[], coming: InstanceRow[], live: Instances): Shader[] {
+    const latest = [...coming].sort((a, b) => b.at - a.at);
+    const keyOf = (key: string) => {
+      const it = shaderOfKey(db, key);
+      return it && (it.instance?.id ?? rclampKey(it.arclampId!));
+    };
+    const comingOf = (row: InstanceRow) => shaderOfInstance(row, live);
+    let stack = [...latest.filter((i) => i.above === null).map(comingOf), ...inRoom];
+    // Above one that's itself on its way in: placed once that is.
+    for (let waiting = latest.filter((i) => i.above !== null); waiting.length > 0; ) {
+      const still = waiting.filter((i) => {
+        const at = i.above === "" ? stack.length : stack.findIndex((s) => s.key === keyOf(i.above!));
+        if (at < 0) return true;
+        stack.splice(at, 0, comingOf(i));
+        return false;
+      });
+      if (still.length === waiting.length) {
+        stack = [...still.map(comingOf), ...stack];
+        break;
+      }
+      waiting = still;
+    }
+    return stack;
+  }
+
+  /** An instance on its way in (or that couldn't go in), as a shader in the stack, as it's wanted. */
+  function shaderOfInstance(row: InstanceRow, live: Instances): Shader {
+    const i = live.view(row);
     return {
       key: i.id,
       stage: i.state === "failed" ? "failed" : "building",
       name: i.sketchName ?? "Unknown sketch",
       state: null,
       error: i.error,
-      muted: false,
-      mask: [],
+      muted: row.muted,
+      mask: row.mask ?? [],
       sketch: { id: i.sketchId, name: i.sketchName, commit: i.commit, edited: false, deleted: db.sketch(i.sketchId)?.deleted_at != null },
       instance: i,
       by: i.by.name,
@@ -360,9 +387,13 @@ export function createSceneFeed({ config, db, arclamp, follow, layout, instances
     };
     return {
       ...a,
-      createShader: async (script) => {
-        const d = await a.createShader(script);
-        return then(() => answered(d), d);
+      // Put in at a position, the rest above it move up.
+      createShader: async (script, position) => {
+        const d = await a.createShader(script, position);
+        return then(() => {
+          answered(d);
+          move(d.id, d.position);
+        }, d);
       },
       setScript: async (id, script) => {
         const d = await a.setScript(id, script);

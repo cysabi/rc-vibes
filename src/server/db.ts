@@ -164,6 +164,10 @@ export function openDb(path: string) {
   if (!instanceColumns.some((c) => c.name === "branch")) db.exec("ALTER TABLE instances ADD COLUMN branch TEXT NOT NULL DEFAULT 'main'");
   // The key the browser sent with it (its pending edit's), so the same edit sent again is the same instance.
   if (!instanceColumns.some((c) => c.name === "client_key")) db.exec("ALTER TABLE instances ADD COLUMN client_key TEXT");
+  // What's wanted of it before it's in the room, to go in that way: muted, its whole mask, and its place.
+  if (!instanceColumns.some((c) => c.name === "muted")) {
+    db.exec("ALTER TABLE instances ADD COLUMN muted INTEGER NOT NULL DEFAULT 0; ALTER TABLE instances ADD COLUMN mask TEXT; ALTER TABLE instances ADD COLUMN above TEXT");
+  }
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS instances_by_client_key ON instances (by_id, client_key)");
 
   const selectPlacements = db.prepare("SELECT light_id, mm_x, mm_y, floor, rail_id, mm_along FROM placements");
@@ -218,7 +222,7 @@ export function openDb(path: string) {
   const selectBuilding = db.prepare("SELECT * FROM builds WHERE state = 'building'");
   const updateBuild = db.prepare("UPDATE builds SET state = ?, finished_at = ?, plan = ?, error = ?, log = ?, script = ? WHERE id = ? AND state = 'building'");
   const insertInstance = db.prepare(
-    "INSERT INTO instances (id, sketch_id, branch, build_id, home, shader_id, state, error, next_build_id, by_id, by_name, at, client_key) VALUES (?, ?, ?, ?, ?, NULL, 'building', NULL, NULL, ?, ?, ?, ?)",
+    "INSERT INTO instances (id, sketch_id, branch, build_id, home, shader_id, state, error, next_build_id, by_id, by_name, at, client_key, muted, mask, above) VALUES (?, ?, ?, ?, ?, NULL, 'building', NULL, NULL, ?, ?, ?, ?, ?, ?, ?)",
   );
   const selectInstanceOfKey = db.prepare("SELECT * FROM instances WHERE by_id = ? AND client_key = ?");
   const selectInstance = db.prepare("SELECT * FROM instances WHERE id = ?");
@@ -440,8 +444,24 @@ export function openDb(path: string) {
     },
 
     /** A new instance, building: from main, unless it says otherwise. */
-    addInstance(i: Pick<InstanceRow, "id" | "sketch_id" | "build_id" | "home" | "by_id" | "by_name" | "at"> & { branch?: string; client_key?: string | null }) {
-      insertInstance.run(i.id, i.sketch_id, i.branch ?? "main", i.build_id, JSON.stringify(i.home), i.by_id, i.by_name, i.at, i.client_key ?? null);
+    addInstance(
+      i: Pick<InstanceRow, "id" | "sketch_id" | "build_id" | "home" | "by_id" | "by_name" | "at"> &
+        Partial<Pick<InstanceRow, "branch" | "client_key" | "muted" | "mask" | "above">>,
+    ) {
+      insertInstance.run(
+        i.id,
+        i.sketch_id,
+        i.branch ?? "main",
+        i.build_id,
+        JSON.stringify(i.home),
+        i.by_id,
+        i.by_name,
+        i.at,
+        i.client_key ?? null,
+        i.muted ? 1 : 0,
+        i.mask ? JSON.stringify(i.mask) : null,
+        i.above ?? null,
+      );
     },
 
     /** The instance someone put in with a key of theirs, if there is one. */
@@ -456,10 +476,12 @@ export function openDb(path: string) {
     instanceOfShader: (shaderId: number) => instanceOf(selectInstanceOfShader.get(shaderId)),
 
     /** Changes some of an instance. */
-    updateInstance(id: string, patch: Partial<Pick<InstanceRow, "build_id" | "home" | "shader_id" | "state" | "error" | "next_build_id">>) {
+    updateInstance(id: string, patch: Partial<Pick<InstanceRow, "build_id" | "home" | "shader_id" | "state" | "error" | "next_build_id" | "muted" | "mask" | "above">>) {
       const cols = Object.keys(patch) as (keyof typeof patch)[];
       if (cols.length === 0) return;
-      const values = cols.map((c) => (c === "home" ? JSON.stringify(patch.home) : (patch[c] ?? null)));
+      const values = cols.map((c) =>
+        c === "home" || c === "mask" ? (patch[c] ? JSON.stringify(patch[c]) : null) : c === "muted" ? (patch.muted ? 1 : 0) : (patch[c] ?? null),
+      );
       db.prepare(`UPDATE instances SET ${cols.map((c) => `${c} = ?`).join(", ")} WHERE id = ?`).run(...(values as (string | number | null)[]), id);
     },
 
@@ -552,14 +574,22 @@ export interface InstanceRow {
   by_name: string;
   /** When it was put in, in ms. */
   at: number;
+  /**
+   * What's wanted of it until it's in the room, to go in that way: muted, its
+   * whole mask (null: every light outside its home), and its place, just
+   * above the shader with this key ("" the bottom; null the top).
+   */
+  muted: boolean;
+  mask: number[] | null;
+  above: string | null;
 }
 
-type RawInstance = Omit<InstanceRow, "home"> & { home: string };
+type RawInstance = Omit<InstanceRow, "home" | "muted" | "mask"> & { home: string; muted: number; mask: string | null };
 
 function instanceOf(raw: unknown): InstanceRow | undefined {
   if (!raw) return undefined;
   const r = raw as RawInstance;
-  return { ...r, home: JSON.parse(r.home) as number[] };
+  return { ...r, home: JSON.parse(r.home) as number[], muted: r.muted === 1, mask: r.mask ? (JSON.parse(r.mask) as number[]) : null };
 }
 
 export type Db = ReturnType<typeof openDb>;

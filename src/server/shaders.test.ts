@@ -134,9 +134,19 @@ describe("shaders, by key", () => {
     expect(db.activity(1)[0]).toMatchObject({ action: "shader.mask", shaderName: "Warm wave" });
   });
 
-  it("can't be changed before they're in the room, or if there's no such shader", async () => {
-    const id = await putIn([1], false);
-    expect((await send("POST", `/shaders/${id}/muted`, { muted: true })).status).toBe(409);
+  it("not in the room yet, keep what's wanted of them, to go in that way", async () => {
+    const id = await putIn([1, 2], false);
+    expect((await send("POST", `/shaders/${id}/muted`, { muted: true })).status).toBe(204);
+    expect((await send("POST", `/shaders/${id}/mask`, { mask: [2] })).status).toBe(204);
+    expect(db.instance(id)).toMatchObject({ muted: true, mask: [2, 3, 4] });
+    expect(calls).toEqual([]);
+    expect(db.activity(2).map((a) => [a.action, a.shaderId, a.shaderName])).toEqual([
+      ["shader.mask", null, "Warm wave"],
+      ["shader.mute", null, "Warm wave"],
+    ]);
+  });
+
+  it("can't be changed if there's no such shader", async () => {
     expect((await send("POST", "/shaders/nope/muted", { muted: true })).status).toBe(404);
     expect((await send("POST", "/shaders/rclamp-99/muted", { muted: true })).status).toBe(404);
     // The room tone isn't one of the stack's.
@@ -186,6 +196,19 @@ describe("the stack", () => {
     expect((await send("PUT", "/stack", { order: [building, "rclamp-10", "rclamp-99", "rclamp-11", "nope", "rclamp-10"] })).status).toBe(204);
     // 12 and 13, not named, stay above.
     expect(stack()).toEqual(["11@1", "10@2", "12@3", "13@4"]);
+  });
+
+  it("places those not in yet: each just above the one under it, or at the bottom", async () => {
+    const id = await putIn([1], false);
+    db.addInstance({ id: "i2", sketch_id: SKETCH, build_id: "b1", home: [1], by_id: ada.id, by_name: ada.name, at: 1 });
+    expect((await send("PUT", "/stack", { order: ["rclamp-12", id, "rclamp-11", "rclamp-10", "i2"] })).status).toBe(204);
+    expect(db.instance(id)!.above).toBe("rclamp-11");
+    expect(db.instance("i2")!.above).toBe("");
+    expect(stack()).toEqual(["10@1", "11@2", "12@3"]);
+    // Above one that's an instance's: by its key.
+    expect((await send("PUT", "/stack", { order: ["i2", id, "rclamp-12", "rclamp-11", "rclamp-10"] })).status).toBe(204);
+    expect(db.instance("i2")!.above).toBe(id);
+    expect(db.instance(id)!.above).toBe("rclamp-12");
   });
 
   it("is reordered one at a time", async () => {

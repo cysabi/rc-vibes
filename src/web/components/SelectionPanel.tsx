@@ -7,10 +7,10 @@
 // exactly whole tags) and says what kinds of light are in it. Then what's on
 // these lights, as the room builds their light: room tone, then each shader
 // up the stack that's about any of them (its home, or where its code's lit),
-// joined by a rail as the light builds up through them, then any on their
-// way in, then any you're adding. Each in the room has a switch for whether
-// it's on for these lights and a handle to drag it to another place among
-// them; both are pending edits.
+// joined by a rail as the light builds up through them: in the room, on its
+// way in, or one you're adding. Each has a switch for whether it's on for
+// these lights and a handle to drag it to another place among them; both are
+// pending edits. (One that couldn't go in has neither.)
 // Each shader's arrow opens it in the panel in place of the selection
 // (ShaderPanel.tsx).
 
@@ -39,6 +39,7 @@ import { tagLabel } from "../../shared/tags.ts";
 
 import { useBranchHead, useLights, useStatus } from "../api.ts";
 import {
+  changeable,
   drafts,
   layerOf,
   layersOf,
@@ -104,8 +105,8 @@ export function SelectionPanel({ floor, here, selected, shader, onShader, onClos
 
   // What's on these lights, bottom of the stack first: each shader whose
   // home (or, with none, where its code has lit: reachOf) takes in any of
-  // them, then any on its way in that's homed on any, then any you're adding.
-  // A row only moves if you move it. Its switch is whether it's on for these lights.
+  // them. A row only moves if you move it. Its switch is whether it's on for
+  // these lights.
   const scene = useScene();
   const lights = useLights();
   const draft = useDraft();
@@ -115,10 +116,7 @@ export function SelectionPanel({ floor, here, selected, shader, onShader, onClos
   const all = (lights.data?.lights ?? []).map((l) => l.id);
   const stack = layersOf(live, draft);
   const onThese = [...stack].reverse().filter((layer) => reachOf(layer).some((id) => selected.has(id)));
-  const rows: Row[] = onThese.filter((layer) => layer.stage === "live").map((layer) => ({ layer, state: switchState(layer, ids) }));
-  const coming = onThese.filter((layer) => layer.stage === "building" || layer.stage === "failed");
-  // Sketches you're adding (pending edits), on top.
-  const adding = onThese.flatMap((layer) => (layer.adding ? [layer.adding] : []));
+  const rows: Row[] = onThese.map((layer) => ({ layer, state: switchState(layer, ids) }));
 
   // The layer whose parameters are open under it, one at a time: room tone's, to start with.
   const [opened, setOpened] = useState<string | null>("roomtone");
@@ -146,7 +144,7 @@ export function SelectionPanel({ floor, here, selected, shader, onShader, onClos
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
-  const listed = rows.map((r) => r.layer.key);
+  const listed = rows.filter((r) => changeable(r.layer)).map((r) => r.layer.key);
   const onDragEnd = ({ active, over }: DragEndEvent) => {
     if (!over || active.id === over.id) return;
     const moved = arrayMove(listed, listed.indexOf(String(active.id)), listed.indexOf(String(over.id)));
@@ -334,27 +332,24 @@ export function SelectionPanel({ floor, here, selected, shader, onShader, onClos
                         </span>
                       </div>
                       <Reveal open={opened === "roomtone"}>
-                        <RoomToneEditor lights={chosen} template={template} over={rows.filter((r) => r.state !== "off").map((r) => r.layer.name)} />
+                        <RoomToneEditor lights={chosen} template={template} over={rows.filter((r) => r.state !== "off" && r.layer.script !== "").map((r) => r.layer.name)} />
                       </Reveal>
                     </li>
-                    {rows.map((row) => (
-                      <SortableRow
-                        key={row.layer.key}
-                        row={row}
-                        onSwitch={(on) => setOn(row, on)}
-                        onOpen={() => onShader(row.layer.key)}
-                        details={detailsOf(row.layer)}
-                        opened={opened === row.layer.key}
-                        onToggle={() => setOpened(opened === row.layer.key ? null : row.layer.key)}
-                      />
-                    ))}
-                    {/* On their way in, on top; then the ones you're adding. */}
-                    {coming.map((layer) => (
-                      <ComingRow key={layer.key} layer={layer} onOpen={() => onShader(layer.key)} />
-                    ))}
-                    {adding.map((a) => (
-                      <AddingRow key={a.key} adding={a} onOpen={() => onShader(a.key)} />
-                    ))}
+                    {rows.map((row) =>
+                      changeable(row.layer) ? (
+                        <SortableRow
+                          key={row.layer.key}
+                          row={row}
+                          onSwitch={(on) => setOn(row, on)}
+                          onOpen={() => onShader(row.layer.key)}
+                          details={detailsOf(row.layer)}
+                          opened={opened === row.layer.key}
+                          onToggle={() => setOpened(opened === row.layer.key ? null : row.layer.key)}
+                        />
+                      ) : (
+                        <FailedRow key={row.layer.key} layer={row.layer} onOpen={() => onShader(row.layer.key)} />
+                      ),
+                    )}
                     {/* And, last, room for another (while sketches are on). */}
                     {status.data?.sketches && (
                       <li className="layer add-row">
@@ -416,6 +411,9 @@ function SortableRow(props: RowProps) {
   const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: row.layer.key });
   const expandable = details !== null;
   const open = opened && expandable;
+  // Not in the room yet: on its way in, or yours to add (previewed once it's built).
+  const { stage, adding } = row.layer;
+  const coming = stage === "live" ? "" : stage === "adding" ? (adding?.build?.state === "built" ? " coming adding built" : " coming adding") : " coming";
   const head = (
     <>
       <button className="layer-grip" aria-label={`Move ${row.layer.name}`} {...attributes} {...listeners}>
@@ -427,7 +425,7 @@ function SortableRow(props: RowProps) {
   return (
     <li
       ref={setNodeRef}
-      className={`layer${row.state === "off" ? " off" : ""}${expandable ? " expandable" : ""}${open ? " open" : ""}${isDragging ? " dragging" : ""}`}
+      className={`layer${coming}${row.state === "off" ? " off" : ""}${expandable ? " expandable" : ""}${open ? " open" : ""}${isDragging ? " dragging" : ""}`}
       style={{ transform: CSS.Transform.toString(transform), transition }}
     >
       {expandable ? (
@@ -485,7 +483,7 @@ function RowParts({ row, onSwitch, onOpen, details, opened, onToggle }: RowProps
             </span>
           )}
         </span>
-        {meta && <span className="layer-meta">{meta}</span>}
+        {layer.adding ? <AddingMeta adding={layer.adding} row={row} /> : meta && <span className="layer-meta">{meta}</span>}
       </span>
       <button className="icon-button layer-open" aria-label={`Open ${layer.name}`} title={`Open ${layer.name}`} onClick={onOpen}>
         <OpenIcon />
@@ -511,32 +509,50 @@ function RowParts({ row, onSwitch, onOpen, details, opened, onToggle }: RowProps
   );
 }
 
+/** What its switch says, if it's not just on: on for some of these, or off (here, or everywhere). */
+const switchNote = ({ layer, state }: Row) => (state === "mixed" ? "on for some of these" : state === "off" ? (layer.muted ? "off" : "off here") : null);
+
 /** Under a shader's name: its commit (or branch), if it's a sketch's, and anything that's become of it. */
-function metaOf({ layer, state }: Row): string | null {
+function metaOf(row: Row): string | null {
+  const { layer } = row;
   const parts: string[] = [];
   const sketch = layer.sketch;
   const instance = layer.instance;
   if (sketch) parts.push(instance ? commitName(sketch.commit, instance.branch, instance.head) : sketch.commit.slice(0, 7));
-  const status = statusOf(layer);
+  if (layer.stage === "building") parts.push("building…");
+  const status = statusOf(layer) ?? switchNote(row);
   if (status) parts.push(status);
-  else if (state === "mixed") parts.push("on for some of these");
-  else if (state === "off") parts.push(layer.muted ? "off" : "off here");
   return parts.length > 0 ? parts.join(" · ") : null;
 }
 
-/** A shader on its way in, homed on some of these lights: building, or why it couldn't go in. */
-function ComingRow({ layer, onOpen }: { layer: Layer; onOpen: () => void }) {
+/** Under one you're adding: its build (building on the server, built, or why it couldn't), and its switch. */
+function AddingMeta({ adding, row }: { adding: Adding; row: Row }) {
+  const build = adding.build;
+  const head = useBranchHead(adding.sketchId, adding.branch);
+  const parts = [
+    build?.state === "failed"
+      ? `${adding.branch} · couldn't build`
+      : build?.state === "built"
+        ? `${commitName(build.commit, adding.branch, head)} · new here`
+        : `building ${adding.branch}…`,
+  ];
+  const note = switchNote(row);
+  if (note) parts.push(note);
+  return <span className={build?.state === "failed" ? "layer-meta bad" : "layer-meta"}>{parts.join(" · ")}</span>;
+}
+
+/** One that couldn't go in, homed on some of these lights, and why: nothing to switch or move. */
+function FailedRow({ layer, onOpen }: { layer: Layer; onOpen: () => void }) {
   const { name, instance } = layer;
-  const failed = layer.stage === "failed";
   return (
     <li className="layer coming">
       <span className="layer-grip" aria-hidden="true" />
       <span className="layer-node" aria-hidden="true" />
       <span className="layer-text">
         <span className="layer-name">{name}</span>
-        <span className={failed ? "layer-meta bad" : "layer-meta"}>
+        <span className="layer-meta bad">
           {instance ? `${commitName(instance.commit, instance.branch, instance.head)} · ` : ""}
-          {failed ? "couldn't go in" : "building…"}
+          couldn't go in
         </span>
       </span>
       <button className="icon-button layer-open" aria-label={`Open ${name}`} title={`Open ${name}`} onClick={onOpen}>
@@ -554,32 +570,6 @@ const RowEnd = () => (
     <span className="layer-chevron layer-end" aria-hidden="true" />
   </>
 );
-
-/** A sketch you're adding to these lights (a pending edit): building on the server, built (and previewed), or why it couldn't. */
-function AddingRow({ adding, onOpen }: { adding: Adding; onOpen: () => void }) {
-  const build = adding.build;
-  const head = useBranchHead(adding.sketchId, adding.branch);
-  const meta =
-    build?.state === "failed"
-      ? `${adding.branch} · couldn't build`
-      : build?.state === "built"
-        ? `${commitName(build.commit, adding.branch, head)} · new here`
-        : `building ${adding.branch}…`;
-  return (
-    <li className={build?.state === "built" ? "layer coming adding built" : "layer coming adding"}>
-      <span className="layer-grip" aria-hidden="true" />
-      <span className="layer-node" aria-hidden="true" />
-      <span className="layer-text">
-        <span className="layer-name">{adding.sketchName}</span>
-        <span className={build?.state === "failed" ? "layer-meta bad" : "layer-meta"}>{meta}</span>
-      </span>
-      <button className="icon-button layer-open" aria-label={`Open ${adding.sketchName}`} title={`Open ${adding.sketchName}`} onClick={onOpen}>
-        <OpenIcon />
-      </button>
-      <RowEnd />
-    </li>
-  );
-}
 
 /** What room tone sets these lights to: one lemtone (or on/off, for old bulbs) when they're alike, else "mixed". */
 function toneSummary(lights: LightInfo[], template: Record<string, Channels>): string {

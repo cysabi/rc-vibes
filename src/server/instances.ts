@@ -6,19 +6,23 @@
 //
 // An instance is a sketch put in the room from vibes, on a home: the lights
 // it was put on, from a branch (main, so far), at a commit (the branch's head
-// then, unless asked for another). It's here from the moment it's asked for,
-// building its commit (or using the build there is); once that's built, it's
-// a shader in arclamp, on top, masked off every light outside its home, so
-// its home is all it can ever light (its code still picks which of those it
-// does). Updating it builds a newer commit (its branch's head, unless asked
-// for another) and swaps that in once built, the old one running meanwhile.
-// Its home can move. Taking it out, or its shader going some other way, is
-// the end of it.
+// then, unless asked for another, or a build given). It's here from the moment
+// it's asked for, building its commit (or using the build there is); once
+// that's built, it's a shader in arclamp, masked off every light outside its
+// home, so its home is all it can ever light (its code still picks which of
+// those it does). Until then, what's wanted of it is kept (muted, its mask,
+// and its place, just above another shader, or on top), and it goes in that
+// way: its script stamped as this shader (stampAs), so it's found by its
+// stamp if vibes stops between putting it in and noting it. Updating it
+// builds a newer commit (its branch's head, unless asked for another) and
+// swaps that in once built, the old one running meanwhile. Its home can move.
+// Taking it out, or its shader going some other way, is the end of it.
 
 import { zValidator } from "@hono/zod-validator";
 import { Hono, type Context } from "hono";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
+import type { ShaderDescriptor } from "../shared/arclamp.ts";
 import type { Instance, Me, Person } from "../shared/vibes.ts";
 import type { Arclamp } from "./arclamp.ts";
 import type { AuthEnv } from "./auth.ts";
@@ -26,7 +30,8 @@ import { plainText, type Builds } from "./builds.ts";
 import type { BuildRow, Db, InstanceRow, SketchRow } from "./db.ts";
 import type { Config } from "./env.ts";
 import { branchHead, isBranchName } from "./git.ts";
-import { readStamp } from "./stamp.ts";
+import { shaderOfKey } from "./shaders.ts";
+import { readStamp, stampAs } from "./stamp.ts";
 
 const home = z.array(z.number().int()).min(1).max(2000);
 const branch = z.string().refine(isBranchName).default("main");
@@ -36,10 +41,13 @@ const refuse = (c: Context, status: Status, error: string, code: string) => c.js
 
 const detail = (b: BuildRow, s: SketchRow) => ({ sketch: s.id, commit: b.commit_sha, build: b.id });
 
+const sorted = (ids: Iterable<number>) => [...new Set(ids)].sort((a, b) => a - b);
+const sameIds = (a: Iterable<number>, b: Iterable<number>) => sorted(a).join() === sorted(b).join();
+
 export interface InstanceDeps {
   config: Config;
   db: Db;
-  arclamp: Pick<Arclamp, "shader" | "createShader" | "setScript" | "deleteShader" | "setMask">;
+  arclamp: Pick<Arclamp, "scene" | "shader" | "createShader" | "setScript" | "deleteShader" | "setMask" | "setMuted">;
   builds: Pick<Builds, "start" | "onFinish">;
   /** Every light arclamp has, by id. */
   lightIds: () => Promise<number[]>;
@@ -84,13 +92,65 @@ export function createInstances({ config, db, arclamp, builds, lightIds, changed
     changed();
   };
 
-  // Each instance is put in once, however many times it's asked.
+  // Each instance is put in once, however many times it's asked; and one at
+  // a time, so each goes where it's to go with those before it in already.
   const placing = new Set<string>();
+  let placed: Promise<void> = Promise.resolve();
+
+  /** What's wanted of an instance as it goes in: muted or not, and its whole mask. */
+  async function wanted(id: string) {
+    const inst = db.instance(id)!;
+    return { muted: inst.muted, mask: inst.mask ?? (await outside(inst.home)) };
+  }
+
+  /**
+   * Where a shader goes in, just above the one with the key `above` ("" the
+   * bottom): arclamp's position for it; undefined for the top, as when that
+   * shader's gone. One that isn't in yet stands for wherever it's to go.
+   */
+  function positionOf(above: string | null, scene: ShaderDescriptor[]): number | undefined {
+    const seen = new Set<string>();
+    for (let key = above; key !== null && !seen.has(key); ) {
+      if (key === "") return 1;
+      seen.add(key);
+      const it = shaderOfKey(db, key);
+      if (!it) return undefined;
+      if (it.arclampId !== null) {
+        const d = scene.find((s) => s.id === it.arclampId && s.type === "js");
+        return d && d.position + 1;
+      }
+      key = it.instance?.above ?? null;
+    }
+    return undefined;
+  }
+
+  /**
+   * A shader in arclamp, made as wanted: muted first, if it's to be, so it
+   * never runs where it shouldn't; else masked, then unmuted.
+   */
+  async function bringTo(d: ShaderDescriptor, want: { muted: boolean; mask: number[] }) {
+    if (want.muted && !d.muted) await arclamp.setMuted(d.id, true);
+    if (!sameIds(d.mask ?? [], want.mask)) await arclamp.setMask(d.id, want.mask);
+    if (!want.muted && d.muted) await arclamp.setMuted(d.id, false);
+  }
+
+  /** A just-placed instance's shader, with what's wanted of it, if that changed as it went in. */
+  async function catchUp(id: string): Promise<boolean> {
+    const inst = db.instance(id);
+    if (!inst || inst.shader_id === null) return false;
+    await bringTo(await arclamp.shader(inst.shader_id), await wanted(id));
+    return true;
+  }
 
   /** A building instance, into the room once its build is built (or failed, if it isn't). */
-  async function place(id: string) {
-    if (placing.has(id)) return;
+  function place(id: string): Promise<void> {
+    if (placing.has(id)) return placed;
     placing.add(id);
+    placed = placed.then(() => putIn(id)).finally(() => placing.delete(id));
+    return placed;
+  }
+
+  async function putIn(id: string) {
     try {
       const inst = db.instance(id);
       if (inst?.state !== "building") return;
@@ -99,21 +159,26 @@ export function createInstances({ config, db, arclamp, builds, lightIds, changed
       if (build.state !== "built" || !build.script) return;
       const sketch = db.sketch(inst.sketch_id);
       if (!sketch || sketch.deleted_at !== null) return failed(id, "its sketch was deleted");
-      if (!readStamp(build.script, config.signingKey)?.verified) return failed(id, "its stamp doesn't check out (was vibes' key changed?): put it in again");
-      const mask = await outside(inst.home);
-      const d = await arclamp.createShader(build.script);
+      const script = config.signingKey ? stampAs(build.script, id, config.signingKey) : null;
+      if (!script) return failed(id, "its stamp doesn't check out (was vibes' key changed?): put it in again");
+      const scene = await arclamp.scene();
+      // Put in already, by its stamp (vibes stopped before it noted its shader): that's it.
+      let d = scene.find((s) => {
+        const read = s.type === "js" && s.script !== undefined ? readStamp(s.script, config.signingKey) : null;
+        return read?.verified && read.stamp.shader === id;
+      });
+      d ??= await arclamp.createShader(script, positionOf(inst.above, scene));
       // Its shader, noted at once, so the scene shows it as this instance (not someone else's shader) from the start.
       db.updateInstance(id, { shader_id: d.id });
-      // Masked at once: its sandbox takes longer than this to start, so it
-      // never lights anything outside its home.
-      if (mask.length > 0) await arclamp.setMask(d.id, mask);
+      // Masked and muted at once (as wanted when it's noted: anything wanted
+      // after is caught up by want): its sandbox takes longer than this to
+      // start, so it never lights anything it shouldn't.
+      await bringTo(d, await wanted(id));
       db.updateInstance(id, { state: "live", error: null });
       db.log({ user: { id: inst.by_id, name: inst.by_name }, action: "shader.create", shaderId: d.id, shaderName: sketch.name, detail: { ...detail(build, sketch), home: inst.home.length } });
       changed();
     } catch (err) {
       failed(id, `couldn't put it in: ${(err as Error).message}`);
-    } finally {
-      placing.delete(id);
     }
   }
 
@@ -124,8 +189,13 @@ export function createInstances({ config, db, arclamp, builds, lightIds, changed
     const build = db.build(inst.next_build_id);
     if (!build || build.state === "building") return;
     if (build.state === "failed" || !build.script) return changed();
+    const script = config.signingKey ? stampAs(build.script, id, config.signingKey) : null;
+    if (!script) {
+      db.updateInstance(id, { next_build_id: null, error: "couldn't update it: its stamp doesn't check out (was vibes' key changed?)" });
+      return changed();
+    }
     try {
-      await arclamp.setScript(inst.shader_id, build.script);
+      await arclamp.setScript(inst.shader_id, script);
       db.updateInstance(id, { build_id: build.id, next_build_id: null, error: null });
       const sketch = db.sketch(inst.sketch_id);
       if (sketch) db.log({ user: { id: build.by_id, name: build.by_name }, action: "shader.edit", shaderId: inst.shader_id, shaderName: sketch.name, detail: detail(build, sketch) });
@@ -154,23 +224,46 @@ export function createInstances({ config, db, arclamp, builds, lightIds, changed
     return unknown === undefined ? null : `no light ${unknown}`;
   }
 
-  const sorted = (ids: Iterable<number>) => [...new Set(ids)].sort((a, b) => a - b);
-
-  type From = { branch: string; commit?: string };
+  type From = { branch: string; commit?: string; build?: string };
+  /** What's wanted of it as it goes in: muted, its mask (outside its home is added), its place. */
+  type Want = { muted?: boolean; mask?: number[]; above?: string | null };
   type Made = { instance: Instance } | Refusal;
 
-  async function make(sketchId: string, from: From, homeLights: number[], user: Me, key: string | null): Promise<Made> {
+  /** The build to put in: the one given, if it's this sketch's and didn't fail; else a commit's, or the branch head's. */
+  async function buildFor(sketchId: string, from: From, user: Me) {
+    const given = from.build ? db.build(from.build) : undefined;
+    if (given && given.sketch_id === sketchId && given.state !== "failed") return { id: given.id, building: given.state === "building" };
+    const started = await builds.start(sketchId, from.commit ?? from.branch, user);
+    if ("refused" in started) return started;
+    return { id: started.build.id, building: started.build.state === "building" };
+  }
+
+  async function make(sketchId: string, from: From, homeLights: number[], user: Me, key: string | null, want: Want): Promise<Made> {
     const sketch = db.sketch(sketchId);
     if (!sketch) return refusal("no such sketch", 404, "not_found");
     if (sketch.deleted_at !== null) return refusal("its sketch was deleted", 410, "deleted");
     const bad = await badHome(homeLights);
     if (bad) return refusal(bad, 400, "bad_home");
-    const started = await builds.start(sketchId, from.commit ?? from.branch, user);
-    if ("refused" in started) return refusal(started.refused, started.status, "cant_build");
+    const build = await buildFor(sketchId, from, user);
+    if ("refused" in build) return refusal(build.refused, build.status, "cant_build");
     const id = randomUUID();
-    db.addInstance({ id, sketch_id: sketchId, branch: from.branch, build_id: started.build.id, home: sorted(homeLights), by_id: user.id, by_name: user.name, at: Date.now(), client_key: key });
+    const home = sorted(homeLights);
+    db.addInstance({
+      id,
+      sketch_id: sketchId,
+      branch: from.branch,
+      build_id: build.id,
+      home,
+      by_id: user.id,
+      by_name: user.name,
+      at: Date.now(),
+      client_key: key,
+      muted: want.muted ?? false,
+      mask: sorted([...(want.mask ?? []), ...(await outside(home))]),
+      above: want.above ?? null,
+    });
     changed();
-    if (started.build.state !== "building") await place(id);
+    if (!build.building) await place(id);
     return { instance: view(db.instance(id)!) };
   }
 
@@ -186,16 +279,16 @@ export function createInstances({ config, db, arclamp, builds, lightIds, changed
      * With a key (the browser's, for its pending edit), it's put in once:
      * asked again with the same key, by the same person, it's the instance
      * that was made, so a browser that sends an edit twice can't put it in
-     * twice.
+     * twice. Muted, masked or placed as `want` says, if it says.
      */
-    async create(sketchId: string, from: From, homeLights: number[], user: Me, key?: string): Promise<Made> {
-      if (!key) return make(sketchId, from, homeLights, user, null);
+    async create(sketchId: string, from: From, homeLights: number[], user: Me, key?: string, want: Want = {}): Promise<Made> {
+      if (!key) return make(sketchId, from, homeLights, user, null, want);
       const made = db.instanceOfKey(user.id, key);
       if (made) return { instance: view(made) };
       const id = `${user.id}\0${key}`;
       const already = making.get(id);
       if (already) return already;
-      const putting = make(sketchId, from, homeLights, user, key).finally(() => making.delete(id));
+      const putting = make(sketchId, from, homeLights, user, key, want).finally(() => making.delete(id));
       making.set(id, putting);
       return putting;
     },
@@ -225,17 +318,40 @@ export function createInstances({ config, db, arclamp, builds, lightIds, changed
       const bad = await badHome(homeLights);
       if (bad) return refusal(bad, 400, "bad_home");
       const next = sorted(homeLights);
-      if (inst.state === "live" && inst.shader_id !== null) {
-        const wasMasked = new Set((await arclamp.shader(inst.shader_id)).mask ?? []);
-        const wasHome = new Set(inst.home);
-        const nowHome = new Set(next);
-        const mask = (await lightIds()).filter((l) => !nowHome.has(l) || (wasHome.has(l) && wasMasked.has(l)));
-        await arclamp.setMask(inst.shader_id, mask);
-      }
-      db.updateInstance(id, { home: next });
+      const live = inst.state === "live" && inst.shader_id !== null;
+      const wasMasked = new Set(live ? ((await arclamp.shader(inst.shader_id!)).mask ?? []) : (inst.mask ?? (await outside(inst.home))));
+      const wasHome = new Set(inst.home);
+      const nowHome = new Set(next);
+      const mask = (await lightIds()).filter((l) => !nowHome.has(l) || (wasHome.has(l) && wasMasked.has(l)));
+      // Not in yet, it goes in with it.
+      if (live) await arclamp.setMask(inst.shader_id!, mask);
+      db.updateInstance(id, { home: next, ...(live ? {} : { mask }) });
       db.log({ user, action: "shader.home", ...(inst.shader_id !== null ? { shaderId: inst.shader_id } : {}), shaderName: db.sketch(inst.sketch_id)?.name ?? null, detail: { lights: next.length } });
       changed();
       return { instance: view(db.instance(id)!) };
+    },
+
+    /**
+     * What's wanted of an instance that isn't in the room yet, kept to put it
+     * in that way: muted, or its whole mask (every light outside its home
+     * added). False if it's in (or gone) by now: then it's arclamp's to change.
+     */
+    async want(id: string, patch: { muted?: boolean; mask?: number[] }): Promise<boolean> {
+      const inst = db.instance(id);
+      if (!inst || inst.shader_id !== null) return false;
+      const mask = patch.mask && sorted([...patch.mask, ...(await outside(inst.home))]);
+      db.updateInstance(id, { ...(patch.muted !== undefined ? { muted: patch.muted } : {}), ...(mask ? { mask } : {}) });
+      changed();
+      // Gone in meanwhile, after place looked at what's wanted: caught up now.
+      return db.instance(id)?.shader_id === null || (await catchUp(id));
+    },
+
+    /** An instance that isn't in yet, to go just above the shader with this key ("" the bottom; null the top). */
+    setAbove(id: string, above: string | null) {
+      const inst = db.instance(id);
+      if (!inst || inst.shader_id !== null || inst.above === above) return;
+      db.updateInstance(id, { above });
+      changed();
     },
 
     /** An instance out of the room: its shader removed, if it's there, and it forgotten. */
@@ -283,12 +399,33 @@ export function instanceRoutes(instances: Instances) {
   return (
     new Hono<AuthEnv>()
       // A sketch, put in the room on the lights given (its home): from a
-      // branch (main, unless it says), at a commit (the branch's head, unless it says).
-      // With a key, put in once however often it's asked.
-      .post("/instances", zValidator("json", z.object({ sketch: z.string().min(1), branch, commit: z.string().min(1).optional(), home, key: z.string().min(1).max(100).optional() }), badInstance), async (c) => {
-        const { sketch, branch, commit, home, key } = c.req.valid("json");
-        return answer(c, await instances.create(sketch, { branch, ...(commit ? { commit } : {}) }, home, c.get("user"), key), 202);
-      })
+      // branch (main, unless it says), at a commit (the branch's head, unless
+      // it says), or as a build of it (the one previewed, built or building).
+      // With a key, put in once however often it's asked. Muted, masked, and
+      // just above another shader ("" the bottom), if it says; else on top.
+      .post(
+        "/instances",
+        zValidator(
+          "json",
+          z.object({
+            sketch: z.string().min(1),
+            branch,
+            commit: z.string().min(1).optional(),
+            build: z.string().min(1).max(100).optional(),
+            home,
+            key: z.string().min(1).max(100).optional(),
+            muted: z.boolean().optional(),
+            mask: z.array(z.number().int()).max(2000).optional(),
+            above: z.string().max(100).nullable().optional(),
+          }),
+          badInstance,
+        ),
+        async (c) => {
+          const { sketch, branch, commit, build, home, key, muted, mask, above } = c.req.valid("json");
+          const from = { branch, ...(commit ? { commit } : {}), ...(build ? { build } : {}) };
+          return answer(c, await instances.create(sketch, from, home, c.get("user"), key, { muted, mask, above }), 202);
+        },
+      )
 
       .post("/instances/:id/update", zValidator("json", z.object({ commit: z.string().min(1).optional() }), badInstance), async (c) => {
         return answer(c, await instances.update(c.req.param("id"), c.req.valid("json").commit, c.get("user")), 202);

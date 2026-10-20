@@ -1,6 +1,6 @@
 import { describe, expect, it } from "vitest";
 import { openDb } from "./db.ts";
-import { keyId, readStamp, sketchOf, stamp } from "./stamp.ts";
+import { keyId, readStamp, sketchOf, stamp, stampAs } from "./stamp.ts";
 
 const KEY = "k".repeat(32);
 const OTHER = "o".repeat(32);
@@ -50,6 +50,34 @@ describe("a stamp", () => {
     expect(() => stamp(BODY, { ...S, commit: "abc" }, KEY)).toThrow();
     expect(() => stamp(BODY, { ...S, sketch: "nope" }, KEY)).toThrow();
     expect(() => stamp(BODY, { ...S, builder: "1 sig=x" }, KEY)).toThrow();
+  });
+});
+
+describe("a shader's stamp (v2)", () => {
+  const SHADER = "3206740a-ca32-4097-b21a-53a95e996938";
+
+  it("names the shader too, and checks out, over the same code", () => {
+    const script = stampAs(stamp(BODY, S, KEY), SHADER, KEY)!;
+    expect(script.split("\n")[0]).toMatch(new RegExp(`^// vibes-stamp v2 sketch=${SKETCH} commit=${COMMIT} builder=1 shader=${SHADER} key=${keyId(KEY)} sig=`));
+    expect(script.endsWith(BODY)).toBe(true);
+    expect(readStamp(script, KEY)).toEqual({ stamp: { ...S, shader: SHADER }, verified: true });
+    // Stamped as another shader, from the same build: the build's own stamp stays v1.
+    expect(readStamp(stampAs(script, "0f4527e5-0000-4000-8000-000000000000", KEY)!, KEY)!.stamp.shader).toBe("0f4527e5-0000-4000-8000-000000000000");
+    expect(readStamp(stamp(BODY, S, KEY), KEY)!.stamp).not.toHaveProperty("shader");
+  });
+
+  it("can't be moved to another shader, or kept on edited code", () => {
+    const script = stampAs(stamp(BODY, S, KEY), SHADER, KEY)!;
+    const moved = script.replace(SHADER, "0f4527e5-0000-4000-8000-000000000000");
+    expect(readStamp(moved, KEY)!.verified).toBe(false);
+    expect(readStamp(`${script}x`, KEY)!.verified).toBe(false);
+  });
+
+  it("is only made over a stamp that checks out", () => {
+    expect(stampAs(BODY, SHADER, KEY)).toBeNull();
+    expect(stampAs(stamp(BODY, S, OTHER), SHADER, KEY)).toBeNull();
+    expect(stampAs(`${stamp(BODY, S, KEY)}x`, SHADER, KEY)).toBeNull();
+    expect(() => stamp(BODY, { ...S, shader: "rclamp-12" }, KEY)).toThrow();
   });
 });
 

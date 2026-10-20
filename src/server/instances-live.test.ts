@@ -7,7 +7,7 @@ import { openDb, type Db } from "./db.ts";
 import { loadConfig } from "./env.ts";
 import { createInstances, instanceRoutes, type Instances } from "./instances.ts";
 import { shaderRoutes } from "./shaders.ts";
-import { stamp } from "./stamp.ts";
+import { readStamp, stamp, stampAs } from "./stamp.ts";
 
 const KEY = "k".repeat(32);
 const ada: Me = { id: "rc:1", name: "Ada", dev: false };
@@ -25,6 +25,8 @@ let changes: number;
 let nextBuild: { id: string; commit: string; built: boolean };
 // What builds.start was asked to build: a branch, or a commit.
 let asked: string[];
+// What arclamp was asked to do to shaders' mutes and masks, in order.
+let calls: string[];
 
 const scriptOf = (commit: string) => stamp(`function update(p) { return p; } // ${commit}\n`, { sketch: SKETCH, commit, builder: "1" }, KEY);
 
@@ -56,8 +58,12 @@ beforeEach(() => {
       if (!d) throw Object.assign(new Error("no such shader"), { status: 404 });
       return d;
     },
-    createShader: async (script: string) => {
-      const d: ShaderDescriptor = { id: next++, type: "js", position: shaders.size + 1, script, state: "running", muted: false, created_by: "vibes", modified_by: "vibes" };
+    // As arclamp does: put in at `position` (on top without one), the rest above it moving up.
+    createShader: async (script: string, position?: number) => {
+      const stack = [...shaders.values()].sort((a, b) => a.position - b.position);
+      const at = Math.min(Math.max(position ?? stack.length + 1, 1), stack.length + 1);
+      for (const s of stack) if (s.position >= at) shaders.set(s.id, { ...s, position: s.position + 1 });
+      const d: ShaderDescriptor = { id: next++, type: "js", position: at, script, state: "running", muted: false, created_by: "vibes", modified_by: "vibes" };
       shaders.set(d.id, d);
       return d;
     },
@@ -66,13 +72,20 @@ beforeEach(() => {
       shaders.set(id, d);
       return d;
     },
-    setMask: async (id: number, mask: number[]) => void shaders.set(id, { ...shaders.get(id)!, mask }),
+    setMask: async (id: number, mask: number[]) => {
+      calls.push(`mask ${id} ${mask.join(",")}`);
+      shaders.set(id, { ...shaders.get(id)!, mask });
+    },
     deleteShader: async (id: number) => void shaders.delete(id),
     scene: async () => [...shaders.values()],
-    setMuted: async (id: number, muted: boolean) => void shaders.set(id, { ...shaders.get(id)!, muted }),
+    setMuted: async (id: number, muted: boolean) => {
+      calls.push(`muted ${id} ${muted}`);
+      shaders.set(id, { ...shaders.get(id)!, muted });
+    },
     moveShader: async () => {},
   };
   asked = [];
+  calls = [];
   const builds = {
     start: async (_sketch: string, rev: string, user: Me) => {
       asked.push(rev);
@@ -106,7 +119,9 @@ describe("an instance", () => {
     const inst = (await res.json()) as Instance;
     expect(inst).toMatchObject({ state: "live", home: [2, 3], commit: "a".repeat(40), sketchName: "Warm wave", by: { name: "Ada" } });
     const d = shaders.get(shaderOf(inst)!)!;
-    expect(d.script).toBe(scriptOf("a".repeat(40)));
+    // Its build's script, stamped as this shader.
+    expect(d.script).toBe(stampAs(scriptOf("a".repeat(40)), inst.id, KEY));
+    expect(readStamp(d.script!, KEY)).toMatchObject({ verified: true, stamp: { shader: inst.id } });
     expect(d.mask).toEqual([1, 4, 5, 6]);
     expect(db.activity(1)[0]).toMatchObject({ action: "shader.create", shaderName: "Warm wave" });
   });
@@ -183,10 +198,10 @@ describe("an instance", () => {
     nextBuild = { id: "b6", commit: "f".repeat(40), built: false };
     const updating = (await (await send("POST", `/instances/${inst.id}/update`, {})).json()) as Instance;
     expect(updating.next).toMatchObject({ commit: "f".repeat(40), state: "building" });
-    expect(shaders.get(shaderOf(inst)!)!.script).toBe(scriptOf("e".repeat(40)));
+    expect(shaders.get(shaderOf(inst)!)!.script).toBe(stampAs(scriptOf("e".repeat(40)), inst.id, KEY));
     done("b6");
     await settle();
-    expect(shaders.get(shaderOf(inst)!)!.script).toBe(scriptOf("f".repeat(40)));
+    expect(shaders.get(shaderOf(inst)!)!.script).toBe(stampAs(scriptOf("f".repeat(40)), inst.id, KEY));
     expect(instances.view(db.instance(inst.id)!)).toMatchObject({ commit: "f".repeat(40), next: null });
   });
 
@@ -213,5 +228,74 @@ describe("an instance", () => {
     expect(db.instances()).toEqual([]);
     // A shader that's no instance has no home to keep to.
     expect(await instances.within(42, [3])).toEqual([3]);
+  });
+
+  it("goes in as it's wanted meanwhile: muted before it's masked, and just above another shader", async () => {
+    shaders.set(10, { id: 10, type: "js", position: 1, script: "a", state: "running", muted: false, created_by: "x", modified_by: "x" });
+    shaders.set(11, { id: 11, type: "js", position: 2, script: "b", state: "running", muted: false, created_by: "x", modified_by: "x" });
+    nextBuild = { id: "b12", commit: "6".repeat(40), built: false };
+    const inst = (await (await send("POST", "/instances", { sketch: SKETCH, home: [1, 2, 3], muted: true, mask: [2], above: "rclamp-10" })).json()) as Instance;
+    expect(db.instance(inst.id)).toMatchObject({ muted: true, mask: [2, 4, 5, 6], above: "rclamp-10" });
+    // Wanted on after all, and off on 3 too.
+    expect(await instances.want(inst.id, { muted: false, mask: [2, 3] })).toBe(true);
+    done("b12");
+    await settle();
+    const d = shaders.get(shaderOf(inst)!)!;
+    expect(d.position).toBe(2);
+    expect(shaders.get(11)!.position).toBe(3);
+    expect(calls).toEqual([`mask ${d.id} 2,3,4,5,6`]);
+  });
+
+  it("going in muted, is muted first", async () => {
+    nextBuild = { id: "b13", commit: "7".repeat(40), built: true };
+    const inst = (await (await send("POST", "/instances", { sketch: SKETCH, home: [1], muted: true })).json()) as Instance;
+    expect(calls).toEqual([`muted ${shaderOf(inst)} true`, `mask ${shaderOf(inst)} 2,3,4,5,6`]);
+  });
+
+  it("goes in at the bottom, or above one still on its way in, where that's to go", async () => {
+    shaders.set(10, { id: 10, type: "js", position: 1, script: "a", state: "running", muted: false, created_by: "x", modified_by: "x" });
+    nextBuild = { id: "b14", commit: "8".repeat(40), built: false };
+    const under = (await (await send("POST", "/instances", { sketch: SKETCH, home: [1], above: "" })).json()) as Instance;
+    const over = (await (await send("POST", "/instances", { sketch: SKETCH, home: [1], above: under.id })).json()) as Instance;
+    // Not where it's to be above yet: where that's to go, the bottom.
+    done("b14");
+    await settle();
+    const stack = [...shaders.values()].sort((a, b) => a.position - b.position).map((d) => d.id);
+    expect(stack).toEqual([shaderOf(under), shaderOf(over), 10]);
+  });
+
+  it("is put in as the build given, built or building, rather than building again", async () => {
+    addBuild("given", "9".repeat(40), false);
+    nextBuild = { id: "other", commit: "0".repeat(40), built: true };
+    const inst = (await (await send("POST", "/instances", { sketch: SKETCH, home: [1], build: "given" })).json()) as Instance;
+    expect(inst).toMatchObject({ buildId: "given", state: "building" });
+    expect(asked).toEqual([]);
+    done("given");
+    await settle();
+    expect(shaders.get(shaderOf(inst)!)!.script).toBe(stampAs(scriptOf("9".repeat(40)), inst.id, KEY));
+    // One that failed is built again, from its branch.
+    addBuild("broken", "1".repeat(40), false);
+    done("broken", false);
+    await send("POST", "/instances", { sketch: SKETCH, home: [1], build: "broken" });
+    expect(asked).toEqual(["main"]);
+  });
+
+  it("put in just before vibes stopped, is found by its stamp, not put in again", async () => {
+    nextBuild = { id: "b15", commit: "2".repeat(40), built: false };
+    const inst = (await (await send("POST", "/instances", { sketch: SKETCH, home: [1] })).json()) as Instance;
+    const script = stampAs(scriptOf("2".repeat(40)), inst.id, KEY)!;
+    shaders.set(40, { id: 40, type: "js", position: 1, script, state: "running", muted: false, created_by: "vibes", modified_by: "vibes" });
+    done("b15");
+    await settle();
+    expect(shaderOf(inst)).toBe(40);
+    expect(shaders.size).toBe(1);
+    expect(shaders.get(40)!.mask).toEqual([2, 3, 4, 5, 6]);
+  });
+
+  it("moving home before it's in keeps the lights it's off on that stay in it", async () => {
+    nextBuild = { id: "b16", commit: "3".repeat(40), built: false };
+    const inst = (await (await send("POST", "/instances", { sketch: SKETCH, home: [1, 2, 3], mask: [2] })).json()) as Instance;
+    await send("PUT", `/instances/${inst.id}/home`, { home: [2, 3, 4] });
+    expect(db.instance(inst.id)!.mask).toEqual([1, 2, 5, 6]);
   });
 });

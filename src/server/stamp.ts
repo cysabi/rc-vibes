@@ -6,6 +6,12 @@
 //
 //   // vibes-stamp v1 sketch=<uuid> commit=<sha> builder=<version> key=<key id> sig=<HMAC-SHA256, base64url>
 //
+// A build is stamped v1. What goes in the room is stamped again, v2, naming
+// the shader it is too (its key, ShaderKey: its instance's id), so which
+// shader is which can be read from the room itself:
+//
+//   // vibes-stamp v2 sketch=<uuid> commit=<sha> builder=<version> shader=<uuid> key=<key id> sig=<…>
+//
 // The key id (the start of the key's SHA-256) lets the key be replaced: a
 // stamp made with another key can't be checked, so it isn't trusted.
 
@@ -20,26 +26,49 @@ export interface Stamp {
   commit: string;
   /** The version of the builder that made it. */
   builder: string;
+  /** The shader it is, in the room (v2): its key. */
+  shader?: string;
 }
 
 const SKETCH = "[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}";
 const COMMIT = "[0-9a-f]{40}";
 const BUILDER = "[A-Za-z0-9._-]{1,40}";
-const LINE = new RegExp(`^// vibes-stamp v1 sketch=(${SKETCH}) commit=(${COMMIT}) builder=(${BUILDER}) key=([0-9a-f]{8}) sig=([A-Za-z0-9_-]{43})\\n`);
+const SHADER = SKETCH;
+const SIGNED = `key=([0-9a-f]{8}) sig=([A-Za-z0-9_-]{43})\\n`;
+// The same groups in each: v1's shader is always empty.
+const V1 = new RegExp(`^// vibes-stamp v1 sketch=(${SKETCH}) commit=(${COMMIT}) builder=(${BUILDER})() ${SIGNED}`);
+const V2 = new RegExp(`^// vibes-stamp v2 sketch=(${SKETCH}) commit=(${COMMIT}) builder=(${BUILDER}) shader=(${SHADER}) ${SIGNED}`);
+const stampLine = (script: string) => V1.exec(script) ?? V2.exec(script);
 
 /** Which key a stamp was made with, without giving any of it away. */
 export const keyId = (key: string) => createHash("sha256").update(key).digest("hex").slice(0, 8);
 
 const signature = (key: string, s: Stamp, kid: string, body: string) =>
-  createHmac("sha256", key).update(`vibes-stamp v1\n${s.sketch}\n${s.commit}\n${s.builder}\n${kid}\n`).update(body).digest("base64url");
+  createHmac("sha256", key)
+    .update(s.shader ? `vibes-stamp v2\n${s.sketch}\n${s.commit}\n${s.builder}\n${s.shader}\n${kid}\n` : `vibes-stamp v1\n${s.sketch}\n${s.commit}\n${s.builder}\n${kid}\n`)
+    .update(body)
+    .digest("base64url");
 
 /** `body` (a built script) with a stamp on top. */
 export function stamp(body: string, s: Stamp, key: string): string {
   if (!new RegExp(`^${SKETCH}$`).test(s.sketch) || !new RegExp(`^${COMMIT}$`).test(s.commit) || !new RegExp(`^${BUILDER}$`).test(s.builder)) {
     throw new Error("a stamp needs a sketch's id, a commit's full hash and a builder's version");
   }
+  if (s.shader !== undefined && !new RegExp(`^${SHADER}$`).test(s.shader)) throw new Error("a stamp's shader is an instance's id");
   const kid = keyId(key);
-  return `// vibes-stamp v1 sketch=${s.sketch} commit=${s.commit} builder=${s.builder} key=${kid} sig=${signature(key, s, kid, body)}\n${body}`;
+  const fields = `sketch=${s.sketch} commit=${s.commit} builder=${s.builder}${s.shader ? ` shader=${s.shader}` : ""}`;
+  return `// vibes-stamp ${s.shader ? "v2" : "v1"} ${fields} key=${kid} sig=${signature(key, s, kid, body)}\n${body}`;
+}
+
+/**
+ * A built script, stamped again as the shader `shader` (v2), for the room;
+ * null if its stamp doesn't check out with this key.
+ */
+export function stampAs(script: string, shader: string, key: string): string | null {
+  const m = stampLine(script);
+  const read = readStamp(script, key);
+  if (!m || !read?.verified) return null;
+  return stamp(script.slice(m[0].length), { ...read.stamp, shader }, key);
 }
 
 /**
@@ -47,10 +76,10 @@ export function stamp(body: string, s: Stamp, key: string): string {
  * exactly the code under it. null for a script with no stamp.
  */
 export function readStamp(script: string, key: string | null): { stamp: Stamp; verified: boolean } | null {
-  const m = LINE.exec(script);
+  const m = stampLine(script);
   if (!m) return null;
-  const [line, sketch, commit, builder, kid, sig] = m as unknown as [string, string, string, string, string, string];
-  const s = { sketch, commit, builder };
+  const [line, sketch, commit, builder, shader, kid, sig] = m as unknown as [string, string, string, string, string | undefined, string, string];
+  const s: Stamp = { sketch, commit, builder, ...(shader ? { shader } : {}) };
   let verified = false;
   if (key && kid === keyId(key)) {
     const want = Buffer.from(signature(key, s, kid, script.slice(line.length)));

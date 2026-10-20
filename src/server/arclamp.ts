@@ -56,9 +56,10 @@ export function createArclamp(baseUrl: string, key: string) {
     shader: (id: number) => call<ShaderDescriptor>("GET", `/v1/shader/${id}`),
     lights: () => call<LightsResponse>("GET", "/v1/lights"),
     health: () => call<HealthResponse>("GET", "/v1/scene/health"),
-    // Appends after every other shader, so it renders last (on top).
-    createShader: (script: string) =>
-      call<ShaderDescriptor>("POST", "/v1/scene/shader", { type: "js", script, position: "bottom" }),
+    // Appends after every other shader, so it renders last (on top), unless
+    // given a position (1 the bottom; past the last is the top).
+    createShader: (script: string, position?: number) =>
+      call<ShaderDescriptor>("POST", "/v1/scene/shader", { type: "js", script, position: position ?? "bottom" }),
     setScript: (id: number, script: string) => call<ShaderDescriptor>("PUT", `/v1/shader/${id}`, { script }),
     deleteShader: (id: number) => call<void>("DELETE", `/v1/shader/${id}`),
     moveShader: (id: number, position: number) => call<void>("POST", `/v1/shader/${id}/position`, { position }),

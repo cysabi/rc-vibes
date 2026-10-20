@@ -6,7 +6,9 @@
 // A draft records only what you changed, on top of whatever is live, so
 // changes others make meanwhile still show through: room tone, each shader's
 // mute, mask and place in the stack, the shaders taken out of it, and the
-// sketches being put in (on top, each on its home, previewed once built).
+// sketches being put in (each on its home, previewed once built). A shader
+// on its way in, or one you're adding, is switched and moved like any other:
+// vibes puts it in that way.
 // It knows shaders by vibes' keys; which shader in arclamp each is, only
 // vibes' server knows.
 
@@ -60,6 +62,13 @@ export interface Adding {
 
 export const EMPTY: Draft = { roomtone: {}, roomtoneCode: null, edits: {}, order: null, removed: [], added: [] };
 
+// The shader each sketch you added became, by its key in the draft: so
+// what's open on one stays open on it, once it's in.
+const madeAs = new Map<LayerKey, ShaderKey>();
+
+/** A shader's key now: the shader a sketch you added became, if it's gone in. */
+export const keyNow = (key: LayerKey): LayerKey => madeAs.get(key) ?? key;
+
 // Built scripts of sketches being added, by build: kept here, not in the
 // draft, which is saved on every change (a room tone drag included).
 const addedScripts = new Map<string, string>();
@@ -96,7 +105,7 @@ export interface Layer {
 }
 
 /** A sketch being added, as a layer on top of the stack: for the preview (once built), and the list. */
-function layerOfAdding(a: Adding): Layer {
+function layerOfAdding(a: Adding, d: Draft): Layer {
   const script = a.build ? (addedScripts.get(a.build.id) ?? "") : "";
   const commit = a.build?.commit ?? "";
   const instance: Instance = {
@@ -115,8 +124,12 @@ function layerOfAdding(a: Adding): Layer {
     at: 0,
   };
   const sketch: ShaderSketch = { id: a.sketchId, name: a.sketchName, commit, edited: false, deleted: false };
-  return { key: a.key, stage: "adding", shader: null, name: a.sketchName, sketch, script, muted: false, mask: a.mask, by: "", instance, footprint: [], adding: a };
+  const patch = d.edits[a.key] ?? {};
+  return { key: a.key, stage: "adding", shader: null, name: a.sketchName, sketch, script, muted: patch.muted ?? false, mask: patch.mask ?? a.mask, by: "", instance, footprint: [], adding: a };
 }
+
+/** Whether a shader can be switched and moved: any but one that couldn't go in. */
+export const changeable = (layer: Pick<Layer, "stage">) => layer.stage !== "failed";
 
 /**
  * The lights a shader is about: its instance's home, or, with none (put in
@@ -196,8 +209,7 @@ export function templateOf(scene: Scene, d: Draft): Record<string, Channels> {
 }
 
 function layerOfShader(shader: SceneShader, d: Draft): Layer {
-  // Only one in the room can be changed, so far.
-  const patch = shader.stage === "live" ? (d.edits[shader.key] ?? {}) : {};
+  const patch = changeable(shader) ? (d.edits[shader.key] ?? {}) : {};
   return {
     key: shader.key,
     stage: shader.stage,
@@ -219,27 +231,25 @@ export function layerOf(scene: Scene, d: Draft, key: LayerKey): Layer | null {
   const shader = scene.shaders.find((s) => s.key === key);
   if (shader) return layerOfShader(shader, d);
   const adding = d.added.find((a) => a.key === key);
-  return adding ? layerOfAdding(adding) : null;
+  return adding ? layerOfAdding(adding, d) : null;
 }
 
-/** The shaders in the room, top first, as they are. */
-const liveKeys = (scene: Scene) => scene.shaders.filter((s) => s.stage === "live").map((s) => s.key);
+/** The stack as vibes has it, top first, without what the draft takes out. */
+const sceneKeys = (scene: Scene, d: Draft) => scene.shaders.map((s) => s.key).filter((k) => !d.removed.includes(k));
 
 /** The stack with the draft applied, top first: without the shaders it takes out. */
 export function layersOf(scene: Scene, d: Draft): Layer[] {
   const removed = new Set(d.removed);
-  const shaders = scene.shaders.filter((s) => !removed.has(s.key));
-  // On their way in (or that couldn't go in): over the room's, as vibes has them, not to be moved.
-  const coming = shaders.filter((s) => s.stage !== "live").map((s) => layerOfShader(s, d));
-  const layers = new Map(shaders.filter((s) => s.stage === "live").map((s) => [s.key, layerOfShader(s, d)]));
-  // Your order where you set one; anything that turned up live since keeps
-  // its live place relative to the top.
-  const live0 = [...layers.keys()];
-  const ordered = (d.order ?? live0).filter((k) => layers.has(k));
-  const missing = live0.filter((k) => !ordered.includes(k));
-  // Sketches being added go in on top, the latest topmost.
-  const adding = d.added.map(layerOfAdding).reverse();
-  return [...adding, ...coming, ...[...missing, ...ordered].map((k) => layers.get(k)!)];
+  const layers = new Map<LayerKey, Layer>();
+  // Sketches being added go in on top, the latest topmost (unless you moved them).
+  for (const a of [...d.added].reverse()) layers.set(a.key, layerOfAdding(a, d));
+  for (const s of scene.shaders) if (!removed.has(s.key)) layers.set(s.key, layerOfShader(s, d));
+  // Your order where you set one; anything that turned up since keeps its
+  // place relative to the top.
+  const all = [...layers.keys()];
+  const ordered = (d.order ?? all).filter((k) => layers.has(k));
+  const missing = all.filter((k) => !ordered.includes(k));
+  return [...missing, ...ordered].map((k) => layers.get(k)!);
 }
 
 /**
@@ -254,15 +264,15 @@ export function reorderWithin(all: LayerKey[], some: LayerKey[]): LayerKey[] {
 
 /** How many separate changes the draft makes to what's live. */
 export function pendingCount(scene: Scene, d: Draft): number {
-  const layers = layersOf(scene, d).filter((l) => l.stage === "live");
+  // A sketch being added is one change, however it's switched or placed.
+  const layers = layersOf(scene, d).filter((l) => l.shader);
   let n = Object.keys(roomtoneChanges(scene, d)).length > 0 ? 1 : 0;
   n += removedOf(scene, d).length;
   n += d.added.length;
   for (const l of layers) {
     if (l.muted !== l.shader!.muted || !sameMask(l.mask, l.shader!.mask)) n++;
   }
-  const liveOrder = liveKeys(scene).filter((k) => !d.removed.includes(k));
-  if (layers.map((l) => l.key).join() !== liveOrder.join()) n++;
+  if (layers.map((l) => l.key).join() !== sceneKeys(scene, d).join()) n++;
   return n;
 }
 
@@ -446,10 +456,9 @@ async function sendDraft(scene: Scene, d: Draft, onStep: (next: Draft) => void) 
   step({ ...d, roomtone: {}, roomtoneCode: null });
 
   const byKey = new Map(scene.shaders.map((s) => [s.key, s]));
-  const order = layersOf(scene, d)
-    .filter((l) => l.stage === "live")
-    .map((l) => l.key);
-  const reordered = d.order !== null && order.join() !== liveKeys(scene).filter((k) => !d.removed.includes(k)).join();
+  // The whole stack as you'd have it, top first, sketches you're adding included.
+  const order = layersOf(scene, d).map((l) => l.key);
+  const reordered = d.order !== null && order.filter((k) => byKey.has(k)).join() !== sceneKeys(scene, d).join();
 
   // Out, with whatever else was pending for them.
   for (const key of d.removed) {
@@ -457,19 +466,38 @@ async function sendDraft(scene: Scene, d: Draft, onStep: (next: Draft) => void) 
     step({ ...d, removed: d.removed.filter((k) => k !== key), edits: omit(d.edits, key) });
   }
 
-  // In, on top, each on its home, from its branch: at the commit previewed,
-  // or the branch's head if it wasn't built yet (vibes builds it, and puts it
-  // in once built).
-  for (const a of d.added) {
-    const commit = a.build?.state === "built" ? a.build.commit : undefined;
-    await request("POST", "/api/instances", { sketch: a.sketchId, branch: a.branch, ...(commit ? { commit } : {}), home: a.home, key: a.key });
-    step({ ...d, added: d.added.filter((x) => x.key !== a.key) });
+  // In, each on its home, from its branch: as the build previewed (or
+  // building), or the branch's head if none was asked for yet; switched as
+  // you have it, and where you put it (just above the one under it), or on
+  // top. The lowest first, so one is put in before another goes above it.
+  // vibes builds each, and puts it in once built.
+  const made = new Map<LayerKey, string>();
+  const keyFor = (key: LayerKey) => (byKey.has(key) ? key : made.get(key));
+  for (const key of [...order].reverse()) {
+    const a = d.added.find((x) => x.key === key);
+    if (!a) continue;
+    const layer = layerOfAdding(a, d);
+    const under = order.slice(order.indexOf(key) + 1).find((k) => keyFor(k) !== undefined);
+    const instance = await request<Instance>("POST", "/api/instances", {
+      sketch: a.sketchId,
+      branch: a.branch,
+      ...(a.build && a.build.state !== "failed" ? { build: a.build.id } : {}),
+      home: a.home,
+      key: a.key,
+      muted: layer.muted,
+      mask: layer.mask,
+      ...(d.order ? { above: under ? keyFor(under) : "" } : {}),
+    });
+    made.set(a.key, instance.id);
+    madeAs.set(a.key, instance.id);
+    step({ ...d, added: d.added.filter((x) => x.key !== a.key), edits: omit(d.edits, a.key) });
   }
 
-  // Only a shader in the room can be changed: one gone since has nothing left to change.
+  // On its way in, vibes keeps the change for when it goes in; gone since,
+  // there's nothing left to change.
   for (const [key, patch] of Object.entries(d.edits)) {
     const shader = byKey.get(key);
-    const live = shader?.stage === "live" ? shader : null;
+    const live = shader && changeable(shader) ? shader : null;
     const mute =
       live && patch.muted !== undefined && patch.muted !== live.muted
         ? () => ignoreMissing(request("POST", `/api/shaders/${key}/muted`, { muted: patch.muted }))
@@ -484,8 +512,9 @@ async function sendDraft(scene: Scene, d: Draft, onStep: (next: Draft) => void) 
     step({ ...d, edits: omit(d.edits, key) });
   }
 
-  // The stack in your order, top first: vibes moves them (and passes over
-  // any gone meanwhile, and leaves any come since on top).
-  if (reordered) await request("PUT", "/api/stack", { order });
+  // The stack in your order, top first: vibes moves those in the room, places
+  // those on their way in (and passes over any gone meanwhile, and leaves any
+  // come since on top).
+  if (reordered) await request("PUT", "/api/stack", { order: order.flatMap((k) => keyFor(k) ?? []) });
   step(EMPTY);
 }

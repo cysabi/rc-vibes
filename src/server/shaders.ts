@@ -2,9 +2,9 @@
 // for a shader put in from a sketch in vibes, or rclamp-<id> for one vibes
 // only knows by arclamp's id. The browser only ever has keys, and changes
 // shaders by them here; which shader in arclamp a key is, only the server
-// knows. Any shader in the room can be muted, masked, moved or taken out,
-// however it was put in; one being put in (an instance, building) can only be
-// taken out, until it's in.
+// knows. Any shader can be muted, masked, moved or taken out, however it was
+// put in. One not in the room yet (an instance, building) keeps what's wanted
+// of it, and goes in that way (instances.ts).
 
 import { zValidator } from "@hono/zod-validator";
 import { Hono, type Context } from "hono";
@@ -55,6 +55,19 @@ export function shaderRoutes({ config, arclamp, db, instances }: ShaderDeps) {
   const nameOf = (d: ShaderDescriptor, instance: InstanceRow | null) =>
     (instance ? db.sketch(instance.sketch_id)?.name : sketchOf(d.script, config.signingKey, db)?.name) ?? `Shader #${d.id}`;
 
+  /**
+   * A change to a shader that isn't in the room yet, kept for when it goes in
+   * (and logged); false if it's in, so the change is arclamp's to make.
+   */
+  async function wanted(c: Context, key: string, patch: { muted?: boolean; mask?: number[] }): Promise<boolean> {
+    const it = shaderOfKey(db, key);
+    if (!it?.instance || it.arclampId !== null || !instances) return false;
+    if (!(await instances.want(it.instance.id, patch))) return false;
+    const action = patch.mask ? "shader.mask" : patch.muted ? "shader.mute" : "shader.unmute";
+    db.log({ user: c.get("user"), action, shaderName: db.sketch(it.instance.sketch_id)?.name ?? null, detail: { instance: it.instance.id, ...(patch.mask ? { lights: patch.mask.length } : {}) } });
+    return true;
+  }
+
   /** A key's shader, in the room; or why it can't be changed: there's no such shader, or it isn't in yet. */
   async function inRoom(c: Context, key: string): Promise<{ d: ShaderDescriptor; instance: InstanceRow | null } | Response> {
     const it = shaderOfKey(db, key);
@@ -72,9 +85,10 @@ export function shaderRoutes({ config, arclamp, db, instances }: ShaderDeps) {
   return (
     new Hono<AuthEnv>()
       .post("/shaders/:key/muted", zValidator("json", z.object({ muted: z.boolean() }), badBody), async (c) => {
+        const { muted } = c.req.valid("json");
+        if (await wanted(c, c.req.param("key"), { muted })) return c.body(null, 204);
         const it = await inRoom(c, c.req.param("key"));
         if (it instanceof Response) return it;
-        const { muted } = c.req.valid("json");
         await arclamp.setMuted(it.d.id, muted);
         db.log({ user: c.get("user"), action: muted ? "shader.mute" : "shader.unmute", shaderId: it.d.id, shaderName: nameOf(it.d, it.instance) });
         return c.body(null, 204);
@@ -82,9 +96,10 @@ export function shaderRoutes({ config, arclamp, db, instances }: ShaderDeps) {
 
       // The lights a shader may not change: its whole mask ([] clears it).
       .post("/shaders/:key/mask", zValidator("json", z.object({ mask: z.array(z.number().int()).max(2000) }), badBody), async (c) => {
+        const asked = [...new Set(c.req.valid("json").mask)].sort((a, b) => a - b);
+        if (await wanted(c, c.req.param("key"), { mask: asked })) return c.body(null, 204);
         const it = await inRoom(c, c.req.param("key"));
         if (it instanceof Response) return it;
-        const asked = [...new Set(c.req.valid("json").mask)].sort((a, b) => a - b);
         // An instance stays masked off everything outside its home.
         const mask = instances ? await instances.within(it.d.id, asked) : asked;
         await arclamp.setMask(it.d.id, mask);
@@ -110,12 +125,19 @@ export function shaderRoutes({ config, arclamp, db, instances }: ShaderDeps) {
         return c.body(null, 204);
       })
 
-      // The stack in this order, top first. Shaders not in the room (yet, or
-      // any more) are passed over; any in the room it leaves out stay on top
-      // (put in since the browser last looked).
+      // The stack in this order, top first. Those in the room are moved; each
+      // not in yet is to go in just above the one under it here (or at the
+      // bottom); gone ones are passed over. Any in the room it leaves out stay
+      // on top (put in since the browser last looked).
       .put("/stack", zValidator("json", z.object({ order: z.array(z.string().min(1).max(100)).max(500) }), badBody), async (c) => {
         const user = c.get("user");
-        const ids = c.req.valid("json").order.map((key) => shaderOfKey(db, key)?.arclampId ?? null);
+        const shaders = c.req.valid("json").order.map((key) => shaderOfKey(db, key));
+        shaders.forEach((it, i) => {
+          if (!it?.instance || it.arclampId !== null) return;
+          const under = shaders.slice(i + 1).find((s) => s !== null);
+          instances?.setAbove(it.instance.id, under ? (under.instance?.id ?? rclampKey(under.arclampId!)) : "");
+        });
+        const ids = shaders.map((it) => it?.arclampId ?? null);
         const reorder = ordering.then(async () => {
           const now = (await arclamp.scene()).filter((d) => d.type === "js").sort((a, b) => b.position - a.position);
           const byId = new Map(now.map((d) => [d.id, d]));

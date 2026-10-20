@@ -17,6 +17,8 @@ vi.mock("./api.ts", () => ({
       meanwhile();
     }
     if (failOn && call.startsWith(failOn)) throw new Error("arclamp said no");
+    // An instance, made: its id vibes' own.
+    if (path === "/api/instances") return { id: `made${(body as { key: string }).key}` };
     return {};
   }),
 }));
@@ -142,15 +144,22 @@ describe("shaders on their way in", () => {
     expect(reachOf(layerOf(scene, currentDraft(), "i1")!)).toEqual([1]);
   });
 
-  it("can't be changed till they're in: an edit to one isn't counted or sent", async () => {
+  it("are switched and moved like any other: vibes keeps it, to put them in that way", async () => {
     const scene = room(coming(), shader(12), shader(11));
+    drafts.patchShader("i1", { muted: true });
+    drafts.reorder(["rclamp-12", "i1", "rclamp-11"]);
+    expect(layerOf(scene, currentDraft(), "i1")!.muted).toBe(true);
+    expect(pendingCount(scene, currentDraft())).toBe(2);
+    await applyDraft(scene);
+    expect(calls).toEqual(['POST /api/shaders/i1/muted {"muted":true}', 'PUT /api/stack {"order":["rclamp-12","i1","rclamp-11"]}']);
+    expect(currentDraft()).toBe(EMPTY);
+  });
+
+  it("that couldn't go in, aren't switched", async () => {
+    const scene = room(coming({ stage: "failed" }), shader(12));
     drafts.patchShader("i1", { muted: true });
     expect(layerOf(scene, currentDraft(), "i1")!.muted).toBe(false);
     expect(pendingCount(scene, currentDraft())).toBe(0);
-    drafts.setRoomtone({ "64": { on: 1 } }, "on");
-    await applyDraft(scene);
-    expect(calls).toEqual(['PUT /api/roomtone {"lights":{"64":{"on":1}},"code":"on"}']);
-    expect(currentDraft()).toBe(EMPTY);
   });
 
   it("can be taken out, by their key", async () => {
@@ -285,16 +294,53 @@ describe("adding a sketch", () => {
     expect(pendingCount(live, currentDraft())).toBe(0);
   });
 
-  it("goes in on its home, from its branch: at the commit previewed, or the branch's head if it wasn't built yet", async () => {
+  it("goes in on its home, from its branch: as the build previewed, or the branch's head if none was asked for yet", async () => {
     const first = aurora();
     drafts.built(first, built, "function update() {}");
     const second = rain();
     await applyDraft(live);
     expect(calls).toEqual([
-      `POST /api/instances {"sketch":"s1","branch":"main","commit":"abc1234def","home":[1,2],"key":"${first}"}`,
-      `POST /api/instances {"sketch":"s2","branch":"ada/try","home":[1],"key":"${second}"}`,
+      `POST /api/instances {"sketch":"s1","branch":"main","build":"b1","home":[1,2],"key":"${first}","muted":false,"mask":[64]}`,
+      `POST /api/instances {"sketch":"s2","branch":"ada/try","home":[1],"key":"${second}","muted":false,"mask":[2,64]}`,
     ]);
     expect(currentDraft()).toBe(EMPTY);
+  });
+
+  it("is switched like any other, and goes in that way", async () => {
+    const key = aurora();
+    drafts.patchShader(key, { mask: [2, 64] });
+    expect(layersOf(live, currentDraft())[0]!.mask).toEqual([2, 64]);
+    // Still one change.
+    expect(pendingCount(live, currentDraft())).toBe(1);
+    drafts.patchShader(key, { muted: true });
+    await applyDraft(live);
+    expect(calls).toEqual([`POST /api/instances {"sketch":"s1","branch":"main","home":[1,2],"key":"${key}","muted":true,"mask":[2,64]}`]);
+    expect(currentDraft()).toBe(EMPTY);
+  });
+
+  it("goes in where you put it, just above the one under it, the lowest first", async () => {
+    const first = aurora();
+    const second = rain();
+    // Rain under the rest; Aurora between the room's two.
+    drafts.reorder(["rclamp-12", first, "rclamp-11", second]);
+    expect(pendingCount(live, currentDraft())).toBe(2);
+    await applyDraft(live);
+    expect(calls).toEqual([
+      `POST /api/instances {"sketch":"s2","branch":"ada/try","home":[1],"key":"${second}","muted":false,"mask":[2,64],"above":""}`,
+      `POST /api/instances {"sketch":"s1","branch":"main","home":[1,2],"key":"${first}","muted":false,"mask":[64],"above":"rclamp-11"}`,
+    ]);
+  });
+
+  it("goes in above another you're adding, by the shader that one's become; and the stack's sent with them", async () => {
+    const first = aurora();
+    const second = rain();
+    drafts.reorder([first, second, "rclamp-11", "rclamp-12"]);
+    await applyDraft(live);
+    expect(calls).toEqual([
+      `POST /api/instances {"sketch":"s2","branch":"ada/try","home":[1],"key":"${second}","muted":false,"mask":[2,64],"above":"rclamp-11"}`,
+      `POST /api/instances {"sketch":"s1","branch":"main","home":[1,2],"key":"${first}","muted":false,"mask":[64],"above":"made${second}"}`,
+      `PUT /api/stack {"order":["made${first}","made${second}","rclamp-11","rclamp-12"]}`,
+    ]);
   });
 
   it("goes in once, however the draft changes while it's sent", async () => {

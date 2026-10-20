@@ -9,7 +9,8 @@
 // and taking it out are pending edits like any other; moving home and
 // updating happen at once. One on its way in (building, or that couldn't go
 // in) has a panel of its own (ComingTitle, ComingBody), and so does one
-// you're adding, not yet applied (AddingTitle, AddingBody).
+// you're adding, not yet applied (AddingTitle, AddingBody); both are switched
+// and moved from their rows in the selection, like any other.
 
 import { useState } from "react";
 import type { LightInfo } from "../../shared/arclamp.ts";

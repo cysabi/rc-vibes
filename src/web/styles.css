@@ -1108,7 +1108,7 @@ kbd {
   width: 36px;
 }
 
-/* On its way in (building, or couldn't go in): above the rest, off the rail. */
+/* Not in the room yet (on its way in, couldn't go in, or yours to add): off the rail. */
 .layer.coming .layer-node {
   background: transparent;
   box-shadow: inset 0 0 0 1.5px var(--faint);

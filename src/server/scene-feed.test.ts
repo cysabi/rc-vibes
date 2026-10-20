@@ -192,6 +192,26 @@ describe("the scene feed", () => {
     expect(db.instances().map((i) => i.id)).toEqual(["i2", "i4"]);
   });
 
+  it("shows those on their way in where they're to go in, as they're wanted", async () => {
+    db.addSketch({ id: "s1", name: "Warm wave", by_id: "rc:1", by_name: "Ada", at: 0 });
+    db.addBuild({ id: "b1", sketch_id: "s1", commit_sha: "a".repeat(40), builder: "1", by_id: "rc:1", by_name: "Ada", at: 0 });
+    const put = (id: string, at: number, more: Partial<InstanceRow> = {}) =>
+      db.addInstance({ id, sketch_id: "s1", build_id: "b1", home: [1], by_id: "rc:1", by_name: "Ada", at, ...more });
+    put("top", 1);
+    put("over3", 2, { above: "rclamp-3", muted: true, mask: [5] });
+    put("bottom", 3, { above: "" });
+    put("overOver3", 4, { above: "over3" });
+    // What it was to be above is gone: on top.
+    put("lost", 5, { above: "rclamp-99" });
+    const fake = { view: (row: InstanceRow) => ({ id: row.id, sketchId: row.sketch_id, sketchName: "Warm wave", commit: "a".repeat(40), home: row.home, state: row.state, error: row.error, by: { id: row.by_id, name: row.by_name }, at: row.at }), forget: () => {} } as unknown as Instances;
+    scene = [roomtone, shader(3, "one"), shader(4, "two")];
+    start(() => fake);
+    snapshot();
+    await settle();
+    expect(now().shaders.map((s) => s.key)).toEqual(["lost", "top", "rclamp-4", "overOver3", "over3", "rclamp-3", "bottom"]);
+    expect(byKey(now(), "over3")).toMatchObject({ stage: "building", muted: true, mask: [5] });
+  });
+
   it("shows what vibes changes at once, ahead of arclamp's events, which have the last word", async () => {
     scene = [roomtone, shader(1, "one"), shader(2, "two"), shader(3, "three")];
     start();

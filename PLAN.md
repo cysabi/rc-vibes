@@ -441,16 +441,25 @@ of the mediating, ids and positions included, is the server's.
   time). The routes by arclamp's id are gone. A shader on its way in sits
   where it'll go in, on top, and can't be switched or moved yet; opened, it
   stays open as it goes in, since its key doesn't change.
-- **Phase 2:** a shader on its way in (or a draft one) can be switched,
-  masked and moved: vibes keeps what's wanted of it (muted, mask, its place
-  as just above or below another) and puts it in that way, in one step
-  (rclamp's create with a mask and mute, and anchored places). Every stamp
-  names its shader's key (`shader=` in a v2 stamp), so which shader is which
-  can be read from the room itself, and a shader made just before vibes
-  stopped is found again.
+- **vibes works with rclamp as it is** (master), not with the PRs below:
+  they may not land. Where one would help, it's a later improvement, never
+  a dependency.
+- **Phase 2** (done): a shader on its way in, or one you're adding, can be
+  switched, masked and moved like any other. vibes keeps what's wanted of
+  one on its way in (muted, its whole mask, and its place: just above
+  another shader's key, or the bottom; `POST /api/instances` takes them too,
+  with the build that was previewed), shows it there in the stack, and puts
+  it in that way: created at that position, then muted (if it's to be) and
+  masked before its sandbox has started, one instance at a time so each
+  goes where it's to go. What goes in is stamped v2, naming its shader
+  (`shader=<key>`), so which shader is which can be read from the room
+  itself: one put in just before vibes stopped is found by its stamp, not
+  put in again. A panel open on a sketch you're adding stays open on the
+  shader it becomes.
 - **Phase 3:** one socket between browser and server, for the list and for
-  what's asked of it; Apply is one message, which the server makes one
-  change to the room (rclamp's batch), all or nothing.
+  what's asked of it; Apply is one message, which the server makes as one
+  run of changes to the room, in order (with rclamp's batch, were it to
+  land, all or nothing).
 
 ## Gaps in arclamp (PRs to rclamp)
 
@@ -474,9 +483,10 @@ of the mediating, ids and positions included, is the server's.
    why.
 7. **Putting a shader in in one step**, for vibes' shaders: created already
    masked or muted (JCLemme/rclamp#21); an atomic batch of scene changes,
-   with places anchored to other shaders (stacked on #21); and a new shader
-   passing its input through until its sandbox's first frame, instead of
-   freezing everything above it while it starts.
+   with places anchored to other shaders (#23, stacked on #21); and a new
+   shader passing its input through until its sandbox's first frame, instead
+   of freezing the room while it starts (#22). vibes doesn't wait on any of
+   them.
 
 ## Local development
 
