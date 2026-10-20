@@ -44,6 +44,7 @@ import {
   layerOf,
   layersOf,
   reachOf,
+  removedOf,
   reorderWithin,
   statusOf,
   switchFor,
@@ -115,7 +116,10 @@ export function SelectionPanel({ floor, here, selected, shader, onShader, onClos
   const ids = chosen.map((l) => l.id);
   const all = (lights.data?.lights ?? []).map((l) => l.id);
   const stack = layersOf(live, draft);
-  const onThese = [...stack].reverse().filter((layer) => reachOf(layer).some((id) => selected.has(id)));
+  // And the ones you're taking out (when you apply), where they are, to keep after all.
+  const going = new Set(removedOf(live, draft));
+  const shown = withGoing(stack, [...going].flatMap((key) => layerOf(live, draft, key) ?? []), live);
+  const onThese = [...shown].reverse().filter((layer) => reachOf(layer).some((id) => selected.has(id)));
   const rows: Row[] = onThese.map((layer) => ({ layer, state: switchState(layer, ids) }));
 
   // The layer whose parameters are open under it, one at a time: room tone's, to start with.
@@ -144,7 +148,7 @@ export function SelectionPanel({ floor, here, selected, shader, onShader, onClos
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
-  const listed = rows.filter((r) => changeable(r.layer)).map((r) => r.layer.key);
+  const listed = rows.filter((r) => changeable(r.layer) && !going.has(r.layer.key)).map((r) => r.layer.key);
   const onDragEnd = ({ active, over }: DragEndEvent) => {
     if (!over || active.id === over.id) return;
     const moved = arrayMove(listed, listed.indexOf(String(active.id)), listed.indexOf(String(over.id)));
@@ -303,6 +307,7 @@ export function SelectionPanel({ floor, here, selected, shader, onShader, onClos
             removing={draft.removed.includes(openLayer.key)}
             lights={lights.data?.lights ?? []}
             selected={ids}
+            onGone={() => onShader(null)}
           />
         ) : openComing ? (
           <ComingBody instance={openComing} lights={lights.data?.lights ?? []} onRetried={onShader} />
@@ -332,11 +337,13 @@ export function SelectionPanel({ floor, here, selected, shader, onShader, onClos
                         </span>
                       </div>
                       <Reveal open={opened === "roomtone"}>
-                        <RoomToneEditor lights={chosen} template={template} over={rows.filter((r) => r.state !== "off" && r.layer.script !== "").map((r) => r.layer.name)} />
+                        <RoomToneEditor lights={chosen} template={template} over={rows.filter((r) => r.state !== "off" && r.layer.script !== "" && !going.has(r.layer.key)).map((r) => r.layer.name)} />
                       </Reveal>
                     </li>
                     {rows.map((row) =>
-                      changeable(row.layer) ? (
+                      going.has(row.layer.key) ? (
+                        <GoingRow key={row.layer.key} layer={row.layer} />
+                      ) : changeable(row.layer) ? (
                         <SortableRow
                           key={row.layer.key}
                           row={row}
@@ -561,6 +568,39 @@ function FailedRow({ layer, onOpen }: { layer: Layer; onOpen: () => void }) {
       <RowEnd />
     </li>
   );
+}
+
+/** One you're taking out, when you apply: where it is, crossed out, to keep after all. */
+function GoingRow({ layer }: { layer: Layer }) {
+  return (
+    <li className="layer coming going">
+      <span className="layer-grip" aria-hidden="true" />
+      <span className="layer-node" aria-hidden="true" />
+      <span className="layer-text">
+        <span className="layer-name">{layer.name}</span>
+        <span className="layer-meta">comes out when you apply</span>
+      </span>
+      <button className="quiet layer-keep" onClick={() => drafts.keep(layer.key)} title={`Keep ${layer.name} in the room`}>
+        Keep
+      </button>
+      <span className="layer-chevron layer-end" aria-hidden="true" />
+    </li>
+  );
+}
+
+/**
+ * The stack (top first) with the shaders the draft takes out back in it,
+ * each just above the one under it in the room (the lowest first, so one
+ * over another going too goes above it).
+ */
+function withGoing(stack: Layer[], going: Layer[], scene: Scene): Layer[] {
+  const keys = scene.shaders.map((s) => s.key);
+  const all = [...stack];
+  for (const layer of [...going].sort((a, b) => keys.indexOf(b.key) - keys.indexOf(a.key))) {
+    const under = keys.slice(keys.indexOf(layer.key) + 1).find((k) => all.some((l) => l.key === k));
+    all.splice(under === undefined ? all.length : all.findIndex((l) => l.key === under), 0, layer);
+  }
+  return all;
 }
 
 /** A row's end with no switch yet: room for one, then the quiet dot. */

@@ -1108,6 +1108,18 @@ kbd {
   width: 36px;
 }
 
+/* Being taken out, when you apply: crossed out, with Keep in its switch's place. */
+.layer.going .layer-name {
+  text-decoration: line-through;
+}
+
+.layer-keep {
+  flex: none;
+  height: 26px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
 /* Not in the room yet (on its way in, couldn't go in, or yours to add): off the rail. */
 .layer.coming .layer-node {
   background: transparent;

@@ -60,9 +60,11 @@ interface BodyProps {
   lights: LightInfo[];
   /** The selection behind the panel: a home it can move to. */
   selected: number[];
+  /** Back to the selection, once it's taken out. */
+  onGone: () => void;
 }
 
-export function ShaderBody({ layer, stack, removing, lights, selected }: BodyProps) {
+export function ShaderBody({ layer, stack, removing, lights, selected, onGone }: BodyProps) {
   const { key, sketch, instance } = layer;
   const reach = reachOf(layer);
   const state = switchState(layer);
@@ -131,7 +133,7 @@ export function ShaderBody({ layer, stack, removing, lights, selected }: BodyPro
       <div className="shader-actions">
         {sketch?.name != null && <OpenCode sketch={sketch} />}
         {instance && <Update instance={instance} />}
-        {!removing && <RemoveShader layer={layer} />}
+        {!removing && <RemoveShader layer={layer} onGone={onGone} />}
       </div>
     </div>
   );
@@ -444,15 +446,20 @@ function OpenCode({ sketch }: { sketch: ShaderSketch }) {
  * Taking it out of the room. Previewing, that's a pending edit like any
  * other, to keep or apply; live, it goes out straight away, so it asks first.
  * One made outside vibes (no sketch), vibes can't put back once it's out, so
- * that asks first either way.
+ * that asks first either way. Taken out, it's back to the selection, where
+ * it's shown going (and can be kept) until it's gone.
  */
-function RemoveShader({ layer }: { layer: Layer }) {
+function RemoveShader({ layer, onGone }: { layer: Layer; onGone: () => void }) {
   const live = useLiveMode();
   const [asking, setAsking] = useState(false);
   const outside = layer.sketch === null;
+  const out = () => {
+    drafts.remove(layer.key);
+    onGone();
+  };
   if (!asking) {
     return (
-      <button className="quiet danger shader-action" onClick={() => (live || outside ? setAsking(true) : drafts.remove(layer.key))}>
+      <button className="quiet danger shader-action" onClick={() => (live || outside ? setAsking(true) : out())}>
         <TrashIcon /> Remove from the room
       </button>
     );
@@ -463,7 +470,7 @@ function RemoveShader({ layer }: { layer: Layer }) {
         Take <b>{layer.name}</b> out of the room?
         {outside && ` It was made outside vibes (by ${layer.by}), so vibes can't put it back.`}
       </span>
-      <button className="quiet danger" onClick={() => drafts.remove(layer.key)}>
+      <button className="quiet danger" onClick={out}>
         Take it out
       </button>
       <button className="quiet" onClick={() => setAsking(false)}>
