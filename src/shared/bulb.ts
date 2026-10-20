@@ -169,8 +169,9 @@ function xyzToAb(xyz: Vec3): XY {
 /** The primaries at REF_DUTY (r, g, b, ww, cw; x, y, z each), where every attempt starts. */
 const PRIM = new Float64Array(3 * CH);
 for (let i = 0; i < CH; i++) unitXyz(i, REF_DUTY, PRIM, 3 * i);
-const CW_AB = xyzToAb([PRIM[3 * CW]!, PRIM[3 * CW + 1]!, PRIM[3 * CW + 2]!]);
-const WW_AB = xyzToAb([PRIM[3 * WW]!, PRIM[3 * WW + 1]!, PRIM[3 * WW + 2]!]);
+/** The ends of the bulb's white line (cool white, warm white, at REF_DUTY), as lemtone colors: a color it can't make pales toward its point on it. */
+export const CW_AB = xyzToAb([PRIM[3 * CW]!, PRIM[3 * CW + 1]!, PRIM[3 * CW + 2]!]);
+export const WW_AB = xyzToAb([PRIM[3 * WW]!, PRIM[3 * WW + 1]!, PRIM[3 * WW + 2]!]);
 
 // ---- solve --------------------------------------------------------------------
 
@@ -325,6 +326,12 @@ function attempt(tgt: Float64Array, f: number): boolean {
 /** Duties for lemtone color (a, b) at luminance Y (model units), into D; false if it can't be made. */
 function attemptAb(a: number, b: number, Y: number, f: number): boolean {
   return abToXyz(a, b, Y, TGT) && attempt(TGT, f);
+}
+
+/** Whether the bulb makes a lemtone color (a, b) at these lumens and fidelity as asked (solve's "exact"), without working out what it makes if not. */
+export function makesExactly(a: number, b: number, lm: number, fidelity: number): boolean {
+  if (!(lm > 1e-9) || Number.isNaN(a) || Number.isNaN(b)) return false;
+  return attemptAb(a, b, lm / MODEL.lmPerY, clamp(fidelity, 0, 1));
 }
 
 /** The bulb's duties for a lemtone color (a, b), lumens and fidelity. */

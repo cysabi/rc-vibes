@@ -27,22 +27,14 @@ import { paintOnGpu } from "../backdrop.ts";
 import { useGamut } from "../display.ts";
 import { exact } from "../marks.ts";
 import { chromaAt, WHEEL_CHROMA, wheelColor, wheelSpot } from "../wheel.ts";
+import { across, heightOf, K_MAX, K_MIN, TINT, TINT_CURVE, tintAt, whiteAt } from "../whites.ts";
 import { Segmented } from "./Segmented.tsx";
 import { Slider } from "./Slider.tsx";
 
-// The strip of whites' ends.
-const K_MIN = 2000;
-const K_MAX = 6500;
 /** The top of the brightness track: the bulbs' rated output. */
 const B_MAX = 1;
 const WHEEL = 224;
 const STRIP_H = 96;
-// The strip of whites' tint, up (pinker) and down (greener) of the
-// black-body line: this much (in OKLab a, b) at its edges, growing as the
-// exponential of the height (this steeply). Most of the strip is all but on
-// the line, so a cursor drifting a little still gives a white.
-const TINT = 0.05;
-const TINT_CURVE = 4;
 /** Let go this near (px) another circle, and it takes that one's color. */
 const SNAP_PX = 14;
 
@@ -92,7 +84,7 @@ export function ColorEditor({ values, onChange, types }: Props) {
   const sample = active.members[0]!;
   const lightAt = (a: number, b: number) => made({ a, b, brightness: common.brightness, fidelity: common.fidelity }, sample);
   const lightKey = `${common.brightness} ${common.fidelity} ${sample} ${gamut}`;
-  const light = { brightness: common.brightness, fidelity: common.fidelity, solves: !!types && solvesLemtones(types[sample]!) };
+  const light = { brightness: common.brightness, solves: !!types && solvesLemtones(types[sample]!) };
   const limit = limitText(active.members.map((i) => ({ asked: values[i]!, out: made(values[i]!, i) })));
 
   // Pressing a circle makes it active and picks up its values (just one, with ⌥);
@@ -191,7 +183,7 @@ interface PickerProps {
   /** What the active lights make of a color, which the backdrop shows; painted again when `lightKey` changes. */
   lightAt: (a: number, b: number) => Output;
   lightKey: string;
-  /** The same, for the GPU to work out: the active lights' brightness and fidelity, and whether their bulbs solve lemtones. */
+  /** The same, for the GPU to work out: the active lights' brightness, and whether their bulbs solve lemtones. */
   light: Light;
   onPick: (circle: Circle | null, alone: boolean) => void;
   onMove: (a: number, b: number) => void;
@@ -543,33 +535,6 @@ function brightnessTrack(a: number, b: number, fidelity: number, gamut: Gamut, m
 const round = (v: number, step: number) => Math.round(v / step) * step;
 const clampK = (k: number) => Math.min(K_MAX, Math.max(K_MIN, k));
 
-/** The tint at a height on the strip of whites, from -1 (bottom) through 0 (the line) to 1 (top). */
-function tintAt(h: number): number {
-  const m = Math.min(1, Math.abs(h));
-  return (Math.sign(h) * TINT * (Math.exp(TINT_CURVE * m) - 1)) / (Math.exp(TINT_CURVE) - 1);
-}
-
-/** The height on the strip for a tint (the other way from tintAt). */
-function heightOf(tint: number): number {
-  return (Math.sign(tint) * Math.log(1 + Math.min(1, Math.abs(tint) / TINT) * (Math.exp(TINT_CURVE) - 1))) / TINT_CURVE;
-}
-
-/** The direction across the black-body line at `kelvin`, toward pinker, in OKLab a, b. */
-function across(kelvin: number): [number, number] {
-  const [a0, b0] = whiteAB(kelvin - 20);
-  const [a1, b1] = whiteAB(kelvin + 20);
-  const len = Math.hypot(a1 - a0, b1 - b0) || 1;
-  return [-(b1 - b0) / len, (a1 - a0) / len];
-}
-
-/** The white at `kelvin`, `tint` off the line. */
-function whiteAt(kelvin: number, tint: number): [number, number] {
-  const [a, b] = whiteAB(kelvin);
-  if (tint === 0) return [a, b];
-  const [na, nb] = across(kelvin);
-  return [a + na * tint, b + nb * tint];
-}
-
 /** Where a color is among the whites: the nearest temperature on the strip, and how far off the line. */
 function whiteSpot(a: number, b: number): { k: number; tint: number } {
   const k = clampK(kelvinOf(a, b, Infinity) ?? 3000);
@@ -626,8 +591,9 @@ function usePaint(canvas: RefObject<HTMLCanvasElement | null>, key: string, pain
 // lights make, spread between points, striped at 45° (every other stripe
 // this much darker, a pair of them this wide, CSS px). Round the edge,
 // outside it, a border this wide (CSS px), this color, this strong. That's
-// on the CPU, where the GPU can't paint them (backdrop.ts paints them the
-// same way, fast enough to follow a slider as it's dragged).
+// on the CPU, where the GPU can't paint them or before its tables are in
+// (backdrop.ts paints them the same way, from tables of what the bulbs make
+// worked out ahead, fast enough to follow a slider as it's dragged).
 const WHEEL_GRID = 56;
 const STRIP_GRID = [81, 21] as const;
 const EDGE_STEPS = 8;
@@ -640,10 +606,9 @@ const BORDER_INK = 0.75;
 const LOOK = { stripeDark: STRIPE_DARK, stripePx: STRIPE_PX, borderPx: BORDER_PX, borderRgb: BORDER_RGB, borderInk: BORDER_INK };
 const WHITES = { kMin: K_MIN, kMax: K_MAX, tint: TINT, tintCurve: TINT_CURVE };
 
-/** What the GPU needs to know about the active lights to paint a backdrop: their brightness and fidelity, and whether their bulbs solve lemtones. */
+/** What the GPU needs to know about the active lights to paint a backdrop: their brightness, and whether their bulbs solve lemtones (not their fidelity, which its tables leave out). */
 interface Light {
   brightness: number;
-  fidelity: number;
   solves: boolean;
 }
 

@@ -1,12 +1,13 @@
 // The color editor's backdrops (the wheel, the strip of whites) on the GPU,
-// fast enough to follow the brightness and fidelity sliders as they're
-// dragged. At each place: whether the active lights' bulbs, at their
-// brightness and fidelity, make that color as asked, and what they make
-// instead if not. The bulb's solve (bulb.ts, Walter's lemtone_solve) runs in
-// a shader, in float32 as the firmware does, on a grid a little coarser than
+// fast enough to follow the brightness slider as it's dragged. At each
+// place: whether the active lights' bulbs, at their brightness, make that
+// color as asked, and what they make instead if not, from tables of what
+// they make worked out ahead (cutoffs.ts), on a grid a little coarser than
 // the screen; then each pixel is painted from it as ColorEditor paints them
 // on the CPU: the color asked for where it's made, past the edge what's made
-// instead, striped, with a border round the edge, outside it.
+// instead, striped, with a border round the edge, outside it. (The bulb's
+// solve itself ran here once, in a shader, which some drivers took half a
+// minute to compile.)
 //
 // The edge is found as the CPU finds it: at each grid point, whether the
 // color's made as asked; where that changes between points, the crossing,
@@ -15,10 +16,14 @@
 // true distance. Three passes: the points, the crossings, the pixels.
 //
 // One WebGL context, off the page, paints for every picker, and each
-// picker's canvas copies what it paints.
+// picker's canvas copies what it paints. Its tables are fetched, and it's
+// set up, as the page loads (prepareBackdrops), so nothing waits on them
+// when a picker first opens; until they're in, the CPU paints.
 
-import { MODEL } from "../shared/bulb.model.ts";
-import { LMS_RGB, type Gamut, type Vec3 } from "../shared/lemtone.ts";
+import cutoffsUrl from "virtual:cutoffs";
+import { CW_AB, WW_AB } from "../shared/bulb.ts";
+import { LMS_RGB, LUMENS_PER_BRIGHTNESS, type Gamut, type Vec3 } from "../shared/lemtone.ts";
+import { gunzip, unpack, type Cutoffs, type Table } from "./cutoffs.ts";
 import { CURVE, WHEEL_CHROMA } from "./wheel.ts";
 
 /** What a backdrop is painted for. */
@@ -29,9 +34,8 @@ export interface BackdropJob {
   height: number;
   dpr: number;
   gamut: Gamut;
-  /** The active lights' brightness (1.0 = 1000 lm) and fidelity. */
+  /** The active lights' brightness (1.0 = 1000 lm). */
   brightness: number;
-  fidelity: number;
   /** Whether their bulbs solve lemtones (bulb.ts); if not, they make every color as asked. */
   solves: boolean;
   /** The strip of whites' temperatures, end to end, and its tint at the edges and how steeply it grows. */
@@ -48,7 +52,6 @@ const glf = (v: number) => {
   const s = String(v);
   return /[.e]/.test(s) ? s : `${s}.0`;
 };
-const vec3s = (vs: readonly (readonly number[])[]) => vs.map((v) => `vec3(${v.map(glf).join(", ")})`).join(", ");
 
 // ---- color, as lemtone.ts has it ------------------------------------------------
 
@@ -68,171 +71,6 @@ vec3 xyzToOklab(vec3 X) {
 vec2 xyzToAb(vec3 xyz) {
   vec3 lab = xyzToOklab(xyz);
   return lab.yz / lab.x;
-}
-`;
-
-// ---- the bulb's solve, as bulb.ts has it -------------------------------------
-
-const SOLVE = `
-const int CH = 5;
-const int WW = 3;
-const int CW = 4;
-const float DUTY_MAX = ${glf(MODEL.dutyMax)};
-const float LM_PER_Y = ${glf(MODEL.lmPerY)};
-const float KNOTS[25] = float[25](${MODEL.knots.flat().map(glf).join(", ")});
-const vec3 XYZ[25] = vec3[25](${vec3s(MODEL.xyz.flat())});
-const float THETA[90] = float[90](${MODEL.theta.flat().map(glf).join(", ")});
-const float REF_DUTY = 0.4;
-const int PHASE1_ROUNDS = 6;
-const int FIX_ROUNDS = 12;
-const float FIX_TOL = 2e-3;
-const int BISECT_STEPS = 10;
-const float EPS = 1e-6;
-
-// OKLab -> LMS' -> XYZ.
-const mat3 OK_M2_INV = mat3(vec3(1.0, 0.3963377774, 0.2158037573), vec3(1.0, -0.1055613458, -0.0638541728), vec3(1.0, -0.0894841775, -1.291485548));
-const mat3 OK_M1_INV = mat3(vec3(1.2270138511, -0.5577999807, 0.281256149), vec3(-0.0405801784, 1.1122568696, -0.0716766787), vec3(-0.0763812845, -0.4214819784, 1.5861632204));
-
-bool abToXyz(vec2 ab, out vec3 xyz) {
-  vec3 l = mul(OK_M2_INV, vec3(1.0, ab));
-  xyz = mul(OK_M1_INV, l * l * l);
-  if (!(xyz.y > 1e-6)) return false;
-  xyz /= xyz.y;
-  return true;
-}
-
-vec2 xyOf(vec3 X) {
-  float s = X.x + X.y + X.z;
-  return s > 0.0 ? X.xy / s : vec2(0.0);
-}
-
-vec3 unitXyz(int i, float d) {
-  int k = i * 5;
-  if (d <= KNOTS[k]) return XYZ[k];
-  if (d >= KNOTS[k + 4]) return XYZ[k + 4];
-  int j = 1;
-  while (d > KNOTS[k + j]) j++;
-  float t = (d - KNOTS[k + j - 1]) / (KNOTS[k + j] - KNOTS[k + j - 1]);
-  return XYZ[k + j - 1] + t * (XYZ[k + j] - XYZ[k + j - 1]);
-}
-
-float interaction(int i, float d[5]) {
-  float o[4];
-  int n = 0;
-  for (int j = 0; j < 5; j++) {
-    if (j != i) {
-      o[n] = d[j];
-      n++;
-    }
-  }
-  int t = i * 18;
-  float g = 1.0;
-  for (int a = 0; a < 4; a++) g += THETA[t++] * o[a];
-  for (int a = 0; a < 4; a++) g += THETA[t++] * o[a] * d[i];
-  for (int a = 0; a < 4; a++) for (int b = a; b < 4; b++) g += THETA[t++] * o[a] * o[b];
-  return g;
-}
-
-vec3 forward(float d[5]) {
-  vec3 xyz = vec3(0.0);
-  for (int i = 0; i < CH; i++) {
-    if (d[i] <= 0.0) continue;
-    xyz += d[i] * interaction(i, d) * unitXyz(i, d[i]);
-  }
-  return xyz;
-}
-
-float betaOn(vec2 cw, vec2 ww, vec2 p) {
-  vec2 d = ww - cw;
-  return clamp(dot(p - cw, d) / dot(d, d), 0.0, 1.0);
-}
-
-bool closedForm(vec3 P[5], vec3 tgt, vec2 p, float f, out float d[5]) {
-  mat3 rgb = mat3(P[0], P[1], P[2]);
-  if (abs(determinant(rgb)) < 1e-12) return false;
-  mat3 inv = inverse(rgb);
-  float beta = betaOn(xyOf(P[CW]), xyOf(P[WW]), p);
-  vec3 wmix = (1.0 - beta) * P[CW] + beta * P[WW];
-  vec3 a = inv * tgt;
-  vec3 b = inv * wmix;
-  float lo = 0.0;
-  float hi = DUTY_MAX / max(max(beta, 1.0 - beta), EPS);
-  float tol = EPS * DUTY_MAX;
-  for (int k = 0; k < 3; k++) {
-    if (abs(b[k]) < 1e-12) {
-      if (a[k] < -tol || a[k] > DUTY_MAX + tol) return false;
-      continue;
-    }
-    float l = (a[k] - DUTY_MAX) / b[k];
-    float h = a[k] / b[k];
-    if (b[k] < 0.0) {
-      float s = l;
-      l = h;
-      h = s;
-    }
-    lo = max(lo, l);
-    hi = min(hi, h);
-  }
-  if (hi < lo - tol) return false;
-  float we = lo + f * max(0.0, hi - lo);
-  for (int k = 0; k < 3; k++) d[k] = clamp(a[k] - we * b[k], 0.0, DUTY_MAX);
-  d[WW] = clamp(we * beta, 0.0, DUTY_MAX);
-  d[CW] = clamp(we * (1.0 - beta), 0.0, DUTY_MAX);
-  return true;
-}
-
-void localPrimaries(float d[5], bool sag, out vec3 P[5]) {
-  for (int i = 0; i < CH; i++) P[i] = unitXyz(i, d[i]) * (sag ? interaction(i, d) : 1.0);
-}
-
-// 0: infeasible; 1: feasible, not converged; 2: converged.
-int rounds(vec3 tgt, vec2 p, float Y, float f, bool sag, int most, inout vec3 P[5], inout float d[5]) {
-  for (int it = 0; it < most; it++) {
-    float next[5];
-    if (!closedForm(P, tgt, p, f, next)) return 0;
-    d = next;
-    localPrimaries(d, sag, P);
-    vec3 made = vec3(0.0);
-    for (int i = 0; i < CH; i++) made += d[i] * P[i];
-    vec3 err = abs(tgt - made);
-    if (max(err.x, max(err.y, err.z)) < FIX_TOL * Y) return 2;
-  }
-  return 1;
-}
-
-bool attempt(vec3 tgt, float f, out float d[5]) {
-  float Y = tgt.y;
-  for (int i = 0; i < CH; i++) d[i] = 0.0;
-  if (!(Y > 0.0) || tgt.x < 0.0 || tgt.z < 0.0) return false;
-  vec2 p = xyOf(tgt);
-  vec3 P[5];
-  for (int i = 0; i < CH; i++) P[i] = unitXyz(i, REF_DUTY);
-  if (rounds(tgt, p, Y, f, false, PHASE1_ROUNDS, P, d) == 0) {
-    for (int i = 0; i < CH; i++) P[i] = unitXyz(i, REF_DUTY);
-  } else {
-    localPrimaries(d, true, P);
-  }
-  return rounds(tgt, p, Y, f, true, FIX_ROUNDS, P, d) == 2;
-}
-
-bool attemptAb(vec2 ab, float Y, float f, out float d[5]) {
-  vec3 xyz;
-  if (!abToXyz(ab, xyz)) {
-    for (int i = 0; i < CH; i++) d[i] = 0.0;
-    return false;
-  }
-  return attempt(xyz * Y, f, d);
-}
-
-// Whether the active lights make a color as asked, at their brightness and
-// fidelity: always, if they're off or their bulbs don't solve lemtones.
-uniform float u_lumens;
-uniform float u_fidelity;
-uniform bool u_solves;
-bool asked(vec2 p) {
-  if (!u_solves || !(u_lumens > 1e-9)) return true;
-  float d[5];
-  return attemptAb(p, u_lumens / LM_PER_Y, clamp(u_fidelity, 0.0, 1.0), d);
 }
 `;
 
@@ -288,6 +126,52 @@ vec2 colorAt(vec2 at) {
 float outOf(vec2 at) { return length(vec2(at.x * 2.0 - 1.0, 1.0 - at.y * 2.0)); }
 `;
 
+// ---- what the bulbs make, from the tables (cutoffs.ts) -------------------------
+
+const TABLES = `
+uniform sampler2D u_cutWheel; // each place on the wheel's cutoff: the brightest the bulbs make it as asked, as the slider has it
+uniform sampler2D u_cutStrip; // the same, for the strip of whites
+uniform float u_bright; // the active lights' brightness as the slider has it, its cube root (0: off)
+uniform bool u_solves; // whether their bulbs solve lemtones; if not, they make every color as asked
+uniform vec2 u_whiteCool; // the bulbs' white line, cool end to warm, which a color they can't make pales toward
+uniform vec2 u_whiteWarm;
+const int BISECT_STEPS = 10;
+
+// A table's cutoff at a place (fractions across and down), spread between its points.
+float cutoffAt(sampler2D table, vec2 at) {
+  vec2 last = vec2(textureSize(table, 0) - 1);
+  vec2 g = clamp(at * last, vec2(0.0), last - 1e-4);
+  ivec2 i = ivec2(floor(g));
+  vec2 t = g - vec2(i);
+  float a = texelFetch(table, i, 0).r;
+  float b = texelFetch(table, i + ivec2(1, 0), 0).r;
+  float c = texelFetch(table, i + ivec2(0, 1), 0).r;
+  float d = texelFetch(table, i + ivec2(1, 1), 0).r;
+  return mix(mix(a, b, t.x), mix(c, d, t.x), t.y);
+}
+
+// Whether the active lights make the color at a place on this picker as asked:
+// always, if they're off or their bulbs don't solve lemtones.
+bool asked(vec2 at) {
+  if (!u_solves || !(u_bright > 0.0)) return true;
+  return (u_kind == 0 ? cutoffAt(u_cutWheel, at) : cutoffAt(u_cutStrip, at)) >= u_bright;
+}
+
+// Whether they make a color (a, b) as asked, from where it is on the wheel.
+bool makes(vec2 p) {
+  float c = length(p);
+  vec2 at = vec2(0.5);
+  if (c > 0.0) at += 0.5 * vec2(p.x, -p.y) / c * pow(c / ${glf(WHEEL_CHROMA)}, 1.0 / ${glf(CURVE)});
+  return cutoffAt(u_cutWheel, at) >= u_bright;
+}
+
+// Where p projects onto the white line from cw to ww: 0 at cw, 1 at ww.
+float betaOn(vec2 cw, vec2 ww, vec2 p) {
+  vec2 d = ww - cw;
+  return clamp(dot(p - cw, d) / dot(d, d), 0.0, 1.0);
+}
+`;
+
 const FULL_VS = `#version 300 es
 void main() {
   vec2 p = vec2(gl_VertexID == 1 ? 3.0 : -1.0, gl_VertexID == 2 ? 3.0 : -1.0);
@@ -303,60 +187,36 @@ precision highp int;
 uniform vec2 u_grid;
 out vec4 result;
 ${COLOR}
-${SOLVE}
 ${PLACES}
+${TABLES}
 void main() {
   vec2 at = (gl_FragCoord.xy - 0.5) / (u_grid - 1.0);
-  vec2 p = colorAt(at);
   // Past the rim, but for the points its pixels are spread from: not worked out.
   if (u_kind == 0 && outOf(at) > 1.08) {
     result = vec4(0.0);
     return;
   }
-  if (asked(p)) {
+  if (asked(at)) {
     result = vec4(1.0, 0.0, 0.0, 1.0);
     return;
   }
-  float Y = u_lumens / LM_PER_Y;
-  float f = clamp(u_fidelity, 0.0, 1.0);
+  vec2 p = colorAt(at);
   // Its point on the bulbs' white line, which the solve pales it toward.
-  vec2 cw = xyzToAb(unitXyz(CW, REF_DUTY));
-  vec2 ww = xyzToAb(unitXyz(WW, REF_DUTY));
-  vec2 w = cw + betaOn(cw, ww, p) * (ww - cw);
-  float d[5];
-  float e[5];
-  if (attemptAb(w, Y, f, d)) {
-    // Paled toward the white line, keeping the lumens (desat).
-    float lo = 0.0;
-    float hi = 1.0;
-    for (int s = 0; s < BISECT_STEPS; s++) {
-      float mid = 0.5 * (lo + hi);
-      if (attemptAb(w + mid * (p - w), Y, f, e)) {
-        lo = mid;
-        d = e;
-      } else {
-        hi = mid;
-      }
-    }
-    vec3 xyz = forward(d);
-    result = vec4(0.0, xyz.y > 0.0 ? xyzToAb(xyz) - p : vec2(0.0), 1.0);
+  vec2 w = u_whiteCool + betaOn(u_whiteCool, u_whiteWarm, p) * (u_whiteWarm - u_whiteCool);
+  // Too bright for any color: the brightest white it can make there (clamp), that white, dimmer.
+  if (!makes(w)) {
+    result = vec4(0.0, w - p, 1.0);
     return;
   }
-  // Too bright for any color: the brightest white it can make (clamp).
-  for (int i = 0; i < CH; i++) d[i] = 0.0;
+  // Paled toward the white line, keeping the lumens (desat), as far as it still makes it.
   float lo = 0.0;
   float hi = 1.0;
-  for (int s = 0; s < BISECT_STEPS + 2; s++) {
+  for (int s = 0; s < BISECT_STEPS; s++) {
     float mid = 0.5 * (lo + hi);
-    if (attemptAb(w, mid * Y, f, e)) {
-      lo = mid;
-      d = e;
-    } else {
-      hi = mid;
-    }
+    if (makes(w + mid * (p - w))) lo = mid;
+    else hi = mid;
   }
-  vec3 xyz = forward(d);
-  result = vec4(0.0, xyz.y > 0.0 ? xyzToAb(xyz) - p : vec2(0.0), 1.0);
+  result = vec4(0.0, (lo - 1.0) * (p - w), 1.0);
 }`;
 
 // Each grid point: where the edge crosses to the next point across, and down
@@ -370,8 +230,8 @@ uniform vec2 u_grid;
 uniform sampler2D u_solved;
 out vec4 result;
 ${COLOR}
-${SOLVE}
 ${PLACES}
+${TABLES}
 bool askedAt(ivec2 g) { return texelFetch(u_solved, g, 0).x > 0.5; }
 bool liveAt(ivec2 g) { return all(lessThan(g, ivec2(u_grid))) && texelFetch(u_solved, g, 0).w > 0.5; }
 float crossing(ivec2 g, ivec2 step) {
@@ -383,7 +243,7 @@ float crossing(ivec2 g, ivec2 step) {
   float hi = 1.0;
   for (int s = 0; s < ${EDGE_STEPS}; s++) {
     float t = 0.5 * (lo + hi);
-    if (asked(colorAt((vec2(g) + t * vec2(step)) / (u_grid - 1.0))) == from) lo = t;
+    if (asked((vec2(g) + t * vec2(step)) / (u_grid - 1.0)) == from) lo = t;
     else hi = t;
   }
   return 0.5 * (lo + hi);
@@ -397,7 +257,7 @@ void main() {
   ivec2 y = g + ivec2(0, 1);
   ivec2 xy = g + ivec2(1, 1);
   if (across >= 0.0 && down >= 0.0 && liveAt(xy) && askedAt(x) != askedAt(xy) && askedAt(y) != askedAt(xy)) {
-    middle = asked(colorAt((vec2(g) + 0.5) / (u_grid - 1.0))) ? 1.0 : 0.0;
+    middle = asked((vec2(g) + 0.5) / (u_grid - 1.0)) ? 1.0 : 0.0;
   }
   result = vec4(across, down, middle, 1.0);
 }`;
@@ -568,19 +428,24 @@ class Painter {
   // The grid: each point as it's made, and where the edge crosses to its neighbors.
   private readonly solved: Target;
   private readonly crossed: Target;
+  // The tables (cutoffs.ts), on texture units of their own.
+  private readonly cutWheel: WebGLTexture;
+  private readonly cutStrip: WebGLTexture;
   private grid = { width: 0, height: 0 };
   lost = false;
 
-  constructor(canvas: HTMLCanvasElement, gl: WebGL2RenderingContext) {
+  constructor(canvas: HTMLCanvasElement, gl: WebGL2RenderingContext, cutoffs: Cutoffs) {
     this.canvas = canvas;
     this.gl = gl;
     canvas.addEventListener("webglcontextlost", () => (this.lost = true));
-    const grid = ["u_grid", "u_lumens", "u_fidelity", "u_solves", "u_kind", "u_whites"];
+    const grid = ["u_grid", "u_bright", "u_solves", "u_kind", "u_whites", "u_cutWheel", "u_cutStrip", "u_whiteCool", "u_whiteWarm"];
     this.solve = program(gl, SOLVE_FS, grid);
     this.edges = program(gl, EDGE_FS, [...grid, "u_solved"]);
     this.paint = program(gl, PAINT_FS, ["u_solved", "u_edges", "u_grid", "u_size", "u_rgb", "u_look", "u_border", "u_kind", "u_whites"]);
     this.solved = { texture: gl.createTexture()!, fbo: gl.createFramebuffer()! };
     this.crossed = { texture: gl.createTexture()!, fbo: gl.createFramebuffer()! };
+    this.cutWheel = table(gl, cutoffs.wheel);
+    this.cutStrip = table(gl, cutoffs.strip);
   }
 
   /** Paint `job` into `target` (a 2D canvas, sized to it). */
@@ -603,14 +468,23 @@ class Painter {
     }
     const kind = job.kind === "wheel" ? 0 : 1;
     const { kMin, kMax, tint, tintCurve } = job.whites;
+    // Off, as the solve has it, below a billionth of a lumen.
+    const bright = job.brightness * LUMENS_PER_BRIGHTNESS > 1e-9 ? Math.cbrt(job.brightness) : 0;
     const gridUniforms = (u: Uniforms) => {
       gl.uniform2f(u.u_grid!, gx, gy);
-      gl.uniform1f(u.u_lumens!, job.brightness * 1000);
-      gl.uniform1f(u.u_fidelity!, job.fidelity);
+      gl.uniform1f(u.u_bright!, bright);
       gl.uniform1i(u.u_solves!, job.solves ? 1 : 0);
       gl.uniform1i(u.u_kind!, kind);
       gl.uniform4f(u.u_whites!, kMin, kMax, tint, tintCurve);
+      gl.uniform1i(u.u_cutWheel!, 2);
+      gl.uniform1i(u.u_cutStrip!, 3);
+      gl.uniform2f(u.u_whiteCool!, ...CW_AB);
+      gl.uniform2f(u.u_whiteWarm!, ...WW_AB);
     };
+    gl.activeTexture(gl.TEXTURE2);
+    gl.bindTexture(gl.TEXTURE_2D, this.cutWheel);
+    gl.activeTexture(gl.TEXTURE3);
+    gl.bindTexture(gl.TEXTURE_2D, this.cutStrip);
 
     // The grid's points, then where the edge crosses between them.
     gl.bindFramebuffer(gl.FRAMEBUFFER, this.solved.fbo);
@@ -664,25 +538,63 @@ class Painter {
   }
 }
 
+let cutoffs: Cutoffs | null = null;
 let painter: Painter | null | undefined;
 
-/** Paint a backdrop on the GPU. False where it can't (no WebGL 2, no float buffers to render to, or the context's lost): paint it some other way. */
-export function paintOnGpu(target: HTMLCanvasElement, job: BackdropJob): boolean {
+/**
+ * Fetch the tables and get the GPU ready to paint with them, as the page
+ * loads, so a picker opening doesn't wait on either. Without them, the
+ * backdrops are painted on the CPU.
+ */
+export async function prepareBackdrops(): Promise<void> {
+  try {
+    const res = await fetch(cutoffsUrl);
+    if (!res.ok) throw new Error(`${res.status} ${res.statusText}`);
+    cutoffs = unpack(await gunzip(new Uint8Array(await res.arrayBuffer())));
+    if (!cutoffs) throw new Error("they aren't the size they should be");
+  } catch (err) {
+    console.warn("no backdrop tables, so backdrops are painted on the CPU:", err);
+    return;
+  }
+  // Setting it up compiles shaders: once the page has settled.
+  if (typeof requestIdleCallback === "function") requestIdleCallback(() => painterNow());
+  else setTimeout(() => painterNow(), 0);
+}
+
+/** The painter, set up if it isn't yet; null where it can't paint (no tables yet, no WebGL 2, no float buffers to render to, or the context's lost). */
+function painterNow(): Painter | null {
+  if (!cutoffs) return null;
   if (painter === undefined) {
     painter = null;
     const canvas = document.createElement("canvas");
     const gl = canvas.getContext("webgl2", { alpha: true, premultipliedAlpha: true, antialias: false, depth: false, stencil: false });
     if (gl && (gl.getExtension("EXT_color_buffer_float") || gl.getExtension("EXT_color_buffer_half_float"))) {
       try {
-        painter = new Painter(canvas, gl);
+        painter = new Painter(canvas, gl, cutoffs);
       } catch (err) {
         console.warn("no backdrops on the GPU:", err);
       }
     }
   }
-  if (!painter || painter.lost) return false;
-  painter.draw(target, job);
+  return painter && !painter.lost ? painter : null;
+}
+
+/** Paint a backdrop on the GPU. False where it can't (painterNow): paint it some other way. */
+export function paintOnGpu(target: HTMLCanvasElement, job: BackdropJob): boolean {
+  const p = painterNow();
+  if (!p) return false;
+  p.draw(target, job);
   return true;
+}
+
+/** A table, as a texture of float cutoffs, read a point at a time. */
+function table(gl: WebGL2RenderingContext, t: Table): WebGLTexture {
+  const texture = gl.createTexture()!;
+  gl.bindTexture(gl.TEXTURE_2D, texture);
+  gl.texImage2D(gl.TEXTURE_2D, 0, gl.R32F, t.width, t.height, 0, gl.RED, gl.FLOAT, t.cutoffs);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+  gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  return texture;
 }
 
 function program(gl: WebGL2RenderingContext, fs: string, uniforms: string[]): { program: WebGLProgram; u: Uniforms } {
