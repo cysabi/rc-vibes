@@ -6,13 +6,13 @@ import { zValidator } from "@hono/zod-validator";
 import { Hono, type Context, type ErrorHandler } from "hono";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HTTPException } from "hono/http-exception";
-import { streamSSE } from "hono/streaming";
 import { z } from "zod";
 import { normalizeLights, type LightsResponse } from "../shared/arclamp.ts";
 import { orientationsOf } from "../shared/fixtures.ts";
 import { clampAlong, hangsOnRails, RAIL_ID, railLength } from "../shared/rails.ts";
 import { MAX_TAGS, TAG } from "../shared/tags.ts";
-import type { Lights, Spot, Status } from "../shared/vibes.ts";
+import type { Lights, Me, RoomMessage, Spot, Status } from "../shared/vibes.ts";
+import { ApplyRefused, createApply, request as applyRequest } from "./apply.ts";
 import { ArclampError, type Arclamp } from "./arclamp.ts";
 import { requireUser, type AuthEnv } from "./auth.ts";
 import type { Db } from "./db.ts";
@@ -21,7 +21,7 @@ import type { HealthWatch } from "./health.ts";
 import { instanceRoutes, type Instances } from "./instances.ts";
 import { applyEdits, lightsFile } from "./lights.ts";
 import type { SceneFeedSource } from "./scene-feed.ts";
-import { shaderRoutes } from "./shaders.ts";
+import { createShaders, Refused, shaderRoutes } from "./shaders.ts";
 import type { StreamRelay } from "./stream.ts";
 
 // A browser this far behind on the light stream skips frames until it
@@ -51,6 +51,8 @@ export interface ApiDeps {
 // An event stream says something at least this often (a ping, if nothing
 // else), so a browser can tell one that's gone quiet from one that's dead.
 const STREAM_PING_MS = 10_000;
+// The most an apply can say (each change's mask is at most 2000 lights).
+const MAX_APPLY_BYTES = 4 * 1024 * 1024;
 
 /**
  * The lights as vibes has them: arclamp's (asked for at most once a minute),
@@ -79,6 +81,7 @@ export const handleError: ErrorHandler = (err, c) => {
     const caller = err.status >= 400 && err.status < 500 && err.status !== 401 && err.status !== 403;
     return c.json({ error: err.message, code: err.code }, (caller ? err.status : 502) as ContentfulStatusCode);
   }
+  if (err instanceof Refused) return c.json({ error: err.message, code: err.code }, err.status);
   if (err instanceof HTTPException) return err.getResponse();
   console.error(err);
   return c.json({ error: "internal error", code: "internal" }, 500);
@@ -136,7 +139,20 @@ export function apiRoutes({ config, arclamp, db, relay, origins, lights, feed, s
     if (instances) api.route("/", instanceRoutes(instances));
   }
   // Shaders, by vibes' keys: muted, masked, reordered, taken out.
-  api.route("/", shaderRoutes({ config, arclamp, db, instances }));
+  const shaders = createShaders({ config, arclamp, db, instances });
+  api.route("/", shaderRoutes(shaders));
+
+  /** Room tone, merged into arclamp's, and noted in the history (a drag's run of changes as one). */
+  async function setRoomtone(lights: Record<string, Record<string, number>>, user: Me, code?: string, undo?: boolean) {
+    const d = await arclamp.mergeRoomtone({ lights });
+    const ids = Object.keys(lights).map(Number);
+    if (ids.length > 0) {
+      db.logCoalesced({ user, action: "roomtone.set", detail: { lights: ids.length, ...(code ? { code } : {}), ...(undo ? { undo } : {}) } }, ROOMTONE_LOG_WINDOW_MS);
+    }
+    return d;
+  }
+  // A browser's pending edits, made in one go (over the room socket).
+  const apply = createApply({ shaders, instances, setRoomtone });
 
   return api
     .get("/me", (c) => c.json(c.get("user")))
@@ -270,25 +286,71 @@ export function apiRoutes({ config, arclamp, db, relay, origins, lights, feed, s
       return c.body(`${JSON.stringify(lightsFile(await currentLights()), null, 2)}\n`, 200, { "Content-Type": "application/json" });
     })
 
-    // The scene feed (scene-feed.ts): as it is, then each time it changes.
-    .get("/scene/events", (c) => {
-      c.header("Cache-Control", "no-cache");
-      // Proxies that buffer (nginx) pass it straight through.
-      c.header("X-Accel-Buffering", "no");
-      return streamSSE(c, async (stream) => {
-        const send = (json: string) => stream.writeSSE({ event: "scene", data: json });
+    // The room socket (RoomRequest and RoomMessage, in shared/vibes.ts): the
+    // scene feed (scene-feed.ts), as it is and then each time it changes; and
+    // applies, each made in order (apply.ts) and answered once the scene that
+    // shows it has gone out. Its origin is checked as every request's is
+    // (above): a socket isn't held to the same-origin rule.
+    .get(
+      "/scene/ws",
+      upgradeWebSocket((c) => {
+        const user = c.get("user");
+        let closed = false;
         let unsubscribe = () => {};
-        stream.onAbort(() => unsubscribe());
-        const now = feed.current() ?? (await feed.now(), feed.current());
-        if (now) await send(now.json);
-        unsubscribe = feed.subscribe((_feed, json) => void send(json).catch(() => {}));
-        while (!stream.aborted) {
-          await stream.sleep(STREAM_PING_MS);
-          if (!stream.aborted) await stream.writeSSE({ event: "ping", data: "" });
-        }
-        unsubscribe();
-      });
-    })
+        let ping: ReturnType<typeof setInterval> | undefined;
+        // Applies, one at a time, in the order they came.
+        let applying: Promise<void> = Promise.resolve();
+        return {
+          onOpen(_evt, ws) {
+            const say = (message: string) => {
+              if (!closed) ws.send(message);
+            };
+            const scene = (json: string) => say(`{"type":"scene","feed":${json}}`);
+            void (async () => {
+              const now = feed.current() ?? (await feed.now(), feed.current());
+              if (closed) return;
+              if (now) scene(now.json);
+              unsubscribe = feed.subscribe((_feed, json) => scene(json));
+            })();
+            ping = setInterval(() => say('{"type":"ping"}'), STREAM_PING_MS);
+          },
+          onMessage(evt, ws) {
+            const answer = (message: RoomMessage) => {
+              if (!closed) ws.send(JSON.stringify(message));
+            };
+            const text = typeof evt.data === "string" && evt.data.length <= MAX_APPLY_BYTES ? evt.data : "";
+            let asked: ReturnType<typeof applyRequest.safeParse> | null = null;
+            try {
+              asked = applyRequest.safeParse(JSON.parse(text));
+            } catch {
+              // Not JSON: refused below.
+            }
+            if (!asked?.success) {
+              answer({ type: "refused", id: "", at: 0, error: "invalid request", code: "bad_body", made: {} });
+              return;
+            }
+            const { id, changes } = asked.data;
+            applying = applying.then(async () => {
+              let said: RoomMessage;
+              try {
+                said = { type: "applied", id, made: await apply(changes, user) };
+              } catch (err) {
+                const why = err instanceof ApplyRefused ? err : new ApplyRefused(0, "internal", "internal error", {});
+                said = { type: "refused", id, at: why.at, error: why.message, code: why.code, made: why.made };
+              }
+              // What it changed goes out first.
+              await feed.now().catch(() => null);
+              answer(said);
+            });
+          },
+          onClose() {
+            closed = true;
+            unsubscribe();
+            clearInterval(ping);
+          },
+        };
+      }),
+    )
 
     // The scene feed now, with whatever change vibes has just made in it: for a browser that's just changed it.
     .get("/scene/live", async (c) => c.json(await feed.now()))
@@ -320,17 +382,8 @@ export function apiRoutes({ config, arclamp, db, relay, origins, lights, feed, s
         badBody,
       ),
       async (c) => {
-        const user = c.get("user");
         const { lights, code, undo } = c.req.valid("json");
-        const d = await arclamp.mergeRoomtone({ lights });
-        const ids = Object.keys(lights).map(Number);
-        if (ids.length > 0) {
-          db.logCoalesced(
-            { user, action: "roomtone.set", detail: { lights: ids.length, ...(code ? { code } : {}), ...(undo ? { undo } : {}) } },
-            ROOMTONE_LOG_WINDOW_MS,
-          );
-        }
-        return c.json(d);
+        return c.json(await setRoomtone(lights, c.get("user"), code, undo));
       },
     )
 

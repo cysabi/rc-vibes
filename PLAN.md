@@ -393,12 +393,12 @@ ever be built from one of its commits. On while `SKETCHES=1`.
   out.
 - **The scene is pushed** (`src/server/scene-feed.ts`, `src/web/scene.ts`).
   vibes looks at arclamp's scene twice a second (learning footprints as it
-  goes) and pushes it to browsers as Server-Sent Events
-  (`/api/scene/events`) whenever it's different: the stack of shaders as
+  goes) and pushes it to browsers over the room socket
+  (`/api/scene/ws`) whenever it's different: the stack of shaders as
   vibes has them (below), each with its sketch, footprint and instance, but
   not its script (a hash says which; the preview fetches scripts it hasn't
   got, `/api/scene/scripts`). Anything changed through vibes is looked at
-  again at once. A ping every 10 s lets a page tell a quiet stream from a
+  again at once. A ping every 10 s lets a page tell a quiet socket from a
   dead one and open it again (a restarting vibes, behind a proxy that keeps
   the connection, never says).
 
@@ -456,10 +456,20 @@ of the mediating, ids and positions included, is the server's.
   itself: one put in just before vibes stopped is found by its stamp, not
   put in again. A panel open on a sketch you're adding stays open on the
   shader it becomes.
-- **Phase 3:** one socket between browser and server, for the list and for
-  what's asked of it; Apply is one message, which the server makes as one
-  run of changes to the room, in order (with rclamp's batch, were it to
-  land, all or nothing).
+- **Phase 3** (done; `src/server/apply.ts`, `src/web/scene.ts`): one
+  socket between browser and server (`/api/scene/ws`), for the stack and
+  for what's asked of it. Apply is one message, the draft's changes in
+  order (room tone, shaders out, sketches in, mutes and masks, the stack),
+  which the server makes as one run, naming what it adds by the keys of the
+  edits that add them (so a later change, in it or a later apply, can name
+  them too). It's answered once the scene showing it has gone out: applied,
+  or refused at one change, the ones before it made, and the browser keeps
+  the rest pending. A shader gone meanwhile has nothing left to change, so
+  that isn't refused. It isn't all or nothing, since rclamp has no batch
+  (with one, were it to land, it could be). The socket's origin is checked
+  as every request's is; a refused one (a foreign origin, no session) is
+  answered, not left hanging. The routes by key stay, for the panel's own
+  actions and anything else.
 
 ## Gaps in arclamp (PRs to rclamp)
 

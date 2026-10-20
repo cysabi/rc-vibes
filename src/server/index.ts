@@ -3,6 +3,7 @@ import { serveStatic } from "@hono/node-server/serve-static";
 import { Hono, type Context } from "hono";
 import { csrf } from "hono/csrf";
 import http from "node:http";
+import type { Duplex } from "node:stream";
 import { WebSocketServer } from "ws";
 import { apiRoutes, createLights, handleError } from "./api.ts";
 import { createArclamp } from "./arclamp.ts";
@@ -99,9 +100,14 @@ const server = serve(
     if (sketches) console.log(`sketches on: repos in ${sketches.dir}, boxes on ${sketches.runner} from ${sketches.image}`);
   },
 );
-// And their WebSockets (Hono's own listener leaves alone what it doesn't route).
-server.on("upgrade", (req: http.IncomingMessage, socket, head) => {
+// And their WebSockets. One listener for every upgrade: Hono's answers one it
+// refuses (a foreign origin, no session) only while it's the only listener,
+// leaving it to any other otherwise, which would leave it hanging.
+const [hono] = server.listeners("upgrade") as ((req: http.IncomingMessage, socket: Duplex, head: Buffer) => void)[];
+server.removeAllListeners("upgrade");
+server.on("upgrade", (req: http.IncomingMessage, socket: Duplex, head: Buffer) => {
   if (proxy?.handles(req)) void proxy.upgrade(req, socket, head);
+  else hono?.call(server, req, socket, head);
 });
 
 // Browsers hold the light stream and keep-alive connections open

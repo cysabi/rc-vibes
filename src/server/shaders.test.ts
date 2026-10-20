@@ -8,7 +8,7 @@ import type { AuthEnv } from "./auth.ts";
 import { openDb, type Db } from "./db.ts";
 import { loadConfig } from "./env.ts";
 import { createInstances, type Instances } from "./instances.ts";
-import { shaderOfKey, shaderRoutes } from "./shaders.ts";
+import { createShaders, shaderOfKey, shaderRoutes } from "./shaders.ts";
 import { stamp } from "./stamp.ts";
 
 const KEY = "k".repeat(32);
@@ -87,7 +87,7 @@ beforeEach(() => {
       c.set("user", ada);
       await next();
     })
-    .route("/", shaderRoutes({ config, arclamp, db, instances }));
+    .route("/", shaderRoutes(createShaders({ config, arclamp, db, instances })));
   app.onError(handleError);
 });
 

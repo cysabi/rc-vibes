@@ -14,9 +14,8 @@
 
 import { useSyncExternalStore } from "react";
 import type { Channels } from "../shared/arclamp.ts";
-import type { Instance, ShaderKey, ShaderSketch } from "../shared/vibes.ts";
-import { request } from "./api.ts";
-import { invalidateScene, type Scene, type SceneShader } from "./scene.ts";
+import type { Change, Instance, ShaderKey, ShaderSketch } from "../shared/vibes.ts";
+import { ApplyError, applyChanges, invalidateScene, type Scene, type SceneShader } from "./scene.ts";
 
 /** A shader in the stack: vibes' key, for one in the room or on its way; "+…" for a sketch you're adding. */
 export type LayerKey = ShaderKey;
@@ -407,114 +406,107 @@ function omit<T>(record: Record<string, T>, key: string): Record<string, T> {
   return out;
 }
 
-const ignoreMissing = async (p: Promise<unknown>) => {
-  try {
-    await p;
-  } catch (err) {
-    // Gone already (deleted by someone else): nothing left to do.
-    if ((err as { status?: number }).status !== 404) throw err;
-  }
-};
-
 /**
- * Make the room match the draft: room tone, then the shaders it takes out,
- * then each other shader's mute and mask, then the stack's order. A failure
- * part way leaves just the rest pending, and is thrown.
+ * Make the room match the draft, in one apply over the room socket: room
+ * tone, then the shaders it takes out, then the sketches it adds, then each
+ * other shader's mute and mask, then the stack's order. Refused part way,
+ * just the rest stays pending, and it's thrown.
  */
 export async function applyDraft(scene: Scene): Promise<void> {
   const start = draft;
-  let d = draft;
-  // What's left, kept here until the end: the preview holds steady meanwhile.
-  const step = (next: Draft) => {
-    d = next;
-  };
-  try {
-    await sendDraft(scene, d, step);
-  } finally {
-    // Catch the scene up first, so the preview never drops a change before
-    // the live room shows it. Edits made while the draft was being sent are
-    // kept: they only count where they still differ from the room. But a
-    // sketch added is added once: whatever went in comes out of the draft,
-    // however the draft changed meanwhile (left in, live mode would put it
-    // in again, and again).
-    await invalidateScene().catch(() => {});
-    const added = new Set(start.added.filter((a) => !d.added.some((x) => x.key === a.key)).map((a) => a.key));
-    set(draft === start ? d : { ...draft, added: draft.added.filter((a) => !added.has(a.key)) });
-  }
+  const { rest: d, error } = await sendDraft(scene, start);
+  // The scene showing what was made comes before the answer; with no answer
+  // (the connection lost), it's looked at again. Edits made while the draft
+  // was being sent are kept: they only count where they still differ from
+  // the room. But a sketch added is added once: whatever went in comes out
+  // of the draft, however the draft changed meanwhile (left in, live mode
+  // would put it in again, and again).
+  if (error && !(error instanceof ApplyError)) await invalidateScene().catch(() => {});
+  const added = new Set(start.added.filter((a) => !d.added.some((x) => x.key === a.key)).map((a) => a.key));
+  set(draft === start ? d : { ...draft, added: draft.added.filter((a) => !added.has(a.key)) });
+  if (error) throw error;
 }
 
-async function sendDraft(scene: Scene, d: Draft, onStep: (next: Draft) => void) {
-  const step = (next: Draft) => {
-    d = next;
-    onStep(next);
+/**
+ * The draft's changes, sent as one apply; what's left of the draft after
+ * (nothing, unless the apply was refused part way, or not answered), and why.
+ */
+async function sendDraft(scene: Scene, d: Draft): Promise<{ rest: Draft; error: Error | null }> {
+  // Each change, with what's left of the draft once it's made.
+  const changes: Change[] = [];
+  const rests: Draft[] = [];
+  let rest = d;
+  const then = (next: Draft, change?: Change) => {
+    rest = next;
+    if (!change) return;
+    changes.push(change);
+    rests.push(next);
   };
 
   const tone = roomtoneChanges(scene, d);
-  if (Object.keys(tone).length > 0) {
-    await request("PUT", "/api/roomtone", { lights: tone, ...(d.roomtoneCode ? { code: d.roomtoneCode } : {}) });
-  }
-  step({ ...d, roomtone: {}, roomtoneCode: null });
+  then({ ...rest, roomtone: {}, roomtoneCode: null }, Object.keys(tone).length > 0 ? { op: "roomtone", lights: tone, ...(d.roomtoneCode ? { code: d.roomtoneCode } : {}) } : undefined);
 
   const byKey = new Map(scene.shaders.map((s) => [s.key, s]));
   // The whole stack as you'd have it, top first, sketches you're adding included.
   const order = layersOf(scene, d).map((l) => l.key);
-  const reordered = d.order !== null && order.filter((k) => byKey.has(k)).join() !== sceneKeys(scene, d).join();
 
   // Out, with whatever else was pending for them.
   for (const key of d.removed) {
-    if (byKey.has(key)) await ignoreMissing(request("DELETE", `/api/shaders/${key}`));
-    step({ ...d, removed: d.removed.filter((k) => k !== key), edits: omit(d.edits, key) });
+    then({ ...rest, removed: rest.removed.filter((k) => k !== key), edits: omit(rest.edits, key) }, byKey.has(key) ? { op: "remove", key } : undefined);
   }
 
   // In, each on its home, from its branch: as the build previewed (or
   // building), or the branch's head if none was asked for yet; switched as
   // you have it, and where you put it (just above the one under it), or on
-  // top. The lowest first, so one is put in before another goes above it.
-  // vibes builds each, and puts it in once built.
-  const made = new Map<LayerKey, string>();
-  const keyFor = (key: LayerKey) => (byKey.has(key) ? key : made.get(key));
+  // top. The lowest first, so one is in before another goes above it (by its
+  // edit's key). vibes builds each, and puts it in once built.
   for (const key of [...order].reverse()) {
     const a = d.added.find((x) => x.key === key);
     if (!a) continue;
     const layer = layerOfAdding(a, d);
-    const under = order.slice(order.indexOf(key) + 1).find((k) => keyFor(k) !== undefined);
-    const instance = await request<Instance>("POST", "/api/instances", {
-      sketch: a.sketchId,
-      branch: a.branch,
-      ...(a.build && a.build.state !== "failed" ? { build: a.build.id } : {}),
-      home: a.home,
-      key: a.key,
-      muted: layer.muted,
-      mask: layer.mask,
-      ...(d.order ? { above: under ? keyFor(under) : "" } : {}),
-    });
-    made.set(a.key, instance.id);
-    madeAs.set(a.key, instance.id);
-    step({ ...d, added: d.added.filter((x) => x.key !== a.key), edits: omit(d.edits, a.key) });
+    const under = order[order.indexOf(key) + 1];
+    then(
+      { ...rest, added: rest.added.filter((x) => x.key !== a.key), edits: omit(rest.edits, a.key) },
+      {
+        op: "add",
+        key: a.key,
+        sketch: a.sketchId,
+        branch: a.branch,
+        ...(a.build && a.build.state !== "failed" ? { build: a.build.id } : {}),
+        home: a.home,
+        muted: layer.muted,
+        mask: layer.mask,
+        ...(d.order ? { above: under ?? "" } : {}),
+      },
+    );
   }
 
   // On its way in, vibes keeps the change for when it goes in; gone since,
   // there's nothing left to change.
-  for (const [key, patch] of Object.entries(d.edits)) {
+  for (const [key, patch] of Object.entries(rest.edits)) {
     const shader = byKey.get(key);
-    const live = shader && changeable(shader) ? shader : null;
-    const mute =
-      live && patch.muted !== undefined && patch.muted !== live.muted
-        ? () => ignoreMissing(request("POST", `/api/shaders/${key}/muted`, { muted: patch.muted }))
-        : null;
-    const mask =
-      live && patch.mask !== undefined && !sameMask(patch.mask, live.mask)
-        ? () => ignoreMissing(request("POST", `/api/shaders/${key}/mask`, { mask: patch.mask }))
-        : null;
+    const target = shader && changeable(shader) ? shader : null;
+    const mute: Change | null = target && patch.muted !== undefined && patch.muted !== target.muted ? { op: "muted", key, muted: patch.muted } : null;
+    const mask: Change | null = target && patch.mask !== undefined && !sameMask(patch.mask, target.mask) ? { op: "mask", key, mask: patch.mask } : null;
     // Unmuting, the mask goes first, so the shader never runs on lights it's
     // meant to stay off; muting, the mute does.
-    for (const send of patch.muted === false ? [mask, mute] : [mute, mask]) if (send) await send();
-    step({ ...d, edits: omit(d.edits, key) });
+    const sends = (patch.muted === false ? [mask, mute] : [mute, mask]).filter((c) => c !== null);
+    for (const [i, change] of sends.entries()) then(i === sends.length - 1 ? { ...rest, edits: omit(rest.edits, key) } : rest, change);
+    if (sends.length === 0) then({ ...rest, edits: omit(rest.edits, key) });
   }
 
   // The stack in your order, top first: vibes moves those in the room, places
   // those on their way in (and passes over any gone meanwhile, and leaves any
   // come since on top).
-  if (reordered) await request("PUT", "/api/stack", { order: order.flatMap((k) => keyFor(k) ?? []) });
-  step(EMPTY);
+  if (d.order !== null && order.filter((k) => byKey.has(k)).join() !== sceneKeys(scene, d).join()) then(EMPTY, { op: "stack", order });
+
+  if (changes.length === 0) return { rest: EMPTY, error: null };
+  try {
+    for (const [key, id] of Object.entries(await applyChanges(changes))) madeAs.set(key, id);
+    return { rest: EMPTY, error: null };
+  } catch (err) {
+    if (!(err instanceof ApplyError)) return { rest: d, error: err as Error };
+    for (const [key, id] of Object.entries(err.made)) madeAs.set(key, id);
+    return { rest: err.at > 0 ? rests[err.at - 1]! : d, error: err };
+  }
 }

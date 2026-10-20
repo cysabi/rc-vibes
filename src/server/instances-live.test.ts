@@ -6,7 +6,7 @@ import type { AuthEnv } from "./auth.ts";
 import { openDb, type Db } from "./db.ts";
 import { loadConfig } from "./env.ts";
 import { createInstances, instanceRoutes, type Instances } from "./instances.ts";
-import { shaderRoutes } from "./shaders.ts";
+import { createShaders, shaderRoutes } from "./shaders.ts";
 import { readStamp, stamp, stampAs } from "./stamp.ts";
 
 const KEY = "k".repeat(32);
@@ -105,7 +105,7 @@ beforeEach(() => {
       await next();
     })
     .route("/", instanceRoutes(instances))
-    .route("/", shaderRoutes({ config, arclamp, db, instances }));
+    .route("/", shaderRoutes(createShaders({ config, arclamp, db, instances })));
 });
 
 const send = (method: string, path: string, body?: unknown) =>

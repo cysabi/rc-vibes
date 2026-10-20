@@ -1,4 +1,4 @@
-// The room, as vibes pushes it to browsers (/api/scene/events): the stack of
+// The room, as vibes pushes it to browsers (the room socket): the stack of
 // shaders as vibes has them (Shader, in shared/vibes.ts), top first, and the
 // room tone; sent whenever it's different. It's made from arclamp's scene,
 // followed as it changes (/v1/scene/events: the whole scene to start, then

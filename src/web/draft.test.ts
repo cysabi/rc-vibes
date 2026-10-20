@@ -1,30 +1,46 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Instance } from "../shared/vibes.ts";
+import type { Change, Instance } from "../shared/vibes.ts";
 import type { Scene, SceneShader } from "./scene.ts";
 
-const calls: string[] = [];
-let failOn: string | null = null;
-// Something done while the next request is in flight (an edit mid-apply).
+// What was sent, as each apply's changes.
+const sent: Change[] = [];
+// Refuses the first change this says, as vibes would.
+let failOn: ((c: Change) => boolean) | null = null;
+// Something done while an apply is on its way (an edit mid-apply).
 let during: (() => void) | null = null;
 
-vi.mock("./api.ts", () => ({
-  request: vi.fn(async (method: string, path: string, body?: unknown) => {
-    const call = `${method} ${path}${body === undefined ? "" : ` ${JSON.stringify(body)}`}`;
-    calls.push(call);
-    if (during) {
-      const meanwhile = during;
-      during = null;
-      meanwhile();
+vi.mock("./scene.ts", () => {
+  class ApplyError extends Error {
+    at: number;
+    made: Record<string, string>;
+    constructor(message: string, at: number, made: Record<string, string>) {
+      super(message);
+      this.at = at;
+      this.made = made;
     }
-    if (failOn && call.startsWith(failOn)) throw new Error("arclamp said no");
-    // An instance, made: its id vibes' own.
-    if (path === "/api/instances") return { id: `made${(body as { key: string }).key}` };
-    return {};
-  }),
-}));
-vi.mock("./scene.ts", () => ({ invalidateScene: vi.fn(async () => {}) }));
+  }
+  return {
+    ApplyError,
+    invalidateScene: vi.fn(async () => {}),
+    applyChanges: vi.fn(async (changes: Change[]) => {
+      sent.push(...changes);
+      if (during) {
+        const meanwhile = during;
+        during = null;
+        meanwhile();
+      }
+      const made: Record<string, string> = {};
+      for (const [at, c] of changes.entries()) {
+        if (failOn?.(c)) throw new ApplyError("arclamp said no", at, made);
+        // An instance, made: its id vibes' own.
+        if (c.op === "add") made[c.key] = `made${c.key}`;
+      }
+      return made;
+    }),
+  };
+});
 
-const { applyDraft, currentDraft, drafts, EMPTY, layerOf, layersOf, pendingCount, reachOf, reorderWithin, roomtoneChanges, switchEverywhere, switchFor, switchState, templateOf } =
+const { applyDraft, currentDraft, drafts, EMPTY, keyNow, layerOf, layersOf, pendingCount, reachOf, reorderWithin, roomtoneChanges, switchEverywhere, switchFor, switchState, templateOf } =
   await import("./draft.ts");
 
 /** A shader in the room, as vibes sends it (with its script fetched): arclamp's shader `id`, put in some other way. */
@@ -62,7 +78,7 @@ const keys = (d = currentDraft()) => layersOf(live, d).map((l) => l.key);
 
 beforeEach(() => {
   drafts.discard();
-  calls.length = 0;
+  sent.length = 0;
   failOn = null;
   during = null;
 });
@@ -151,7 +167,10 @@ describe("shaders on their way in", () => {
     expect(layerOf(scene, currentDraft(), "i1")!.muted).toBe(true);
     expect(pendingCount(scene, currentDraft())).toBe(2);
     await applyDraft(scene);
-    expect(calls).toEqual(['POST /api/shaders/i1/muted {"muted":true}', 'PUT /api/stack {"order":["rclamp-12","i1","rclamp-11"]}']);
+    expect(sent).toEqual([
+      { op: "muted", key: "i1", muted: true },
+      { op: "stack", order: ["rclamp-12", "i1", "rclamp-11"] },
+    ]);
     expect(currentDraft()).toBe(EMPTY);
   });
 
@@ -167,7 +186,7 @@ describe("shaders on their way in", () => {
     drafts.remove("i1");
     expect(pendingCount(scene, currentDraft())).toBe(1);
     await applyDraft(scene);
-    expect(calls).toEqual(["DELETE /api/shaders/i1"]);
+    expect(sent).toEqual([{ op: "remove", key: "i1" }]);
   });
 });
 
@@ -188,15 +207,15 @@ describe("room tone with pending edits", () => {
 });
 
 describe("apply", () => {
-  it("sends room tone, then mutes and masks, then the order", async () => {
+  it("sends room tone, then mutes and masks, then the order, as one apply", async () => {
     drafts.setRoomtone({ "64": { on: 1 } }, "on");
     drafts.patchShader("rclamp-12", { muted: true });
     drafts.reorder(["rclamp-11", "rclamp-12"]);
     await applyDraft(live);
-    expect(calls).toEqual([
-      'PUT /api/roomtone {"lights":{"64":{"on":1}},"code":"on"}',
-      'POST /api/shaders/rclamp-12/muted {"muted":true}',
-      'PUT /api/stack {"order":["rclamp-11","rclamp-12"]}',
+    expect(sent).toEqual([
+      { op: "roomtone", lights: { "64": { on: 1 } }, code: "on" },
+      { op: "muted", key: "rclamp-12", muted: true },
+      { op: "stack", order: ["rclamp-11", "rclamp-12"] },
     ]);
     expect(currentDraft()).toBe(EMPTY);
   });
@@ -205,7 +224,10 @@ describe("apply", () => {
     const muted = room(shader(12), shader(11, { muted: true }));
     drafts.patchShader("rclamp-11", { muted: false, mask: [64] });
     await applyDraft(muted);
-    expect(calls).toEqual(['POST /api/shaders/rclamp-11/mask {"mask":[64]}', 'POST /api/shaders/rclamp-11/muted {"muted":false}']);
+    expect(sent).toEqual([
+      { op: "mask", key: "rclamp-11", mask: [64] },
+      { op: "muted", key: "rclamp-11", muted: false },
+    ]);
   });
 
   it("takes shaders out, without sending what else was pending for them", async () => {
@@ -213,13 +235,16 @@ describe("apply", () => {
     drafts.patchShader("rclamp-11", { muted: true });
     drafts.remove("rclamp-12");
     await applyDraft(live);
-    expect(calls).toEqual(["DELETE /api/shaders/rclamp-12", 'POST /api/shaders/rclamp-11/muted {"muted":true}']);
+    expect(sent).toEqual([
+      { op: "remove", key: "rclamp-12" },
+      { op: "muted", key: "rclamp-11", muted: true },
+    ]);
     expect(currentDraft()).toBe(EMPTY);
   });
 
   it("leaves a shader it couldn't take out pending", async () => {
     drafts.remove("rclamp-12");
-    failOn = "DELETE /api/shaders/rclamp-12";
+    failOn = (c) => c.op === "remove";
     await expect(applyDraft(live)).rejects.toThrow("arclamp said no");
     expect(currentDraft().removed).toEqual(["rclamp-12"]);
   });
@@ -228,18 +253,18 @@ describe("apply", () => {
     drafts.reorder(["rclamp-12", "rclamp-11"]);
     drafts.patchShader("rclamp-11", { muted: true });
     await applyDraft(live);
-    expect(calls).toEqual(['POST /api/shaders/rclamp-11/muted {"muted":true}']);
-    calls.length = 0;
+    expect(sent).toEqual([{ op: "muted", key: "rclamp-11", muted: true }]);
+    sent.length = 0;
     drafts.reorder(["rclamp-11", "rclamp-12"]);
     await applyDraft(live);
-    expect(calls).toEqual(['PUT /api/stack {"order":["rclamp-11","rclamp-12"]}']);
+    expect(sent).toEqual([{ op: "stack", order: ["rclamp-11", "rclamp-12"] }]);
   });
 
   it("lets go of edits to a shader that's gone", async () => {
     drafts.patchShader("rclamp-99", { muted: true });
     expect(pendingCount(live, currentDraft())).toBe(0);
     await applyDraft(live);
-    expect(calls).toEqual([]);
+    expect(sent).toEqual([]);
     expect(currentDraft()).toBe(EMPTY);
   });
 
@@ -254,7 +279,7 @@ describe("apply", () => {
   it("leaves just what didn't land pending when a step fails", async () => {
     drafts.setRoomtone({ "1": { brightness: 0.2 } }, "dim");
     drafts.patchShader("rclamp-12", { muted: true });
-    failOn = "POST /api/shaders/rclamp-12/muted";
+    failOn = (c) => c.op === "muted" && c.key === "rclamp-12";
     await expect(applyDraft(live)).rejects.toThrow("arclamp said no");
     const left = currentDraft();
     expect(left.roomtone).toEqual({});
@@ -299,9 +324,9 @@ describe("adding a sketch", () => {
     drafts.built(first, built, "function update() {}");
     const second = rain();
     await applyDraft(live);
-    expect(calls).toEqual([
-      `POST /api/instances {"sketch":"s1","branch":"main","build":"b1","home":[1,2],"key":"${first}","muted":false,"mask":[64]}`,
-      `POST /api/instances {"sketch":"s2","branch":"ada/try","home":[1],"key":"${second}","muted":false,"mask":[2,64]}`,
+    expect(sent).toEqual([
+      { op: "add", key: first, sketch: "s1", branch: "main", build: "b1", home: [1, 2], muted: false, mask: [64] },
+      { op: "add", key: second, sketch: "s2", branch: "ada/try", home: [1], muted: false, mask: [2, 64] },
     ]);
     expect(currentDraft()).toBe(EMPTY);
   });
@@ -314,7 +339,7 @@ describe("adding a sketch", () => {
     expect(pendingCount(live, currentDraft())).toBe(1);
     drafts.patchShader(key, { muted: true });
     await applyDraft(live);
-    expect(calls).toEqual([`POST /api/instances {"sketch":"s1","branch":"main","home":[1,2],"key":"${key}","muted":true,"mask":[2,64]}`]);
+    expect(sent).toEqual([{ op: "add", key, sketch: "s1", branch: "main", home: [1, 2], muted: true, mask: [2, 64] }]);
     expect(currentDraft()).toBe(EMPTY);
   });
 
@@ -325,22 +350,25 @@ describe("adding a sketch", () => {
     drafts.reorder(["rclamp-12", first, "rclamp-11", second]);
     expect(pendingCount(live, currentDraft())).toBe(2);
     await applyDraft(live);
-    expect(calls).toEqual([
-      `POST /api/instances {"sketch":"s2","branch":"ada/try","home":[1],"key":"${second}","muted":false,"mask":[2,64],"above":""}`,
-      `POST /api/instances {"sketch":"s1","branch":"main","home":[1,2],"key":"${first}","muted":false,"mask":[64],"above":"rclamp-11"}`,
+    expect(sent).toEqual([
+      { op: "add", key: second, sketch: "s2", branch: "ada/try", home: [1], muted: false, mask: [2, 64], above: "" },
+      { op: "add", key: first, sketch: "s1", branch: "main", home: [1, 2], muted: false, mask: [64], above: "rclamp-11" },
     ]);
   });
 
-  it("goes in above another you're adding, by the shader that one's become; and the stack's sent with them", async () => {
+  it("goes in above another you're adding, by that one's key; and the stack's sent with them", async () => {
     const first = aurora();
     const second = rain();
     drafts.reorder([first, second, "rclamp-11", "rclamp-12"]);
     await applyDraft(live);
-    expect(calls).toEqual([
-      `POST /api/instances {"sketch":"s2","branch":"ada/try","home":[1],"key":"${second}","muted":false,"mask":[2,64],"above":"rclamp-11"}`,
-      `POST /api/instances {"sketch":"s1","branch":"main","home":[1,2],"key":"${first}","muted":false,"mask":[64],"above":"made${second}"}`,
-      `PUT /api/stack {"order":["made${first}","made${second}","rclamp-11","rclamp-12"]}`,
+    expect(sent).toEqual([
+      { op: "add", key: second, sketch: "s2", branch: "ada/try", home: [1], muted: false, mask: [2, 64], above: "rclamp-11" },
+      { op: "add", key: first, sketch: "s1", branch: "main", home: [1, 2], muted: false, mask: [64], above: second },
+      { op: "stack", order: [first, second, "rclamp-11", "rclamp-12"] },
     ]);
+    // What's open on one stays open on the shader it's become.
+    expect(keyNow(first)).toBe(`made${first}`);
+    expect(keyNow("rclamp-11")).toBe("rclamp-11");
   });
 
   it("goes in once, however the draft changes while it's sent", async () => {
@@ -351,7 +379,7 @@ describe("adding a sketch", () => {
       drafts.setRoomtone({ "1": { brightness: 0.3 } }, "dimmer");
     };
     await applyDraft(live);
-    expect(calls.filter((c) => c.startsWith("POST /api/instances"))).toHaveLength(1);
+    expect(sent.filter((c) => c.op === "add")).toHaveLength(1);
     expect(currentDraft().added).toEqual([]);
     expect(currentDraft().roomtone).toEqual({ "1": { brightness: 0.3 } });
     expect(pendingCount(live, currentDraft())).toBe(1);
@@ -369,9 +397,19 @@ describe("adding a sketch", () => {
 
   it("stays pending if it couldn't go in", async () => {
     aurora();
-    failOn = "POST /api/instances";
+    failOn = (c) => c.op === "add";
     await expect(applyDraft(live)).rejects.toThrow("arclamp said no");
     expect(currentDraft().added).toMatchObject([{ sketchId: "s1" }]);
+  });
+
+  it("comes out of the draft once it's in, though the apply stops after it", async () => {
+    const key = aurora();
+    drafts.patchShader("rclamp-12", { muted: true });
+    failOn = (c) => c.op === "muted";
+    await expect(applyDraft(live)).rejects.toThrow("arclamp said no");
+    expect(currentDraft().added).toEqual([]);
+    expect(currentDraft().edits).toEqual({ "rclamp-12": { muted: true } });
+    expect(keyNow(key)).toBe(`made${key}`);
   });
 });
 

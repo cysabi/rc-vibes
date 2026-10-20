@@ -1,13 +1,15 @@
-// The room, as vibes pushes it (/api/scene/events, scene-feed.ts on the
-// server): the stack of shaders as vibes has them (top first: the ones on
-// their way in, then the ones in the room), and the room tone; sent again
-// each time it changes, while anything here is watching. The feed leaves
-// scripts out (scriptHash says which each is); the preview needs them to run
-// pending edits, so they're fetched once each, by hash, and put back.
+// The room socket (/api/scene/ws; RoomMessage and RoomRequest, in
+// shared/vibes.ts): the room as vibes pushes it (scene-feed.ts on the
+// server), the stack of shaders as vibes has them, top first, and the room
+// tone, sent again each time it changes while anything here is watching; and
+// applies, a draft's changes sent as one (applyChanges), each answered once
+// the scene showing it has come. The feed leaves scripts out (scriptHash says
+// which each is); the preview needs them to run pending edits, so they're
+// fetched once each, by hash, and put back.
 
 import { useSyncExternalStore } from "react";
 import type { RoomTemplate } from "../shared/arclamp.ts";
-import type { SceneFeed, Shader } from "../shared/vibes.ts";
+import type { Change, RoomMessage, RoomRequest, SceneFeed, Shader, ShaderKey } from "../shared/vibes.ts";
 import { request } from "./api.ts";
 
 /** A shader as vibes sent it, with its script once that's here. */
@@ -32,7 +34,7 @@ let feed: SceneFeed | null = null;
 const scripts = new Map<string, string>();
 const fetching = new Set<string>();
 const listeners = new Set<() => void>();
-let source: EventSource | null = null;
+let socket: WebSocket | null = null;
 
 function publish() {
   if (!feed) return;
@@ -69,10 +71,25 @@ async function fetchScripts() {
   }
 }
 
-// How long to wait before opening the stream again, once it's given up.
+/** An apply vibes refused at one of its changes (`at`): the ones before it were made, adding `made`. */
+export class ApplyError extends Error {
+  readonly at: number;
+  readonly made: Record<string, ShaderKey>;
+
+  constructor(message: string, at: number, made: Record<string, ShaderKey>) {
+    super(message);
+    this.at = at;
+    this.made = made;
+  }
+}
+
+// Applies sent, by id, waiting for their answers.
+const waiting = new Map<string, { resolve: (made: Record<string, ShaderKey>) => void; reject: (err: Error) => void }>();
+
+// How long to wait before opening the socket again, once it's closed.
 const RETRY_MS = 2000;
 // vibes says something at least every 10 s (a ping, if nothing else); this
-// long without a word, the stream's dead, though the browser may not know
+// long without a word, the socket's dead, though the browser may not know
 // (vibes gone from behind a proxy that keeps the connection), so it's opened again.
 const SILENT_MS = 25_000;
 let retry: number | undefined;
@@ -80,33 +97,39 @@ let heard = 0;
 let watchdog: number | undefined;
 
 function open() {
-  const es = new EventSource("/api/scene/events");
-  source = es;
+  const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/scene/ws`);
+  socket = ws;
   heard = Date.now();
   window.clearInterval(watchdog);
   watchdog = window.setInterval(() => {
-    if (source !== es || Date.now() - heard < SILENT_MS) return;
-    es.close();
-    source = null;
-    open();
+    if (socket === ws && Date.now() - heard >= SILENT_MS) ws.close();
   }, SILENT_MS / 5);
-  es.onopen = () => (heard = Date.now());
-  es.addEventListener("ping", () => (heard = Date.now()));
-  es.addEventListener("scene", (e) => {
+  ws.onopen = () => (heard = Date.now());
+  ws.onmessage = (e: MessageEvent<string>) => {
     heard = Date.now();
-    take(JSON.parse((e as MessageEvent<string>).data) as SceneFeed);
-  });
-  es.onerror = () => {
-    // A dropped connection it reconnects by itself, but one answered with an
-    // error (vibes restarting, behind a proxy) it gives up on for good: so
-    // it's opened again here. Meanwhile the last scene stands.
-    if (es.readyState === EventSource.CLOSED && source === es) {
-      source = null;
-      window.clearTimeout(retry);
-      retry = window.setTimeout(() => {
-        if (listeners.size > 0 && !source) open();
-      }, RETRY_MS);
+    const m = JSON.parse(e.data) as RoomMessage;
+    if (m.type === "scene") take(m.feed);
+    if (m.type !== "applied" && m.type !== "refused") return;
+    const asked = waiting.get(m.id);
+    waiting.delete(m.id);
+    if (m.type === "applied") asked?.resolve(m.made);
+    else asked?.reject(new ApplyError(m.error, m.at, m.made));
+  };
+  ws.onclose = () => {
+    if (socket !== ws) return;
+    socket = null;
+    window.clearInterval(watchdog);
+    // Applies with no answer now: made, or not, or some of them. Sending
+    // them again is safe (a sketch is added once, however often it's sent).
+    for (const [id, asked] of waiting) {
+      waiting.delete(id);
+      asked.reject(new Error("lost the connection to vibes"));
     }
+    // Opened again in a moment, while anything's watching. Meanwhile the last scene stands.
+    window.clearTimeout(retry);
+    retry = window.setTimeout(() => {
+      if (listeners.size > 0 && !socket) open();
+    }, RETRY_MS);
     if (state.scene === undefined) {
       state = { ...state, error: new Error("couldn't reach vibes for the scene") };
       for (const l of listeners) l();
@@ -116,16 +139,33 @@ function open() {
 
 function subscribe(listener: () => void) {
   listeners.add(listener);
-  if (!source) open();
+  if (!socket) open();
   return () => {
     listeners.delete(listener);
-    if (listeners.size === 0) {
+    if (listeners.size === 0 && waiting.size === 0) {
       window.clearTimeout(retry);
       window.clearInterval(watchdog);
-      source?.close();
-      source = null;
+      const ws = socket;
+      socket = null;
+      ws?.close();
     }
   };
+}
+
+/**
+ * A draft's changes, made in the room in order, as one apply; the shaders
+ * it added, by the keys of the edits that added them. Refused at a change,
+ * an ApplyError says which.
+ */
+export function applyChanges(changes: Change[]): Promise<Record<string, ShaderKey>> {
+  return new Promise((resolve, reject) => {
+    const id = crypto.randomUUID();
+    waiting.set(id, { resolve, reject });
+    const ws = socket ?? (open(), socket!);
+    const send = () => ws.send(JSON.stringify({ type: "apply", id, changes } satisfies RoomRequest));
+    if (ws.readyState === WebSocket.OPEN) send();
+    else ws.addEventListener("open", send, { once: true });
+  });
 }
 
 const snapshot = () => state;
