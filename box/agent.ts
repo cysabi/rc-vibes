@@ -9,6 +9,11 @@
 // It answers on VS Code's port, 3000, until it's claimed: GET /claim says it's
 // waiting (204), and POST /claim, with the claim token vibes booted it with,
 // claims it. Anything else is a 503: there's no VS Code here yet.
+//
+// A box can be claimed for a job instead (POST /claim with a job): pushing
+// someone's changes to main (box/publish.sh), for adding a sketch to the room
+// with them. Then it puts their home in place as for VS Code, runs the job as
+// them, answers the claim with how it went, and ends.
 
 import { type ChildProcess, execFileSync, spawn } from "node:child_process";
 import { timingSafeEqual } from "node:crypto";
@@ -23,17 +28,23 @@ const BOX = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 // Only vibes' own settings are passed on to VS Code, never PATH and the like.
 const SETTING = /^VIBES_[A-Z_]+$/;
 
+// A job may take this long, at most.
+const JOB_TIMEOUT_MS = 2 * 60_000;
+
 const start = process.argv[2];
+const publish = process.argv[3];
 const token = process.env.VIBES_CLAIM_TOKEN;
 delete process.env.VIBES_CLAIM_TOKEN;
 if (!start || !token) {
-  console.error("usage: VIBES_CLAIM_TOKEN=… node agent.ts <start script>");
+  console.error("usage: VIBES_CLAIM_TOKEN=… node agent.ts <start script> [<publish script>]");
   process.exit(2);
 }
 
-// The homes, seen from the machine they're kept on, are no one's to look through.
+// The homes, seen from the machine they're kept on, are no one's to look
+// through: vibes reaches one it knows the name of (read-only, to see what's
+// changed in it: src/server/changes.ts), and nothing can list them.
 try {
-  chmodSync(HOMES, 0o700);
+  chmodSync(HOMES, 0o711);
 } catch (err) {
   console.error("couldn't close up the homes:", (err as Error).message);
 }
@@ -66,8 +77,10 @@ function startNix() {
   daemon.on("exit", (code) => console.error(`nix-daemon ended (${code})`));
 }
 
+const settingsOf = (env: Record<string, string>) => Object.fromEntries(Object.entries(env).filter(([k, v]) => SETTING.test(k) && typeof v === "string"));
+
 function startVsCode(env: Record<string, string>) {
-  const settings = Object.fromEntries(Object.entries(env).filter(([k, v]) => SETTING.test(k) && typeof v === "string"));
+  const settings = settingsOf(env);
   // Started as them, which leaves it no capabilities, and nothing in the image
   // can give any back. (It goes into its home itself: root here can't, without
   // a capability to read others' folders.)
@@ -77,6 +90,27 @@ function startVsCode(env: Record<string, string>) {
     process.exit(1);
   });
   vscode.on("exit", (code) => process.exit(code ?? 1));
+}
+
+/** A job's script, run as them as VS Code would be, until it ends (or JOB_TIMEOUT_MS): how it ended, its last line out, and the end of all it said. */
+function runJob(script: string, env: Record<string, string>): Promise<{ code: number; said: string; output: string }> {
+  return new Promise((resolve) => {
+    const child = spawn(script, [], { uid: UID, gid: GID, cwd: "/", stdio: ["ignore", "pipe", "pipe"], env: { ...process.env, ...settingsOf(env), HOME } });
+    let out = "";
+    let output = "";
+    child.stdout.on("data", (c: Buffer) => {
+      out = (out + c.toString()).slice(-4000);
+      output = (output + c.toString()).slice(-16_000);
+    });
+    child.stderr.on("data", (c: Buffer) => void (output = (output + c.toString()).slice(-16_000)));
+    const timer = setTimeout(() => child.kill("SIGKILL"), JOB_TIMEOUT_MS);
+    const done = (code: number, also = "") => {
+      clearTimeout(timer);
+      resolve({ code, said: out.trim().split("\n").at(-1) ?? "", output: output + also });
+    };
+    child.on("error", (err) => done(-1, err.message));
+    child.on("close", (code) => done(code ?? -1));
+  });
 }
 
 // As PID 1, nothing ends it but what it does itself.
@@ -108,8 +142,17 @@ const server = http.createServer((req, res) => {
   });
   req.on("end", () => {
     try {
-      const { box, env } = JSON.parse(Buffer.concat(chunks).toString()) as { box: string; env: Record<string, string> };
+      const { box, env, job } = JSON.parse(Buffer.concat(chunks).toString()) as { box: string; env: Record<string, string>; job?: string };
       if (typeof box !== "string" || !BOX.test(box)) throw new Error("that isn't a box");
+      if (job !== undefined) {
+        if (job !== "publish" || !publish) throw new Error(`this box can't do ${String(job)}`);
+        moveIn(box);
+        console.log(`claimed to ${job} for box ${box}`);
+        void runJob(publish, env ?? {}).then((result) => {
+          res.writeHead(200, { "content-type": "application/json", connection: "close" }).end(JSON.stringify(result), () => process.exit(0));
+        });
+        return;
+      }
       moveIn(box);
       startNix();
       // VS Code answers on this port from here on.

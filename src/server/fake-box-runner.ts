@@ -1,6 +1,6 @@
 // For tests: a box runner whose boxes are little servers here, each its agent
 // until it's claimed (with the claim token it was booted with) and VS Code
-// after.
+// after; or, claimed for a job, answering as the job's agent would (onJob).
 
 import http from "node:http";
 import type { AddressInfo } from "node:net";
@@ -11,14 +11,21 @@ export interface FakeBox {
   target: string;
   server: http.Server;
   /** What it was claimed with. */
-  claim?: { box: string; env: Record<string, string> };
+  claim?: { box: string; env: Record<string, string>; job?: string };
   /** Whether it's been asked if it's waiting. */
   asked: boolean;
+}
+
+export interface JobResult {
+  code: number;
+  said: string;
+  output: string;
 }
 
 export function fakeBoxRunner() {
   const boxes = new Map<string, FakeBox>();
   const ended = new Set<string>();
+  let job: (claim: NonNullable<FakeBox["claim"]>) => JobResult | Promise<JobResult> = () => ({ code: 0, said: `pushed ${"a".repeat(40)}`, output: "" });
 
   const end = (name: string) => {
     const b = boxes.get(name);
@@ -40,8 +47,10 @@ export function fakeBoxRunner() {
         const chunks: Buffer[] = [];
         req.on("data", (c: Buffer) => chunks.push(c));
         req.on("end", () => {
-          b.claim = JSON.parse(Buffer.concat(chunks).toString()) as FakeBox["claim"];
-          res.writeHead(204).end();
+          const claim = JSON.parse(Buffer.concat(chunks).toString()) as NonNullable<FakeBox["claim"]>;
+          b.claim = claim;
+          if (claim.job === undefined) return void res.writeHead(204).end();
+          void Promise.resolve(job(claim)).then((r) => res.writeHead(200, { "content-type": "application/json" }).end(JSON.stringify(r)));
         });
       });
       await new Promise<void>((r) => server.listen(0, "127.0.0.1", r));
@@ -60,6 +69,10 @@ export function fakeBoxRunner() {
   return {
     runner,
     boxes,
+    /** What a box claimed for a job does, and says. */
+    onJob(f: typeof job) {
+      job = f;
+    },
     /** Ends a box behind vibes' back (it's still listed, but not running). */
     crash(name: string) {
       ended.add(name);

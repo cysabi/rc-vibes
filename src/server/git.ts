@@ -108,6 +108,17 @@ export function branchHead(dir: string, id: string, branch: string): string | nu
   return null;
 }
 
+/** Whether a commit is on a branch (its head, or before it); not if the repo hasn't got it. */
+export async function isOnBranch(dir: string, id: string, commit: string, branch: string): Promise<boolean> {
+  if (!/^[0-9a-f]{40,64}$/.test(commit) || !isBranchName(branch)) return false;
+  try {
+    await git(["-C", repoPath(dir, id), "merge-base", "--is-ancestor", commit, `refs/heads/${branch}`]);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /** A commit's files, as a tar, as git makes it. */
 export function archive(dir: string, id: string, commit: string): ReadableStream<Uint8Array> {
   const child = spawn("git", ["-C", repoPath(dir, id), "archive", "--format=tar", commit], { env: GIT_ENV, stdio: ["ignore", "pipe", "ignore"] });

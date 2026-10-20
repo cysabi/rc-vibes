@@ -12,12 +12,14 @@
 import { zValidator } from "@hono/zod-validator";
 import { Hono, type Context } from "hono";
 import { randomUUID } from "node:crypto";
+import path from "node:path";
 import { z } from "zod";
-import type { Me, Sketch } from "../shared/vibes.ts";
+import type { Me, Sketch, SketchChanges } from "../shared/vibes.ts";
 import type { LightsSource } from "./api.ts";
 import type { AuthEnv } from "./auth.ts";
 import { boxOfToken, type Boxes } from "./boxes.ts";
 import { view as buildView, type Builds } from "./builds.ts";
+import { changesIn } from "./changes.ts";
 import type { Db, SketchRow } from "./db.ts";
 import type { Config, SketchesConfig } from "./env.ts";
 import { createRepo, headOf, serveGit } from "./git.ts";
@@ -32,6 +34,11 @@ const badBody = (result: { success: boolean; error?: unknown }, c: Context) => {
 };
 
 const notFound = (c: Context) => c.json({ error: "no such sketch", code: "not_found" }, 404);
+
+// The commit adding a sketch to the room with your changes makes of them (box/publish.sh).
+const PUBLISH_MESSAGE = "Added to the room with these changes";
+// What a clone in the middle of something is in the middle of, by what git keeps of it.
+const UNDERWAY: Record<string, string> = { "rebase-merge": "rebase", "rebase-apply": "rebase", MERGE_HEAD: "merge", CHERRY_PICK_HEAD: "cherry-pick", REVERT_HEAD: "revert" };
 
 const authorOf = (user: Me) => ({ name: user.name, email: `${user.id.replace(/[^a-z0-9]+/gi, "-")}@users.vibes.invalid` });
 
@@ -98,6 +105,39 @@ export function sketchRoutes(sketches: SketchesConfig, db: Db, boxes: Boxes, bui
       if (!row) return notFound(c);
       if (row.deleted_at !== null) return c.json({ error: "this sketch was deleted", code: "deleted" }, 410);
       return c.json(await boxes.ensure(row.id, c.get("user")));
+    })
+
+    // What your editor has of it that main hasn't (files not committed,
+    // commits not pushed), read from your home without waking a box, for
+    // adding it to the room to ask about; and those changes pushed to main,
+    // for adding it with them.
+    .get("/:id/changes", async (c) => {
+      const row = db.sketch(c.req.param("id"));
+      if (!row) return notFound(c);
+      const box = db.boxFor(row.id, c.get("user").id);
+      const none: SketchChanges = { files: 0, commits: 0 };
+      if (!box || !sketches.homesMount) return c.json(none);
+      try {
+        return c.json((await changesIn(path.join(sketches.homesMount, box.id), sketches.dir, row.id)) ?? none);
+      } catch (err) {
+        console.error(`couldn't read box ${box.id}'s clone of ${row.id}:`, err);
+        return c.json({ unknown: true } satisfies SketchChanges);
+      }
+    })
+
+    .post("/:id/publish", async (c) => {
+      const row = db.sketch(c.req.param("id"));
+      if (!row) return notFound(c);
+      if (row.deleted_at !== null) return c.json({ error: "this sketch was deleted", code: "deleted" }, 410);
+      const done = await boxes.publish(row.id, c.get("user"), PUBLISH_MESSAGE);
+      if ("pushed" in done) return c.json({ commit: done.pushed });
+      if ("failed" in done) return c.json({ error: done.failed, code: "failed" }, 502);
+      const why = {
+        clash: "your changes clash with what's been pushed to main since",
+        busy: `your clone is in the middle of a ${UNDERWAY[done.detail ?? ""] ?? "rebase"}`,
+        nothing: "you haven't opened this sketch, so you have no changes to it",
+      }[done.refused];
+      return c.json({ error: why, code: done.refused }, 409);
     })
 
     // Its builds, for the room: one started (of main, or a commit), the

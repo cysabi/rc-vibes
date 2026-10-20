@@ -61,7 +61,7 @@
                 inherit (finalAttrs) pname version src;
                 pnpm = p.pnpm_11;
                 fetcherVersion = 4;
-                hash = "sha256-wBxb6stMCZ+Vf92CGhD4QaJfdMb+p6JQNAYBYvq5fRY=";
+                hash = "sha256-tWKhp3vtYctZQEvZoCQfN3JKGVJNTXu4gYSjFBcbLsI=";
               };
             }
             // attrs
@@ -135,6 +135,15 @@
               ];
               text = builtins.readFile ./box/start.sh;
             };
+            # Someone's changes, pushed to main, in a box claimed for only that (box/agent.ts).
+            publish = p.writeShellApplication {
+              name = "vibes-box-publish";
+              runtimeInputs = [
+                p.git
+                p.coreutils
+              ];
+              text = builtins.readFile ./box/publish.sh;
+            };
             # The person, as uid 1000 (VS Code and git look themselves up), and
             # Nix's build users.
             users = p.runCommand "vibes-box-users" { } ''
@@ -202,6 +211,7 @@
                 (p.lib.getExe p.nodejs_24)
                 "${./box/agent.ts}"
                 (p.lib.getExe start)
+                (p.lib.getExe publish)
               ];
               WorkingDir = "/";
               Env = [

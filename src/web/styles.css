@@ -1404,6 +1404,17 @@ kbd {
 .add-sketch-none .muted {
   font-size: 12px;
 }
+/* Whether to include your changes: its words kept to a readable width, its choices under them. */
+.add-sketch-ask p {
+  max-width: 46ch;
+}
+.add-sketch-ask-actions {
+  display: flex;
+  flex-wrap: wrap;
+  justify-content: center;
+  gap: 8px;
+  margin-top: 4px;
+}
 
 .add-sketch-quiet {
   padding: 18px 2px;

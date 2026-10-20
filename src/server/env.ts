@@ -29,6 +29,7 @@ const schema = z.object({
   BOX_IDLE_MINUTES: z.coerce.number().positive().default(15),
   BOX_POOL: z.coerce.number().int().min(0).default(2),
   BOX_HOMES: z.string().min(1).optional(),
+  BOX_HOMES_MOUNT: z.string().min(1).optional(),
 });
 
 export interface SketchesConfig {
@@ -50,6 +51,12 @@ export interface SketchesConfig {
   pool: number;
   /** Where everyone's homes are kept: a Docker volume, or a directory on the cluster's machine. */
   homes: string;
+  /**
+   * Where vibes itself finds the homes (read-only), to see what someone's
+   * changed in a sketch before it goes in the room (changes.ts); null if it
+   * can't, and then it never asks.
+   */
+  homesMount: string | null;
 }
 
 export interface Config {
@@ -102,6 +109,8 @@ export function loadConfig(source: Record<string, string | undefined> = process.
       idleMs: env.BOX_IDLE_MINUTES * 60_000,
       pool: env.BOX_POOL,
       homes: env.BOX_HOMES ?? (env.BOX_RUNNER === "docker" ? "vibes-box-homes" : "/var/lib/vibes/box-homes"),
+      // Docker's homes, in a folder on this machine (not a volume of Docker's own), are right here.
+      homesMount: env.BOX_HOMES_MOUNT ?? (env.BOX_RUNNER === "docker" && env.BOX_HOMES && path.isAbsolute(env.BOX_HOMES) ? env.BOX_HOMES : null),
     };
   }
   return {

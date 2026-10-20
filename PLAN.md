@@ -366,6 +366,20 @@ ever be built from one of its commits. On while `SKETCHES=1`.
   latest (or a commit) and swaps it in once built, the old one running
   meanwhile; `DELETE /api/instances/<id>` takes it out, as does its shader
   going any other way.
+- **Adding it with your changes** (`src/server/changes.ts`,
+  `box/publish.sh`). What goes in is built from main, so adding a sketch on
+  the map first asks vibes whether your editor has changes main hasn't (files
+  not committed, commits not pushed): `GET /api/sketches/<id>/changes`. vibes
+  reads your home itself, mounted read-only (`BOX_HOMES_MOUNT`; the homes'
+  folder is 711, so it reaches one by name but nothing lists them), without
+  waking a box. It never runs git there, since a clone's config names
+  commands git would run: isomorphic-git, which runs nothing, reads it, in a
+  worker of its own, through a view that never follows a symlink or leaves
+  the clone. If there are changes, it asks whether to include them. Yes
+  (`POST …/publish`) claims a box from the pool for only that: as you, in
+  your home, everything not ignored is committed, rebased onto main's latest
+  and pushed, and the box is removed; then the sketch is added. Changes that
+  clash with main push nothing, and say so.
 - **What a selection lists** (`SelectionPanel.tsx`): every shader whose home
   takes in any of its lights, or, for one with no home (made outside vibes, or
   before instances), whose *footprint* does: every light its code has changed,

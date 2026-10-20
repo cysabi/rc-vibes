@@ -155,6 +155,12 @@ export interface Sketch {
   deleted?: { at: number; by: string };
 }
 
+/**
+ * What your editor has of a sketch that its main hasn't: files changed and not
+ * committed, and commits not pushed; or that vibes couldn't tell.
+ */
+export type SketchChanges = { files: number; commits: number } | { unknown: true };
+
 /** A commit of a sketch, built for the room by vibes' builder: its script is stamped. */
 export interface Build {
   id: string;

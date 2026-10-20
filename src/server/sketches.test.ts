@@ -1,8 +1,10 @@
 import { Hono } from "hono";
+import { execFile } from "node:child_process";
 import { existsSync } from "node:fs";
-import { mkdtemp, rm } from "node:fs/promises";
+import { mkdir, mkdtemp, rm, writeFile } from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
+import { promisify } from "node:util";
 import { afterAll, beforeAll, describe, expect, it } from "vitest";
 import type { BoxState, Me, Sketch } from "../shared/vibes.ts";
 import type { LightsSource } from "./api.ts";
@@ -12,6 +14,7 @@ import type { Builds } from "./builds.ts";
 import { openDb, type Db } from "./db.ts";
 import { loadConfig, type Config } from "./env.ts";
 import { fakeBoxRunner } from "./fake-box-runner.ts";
+import { repoPath } from "./git.ts";
 import { boxApiRoutes, sketchRoutes } from "./sketches.ts";
 
 const ada: Me = { id: "rc:1", name: "Ada Lovelace", dev: false };
@@ -163,5 +166,79 @@ describe("a box's token", () => {
     expect((await boxApi.request(refs(s.id), { headers: basic })).status).toBe(200);
     expect((await boxApi.request(refs(other.id), { headers: basic })).status).toBe(401);
     expect((await boxApi.request(refs(s.id))).status).toBe(401);
+  });
+});
+
+describe("your changes to a sketch", () => {
+  const homes = () => path.join(dir, "homes");
+  // vibes, able to read the homes (as BOX_HOMES_MOUNT gives it them).
+  const reading = () =>
+    new Hono<AuthEnv>()
+      .use("*", async (c, next) => {
+        c.set("user", as);
+        await next();
+      })
+      .route("/sketches", sketchRoutes({ ...config.sketches!, homesMount: homes() }, db, boxes, {} as Builds));
+  const claimed = () => [...fake.boxes.values()].filter((b) => b.claim).length;
+  const settled = async (done: () => boolean) => {
+    for (let i = 0; i < 50 && !done(); i++) await new Promise((r) => setTimeout(r, 10));
+  };
+
+  it("are read from your home, without waking a box", async () => {
+    as = ada;
+    const s = await make("Changed");
+    await open(s.id);
+    const box = db.boxFor(s.id, ada.id)!;
+    const clone = path.join(homes(), box.id, "sketches", s.id, "sketch");
+    await mkdir(path.dirname(clone), { recursive: true });
+    await promisify(execFile)("git", ["clone", "--quiet", repoPath(dir, s.id), clone]);
+    await writeFile(path.join(clone, "main.ts"), "changed\n");
+    const before = claimed();
+    expect(await (await reading().request(`/sketches/${s.id}/changes`)).json()).toEqual({ files: 1, commits: 0 });
+    expect(claimed()).toBe(before);
+    // Without the homes to read, it can't tell, so says nothing.
+    expect(await (await app.request(`/sketches/${s.id}/changes`)).json()).toEqual({ files: 0, commits: 0 });
+    // Someone who's never opened it has none.
+    as = grace;
+    expect(await (await reading().request(`/sketches/${s.id}/changes`)).json()).toEqual({ files: 0, commits: 0 });
+  });
+
+  it("are pushed in a box claimed for only that, once however often it's asked, then let go", async () => {
+    as = ada;
+    const s = await make("Pushed");
+    await open(s.id);
+    const box = db.boxFor(s.id, ada.id)!;
+    const jobs: { box: string; env: Record<string, string> }[] = [];
+    fake.onJob(async (claim) => {
+      jobs.push(claim);
+      await new Promise((r) => setTimeout(r, 30));
+      return { code: 0, said: `pushed ${"b".repeat(40)}`, output: "" };
+    });
+    const [one, two] = await Promise.all([app.request(`/sketches/${s.id}/publish`, json({})), app.request(`/sketches/${s.id}/publish`, json({}))]);
+    expect(await one.json()).toEqual({ commit: "b".repeat(40) });
+    expect(await two.json()).toEqual({ commit: "b".repeat(40) });
+    expect(jobs).toHaveLength(1);
+    expect(jobs[0]).toMatchObject({ box: box.id, env: { VIBES_COMMIT_MESSAGE: "Added to the room with these changes", VIBES_FOLDER: `/home/workspace/sketches/${s.id}/sketch` } });
+    const done = () => ![...fake.boxes.values()].some((b) => b.claim?.job);
+    await settled(done);
+    expect(done()).toBe(true);
+  });
+
+  it("say why they weren't pushed", async () => {
+    as = ada;
+    const s = await make("Refused");
+    await open(s.id);
+    const publish = async () => {
+      const res = await app.request(`/sketches/${s.id}/publish`, json({}));
+      return { status: res.status, ...((await res.json()) as { code: string; error: string }) };
+    };
+    fake.onJob(() => ({ code: 3, said: "clash", output: "" }));
+    expect(await publish()).toMatchObject({ status: 409, code: "clash" });
+    fake.onJob(() => ({ code: 4, said: "busy: rebase-merge", output: "" }));
+    expect(await publish()).toMatchObject({ status: 409, code: "busy", error: "your clone is in the middle of a rebase" });
+    fake.onJob(() => ({ code: 128, said: "", output: "fatal: it went wrong\n" }));
+    expect(await publish()).toMatchObject({ status: 502, code: "failed", error: "fatal: it went wrong" });
+    as = grace;
+    expect(await publish()).toMatchObject({ status: 409, code: "nothing" });
   });
 });

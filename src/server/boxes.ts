@@ -35,6 +35,8 @@ const CLAIM_TIMEOUT_MS = 2 * 60_000;
 // After a box fails to boot, the pool waits this long before trying again.
 const BOOT_RETRY_MS = 30_000;
 const IDLE_CHECK_MS = 60_000;
+// A box claimed for a job answers once it's done: this long, at most (its agent stops the job sooner).
+const JOB_TIMEOUT_MS = 3 * 60_000;
 
 /**
  * What a box's agent may do, as root in its VM: move a home in (SYS_ADMIN, to
@@ -44,6 +46,9 @@ const IDLE_CHECK_MS = 60_000;
  * drop). The person has none of them.
  */
 export const BOX_CAPABILITIES = ["SYS_ADMIN", "SETPCAP", "CHOWN", "SETUID", "SETGID", "KILL", "FOWNER", "DAC_OVERRIDE"];
+
+/** How pushing someone's changes to main went (box/publish.sh): pushed, at this commit; or not, and why. */
+export type Published = { pushed: string } | { refused: "clash" | "busy" | "nothing"; detail?: string } | { failed: string };
 
 /** Where boxes run. Each box is one container (or pod); homes are kept apart from them. */
 export interface BoxRunner {
@@ -87,7 +92,10 @@ export const boxPath = (id: string) => `/box/${id}`;
  * (one path for every sketch, and one sketch's tabs open in the next). Itself
  * named "sketch", which is what VS Code shows.
  */
-export const sketchFolder = (sketchId: string) => `/home/workspace/sketches/${sketchId}/sketch`;
+export const sketchFolder = (sketchId: string) => `/home/workspace/${cloneInHome(sketchId)}`;
+
+/** The same, from the home's own folder. */
+export const cloneInHome = (sketchId: string) => `sketches/${sketchId}/sketch`;
 
 // What VS Code's page is told as it opens (it reads these from its address):
 // no welcome page.
@@ -237,6 +245,32 @@ export function createBoxes(config: Config, sketches: SketchesConfig, db: Db, ru
     }
   }
 
+  /**
+   * A waiting box, claimed for one job for `box` (in its person's home, as
+   * them), and removed once it's done: what its agent says of it.
+   */
+  async function job(box: BoxRow, name: "publish", env: Record<string, string>): Promise<{ code: number; said: string; output: string }> {
+    // A waiting box can have ended while it waited: then another. One that's answered has run it.
+    for (let tries = 1; ; tries++) {
+      const w = await take();
+      try {
+        const res = await fetch(`${w.target}/claim`, {
+          method: "POST",
+          headers: { authorization: `Bearer ${claimToken(config.sessionSecret, w.name)}`, "content-type": "application/json" },
+          body: JSON.stringify({ box: box.id, env: { ...envFor(box), ...env }, job: name }),
+          signal: AbortSignal.timeout(JOB_TIMEOUT_MS),
+        });
+        if (!res.ok) throw new Error(`its agent answered ${res.status}: ${await res.text()}`);
+        return (await res.json()) as { code: number; said: string; output: string };
+      } catch (err) {
+        if (!(err instanceof TypeError) || tries === 3) throw err;
+      } finally {
+        void removeBox(w.name);
+      }
+    }
+  }
+  const publishing = new Map<string, Promise<Published>>();
+
   async function start(box: BoxRow, l: Live) {
     let w: Waiting | undefined;
     try {
@@ -301,6 +335,34 @@ export function createBoxes(config: Config, sketches: SketchesConfig, db: Db, ru
   idle.unref();
 
   return {
+    /**
+     * Someone's changes to a sketch (all that's in their clone and isn't
+     * ignored), committed, put on top of main's latest, and pushed
+     * (box/publish.sh): in a box from the pool, claimed for only that, as
+     * them in their home, and removed straight after. A box of theirs that's
+     * running is left as it is: git's own locks keep the two apart.
+     */
+    publish(sketchId: string, user: Me, message: string): Promise<Published> {
+      const box = db.boxFor(sketchId, user.id);
+      if (!box) return Promise.resolve({ refused: "nothing" });
+      // One at a time for each: asked again meanwhile, the same answer.
+      const was = publishing.get(box.id);
+      if (was) return was;
+      const now = adopted
+        .then(() => job(box, "publish", { VIBES_COMMIT_MESSAGE: message }))
+        .then(({ code, said, output }): Published => {
+          const pushed = /^pushed ([0-9a-f]{40,64})$/.exec(said)?.[1];
+          if (code === 0 && pushed) return { pushed };
+          if (code === 3) return { refused: "clash" };
+          if (code === 4) return { refused: "busy", detail: said.replace(/^busy: /, "") };
+          return { failed: output.trim().split("\n").slice(-5).join("\n") || `it ended ${code}` };
+        })
+        .catch((err: Error): Published => ({ failed: err.message }))
+        .finally(() => publishing.delete(box.id));
+      publishing.set(box.id, now);
+      return now;
+    },
+
     /**
      * Someone's box for a sketch, started if it isn't running, and how it's
      * doing. Their page asks this while it's open and in sight, which keeps the
