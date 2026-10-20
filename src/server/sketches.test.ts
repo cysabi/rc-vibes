@@ -16,7 +16,6 @@ import { boxApiRoutes, sketchRoutes } from "./sketches.ts";
 
 const ada: Me = { id: "rc:1", name: "Ada Lovelace", dev: false };
 const grace: Me = { id: "rc:2", name: "Grace", dev: false };
-const otherAda: Me = { id: "rc:3", name: "Ada Lovelace", dev: false };
 
 let dir: string;
 let config: Config;
@@ -89,19 +88,14 @@ describe("sketches", () => {
     expect((await app.request("/sketches", json({ name: "  " }))).status).toBe(400);
   });
 
-  it("open in each person's own box, on their own branch", async () => {
+  it("open in each person's own box", async () => {
     as = ada;
     const s = await make("Strobe");
     const mine = await open(s.id);
     expect(mine).toMatchObject({ state: "ready" });
     as = grace;
     const theirs = await open(s.id);
-    as = otherAda;
-    await open(s.id);
     expect(theirs).not.toEqual(mine);
-    expect(db.boxFor(s.id, ada.id)?.branch).toBe("ada-lovelace");
-    expect(db.boxFor(s.id, grace.id)?.branch).toBe("grace");
-    expect(db.boxFor(s.id, otherAda.id)?.branch).toBe("ada-lovelace-2");
   });
 });
 

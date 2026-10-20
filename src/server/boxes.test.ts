@@ -72,8 +72,10 @@ describe("boxes", () => {
     expect(row.pod).toBe(run(mine));
     expect(fake.boxes.get(run(mine)!)!.claim).toMatchObject({
       box: row.id,
-      env: { VIBES_BOX_ID: row.id, VIBES_BRANCH: "ada-lovelace", VIBES_BOX_TOKEN: boxToken(SECRET, row.id), VIBES_BASE_PATH: `/box/${row.id}` },
+      env: { VIBES_BOX_ID: row.id, VIBES_BOX_TOKEN: boxToken(SECRET, row.id), VIBES_BASE_PATH: `/box/${row.id}` },
     });
+    // Everyone's clone is on main: no branch of their own.
+    expect(fake.boxes.get(run(mine)!)!.claim!.env).not.toHaveProperty("VIBES_BRANCH");
     expect(boxes.target(row.id)).toBe(fake.boxes.get(run(mine)!)!.target);
     await pooled(3);
 

@@ -92,8 +92,8 @@ const git = promisify(execFile);
 
 /**
  * Makes `folder` a checkout of `commit` (fetched first, since it may be newer
- * than the clone), then opens the window again on it. The clone, on the
- * person's branch, is left as it is.
+ * than the clone), then opens the window again on it. The clone is left as
+ * it is.
  */
 async function checkOut(folder: string, commit: string) {
   const clone = process.env.VIBES_FOLDER;

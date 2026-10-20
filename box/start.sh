@@ -1,8 +1,8 @@
 # A box starting, as its person, once it's claimed (box/agent.ts passes on the
 # VIBES_* settings src/server/boxes.ts gives it): their clone of the sketch,
-# made the first time on their own branch; git set up to reach vibes with the
-# box's token; vibes' extension and settings in place; then their VS Code,
-# under the path vibes reaches it at.
+# on main, made the first time; git set up to reach vibes with the box's
+# token; vibes' extension and settings in place; then their VS Code, under the
+# path vibes reaches it at.
 #
 # Its home, /home/workspace, is theirs, kept apart from the box: the clone, VS
 # Code's state and anything installed there carry on from one box to the next.
@@ -12,6 +12,9 @@ cd /home/workspace
 git config --global user.name "$VIBES_USER_NAME"
 git config --global user.email "$VIBES_USER_EMAIL"
 git config --global init.defaultBranch main
+# Everyone's clone is on main: pulling puts their own commits on top of
+# everyone else's, rather than merging, so main stays one line.
+git config --global pull.rebase true
 # The box's token, which git asks for when it talks to vibes, rather than
 # keeping it in the clone.
 # shellcheck disable=SC2016
@@ -27,12 +30,24 @@ fi
 
 if [ ! -d "$VIBES_FOLDER/.git" ]; then
   git clone --quiet "$VIBES_GIT_URL" "$VIBES_FOLDER"
-  # Their branch: carried on from vibes, if they've pushed it before.
-  git -C "$VIBES_FOLDER" switch --quiet "$VIBES_BRANCH" 2>/dev/null ||
-    git -C "$VIBES_FOLDER" switch --quiet --create "$VIBES_BRANCH"
 fi
 # vibes may be somewhere else since the clone was made.
 git -C "$VIBES_FOLDER" remote set-url origin "$VIBES_GIT_URL"
+
+# Clones used to start on a branch of the person's own. One still on another
+# branch, with no commits main hasn't got, moves to main's latest, taking any
+# changes not yet committed with it; if they'd clash with what's changed on
+# main since, git won't, and it stays as it is. One with commits of its own
+# is left as it is, as is a clone whose main has commits not pushed yet.
+on=$(git -C "$VIBES_FOLDER" symbolic-ref --quiet --short HEAD || true)
+if [ -n "$on" ] && [ "$on" != main ] &&
+  git -C "$VIBES_FOLDER" fetch --quiet origin main &&
+  git -C "$VIBES_FOLDER" merge-base --is-ancestor HEAD origin/main &&
+  { ! git -C "$VIBES_FOLDER" rev-parse --verify --quiet refs/heads/main >/dev/null ||
+    git -C "$VIBES_FOLDER" merge-base --is-ancestor main origin/main; }; then
+  git -C "$VIBES_FOLDER" switch --quiet --force-create main origin/main ||
+    echo "left $VIBES_FOLDER on $on: its changes clash with main's" >&2
+fi
 
 # vibes' extension, this image's version of it, in place of any older one.
 # VS Code only loads the extensions its list names, so it's listed too

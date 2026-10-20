@@ -116,6 +116,8 @@
                 "files.autoSave" = "afterDelay";
                 "git.autofetch" = true;
                 "git.confirmSync" = false;
+                # Sync puts your commits on top of main's latest, as pulling does (box/start.sh).
+                "git.rebaseWhenSync" = true;
                 "terminal.integrated.hideOnStartup" = "always";
                 "window.commandCenter" = false;
                 "editor.minimap.enabled" = false;

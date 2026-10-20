@@ -36,8 +36,8 @@ beforeAll(async () => {
   });
   const target = await listen(upstream);
   const db = openDb(":memory:");
-  db.addBox({ id: BOX, sketch_id: "s", user_id: "dev:ada", user_name: "Ada", branch: "ada", at: 0 });
-  db.addBox({ id: STOPPED, sketch_id: "t", user_id: "dev:ada", user_name: "Ada", branch: "ada", at: 0 });
+  db.addBox({ id: BOX, sketch_id: "s", user_id: "dev:ada", user_name: "Ada", at: 0 });
+  db.addBox({ id: STOPPED, sketch_id: "t", user_id: "dev:ada", user_name: "Ada", at: 0 });
   const boxes = { target: (id: string) => (id === BOX ? target : null) } as unknown as Boxes;
   const proxy = createBoxProxy(config, db, boxes);
   proxyServer = http.createServer((req, res) => void proxy.http(req, res));

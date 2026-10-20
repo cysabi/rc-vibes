@@ -89,9 +89,11 @@ export function openDb(path: string) {
       by_name TEXT NOT NULL,
       at INTEGER NOT NULL
     );
-    -- Boxes: one person's VS Code for one sketch, with their own clone of it
-    -- on their own branch. pod is the box it was last claimed in (whether
-    -- that's still running is the box runner's to say).
+    -- Boxes: one person's VS Code for one sketch, with their own clone of it,
+    -- on main. branch is main for every box since; each person once had a
+    -- branch of their own, and an older vibes still writes it. pod is the box
+    -- it was last claimed in (whether that's still running is the box
+    -- runner's to say).
     CREATE TABLE IF NOT EXISTS boxes (
       id TEXT PRIMARY KEY,
       sketch_id TEXT NOT NULL,
@@ -206,8 +208,7 @@ export function openDb(path: string) {
   const insertSketch = db.prepare("INSERT INTO sketches (id, name, by_id, by_name, at) VALUES (?, ?, ?, ?, ?)");
   const selectBox = db.prepare("SELECT * FROM boxes WHERE id = ?");
   const selectBoxFor = db.prepare("SELECT * FROM boxes WHERE sketch_id = ? AND user_id = ?");
-  const insertBox = db.prepare("INSERT INTO boxes (id, sketch_id, user_id, user_name, branch, at) VALUES (?, ?, ?, ?, ?, ?)");
-  const selectBranch = db.prepare("SELECT 1 FROM boxes WHERE sketch_id = ? AND branch = ?");
+  const insertBox = db.prepare("INSERT INTO boxes (id, sketch_id, user_id, user_name, branch, at) VALUES (?, ?, ?, ?, 'main', ?)");
   const updateBoxPod = db.prepare("UPDATE boxes SET pod = ? WHERE id = ?");
   const selectBoxPods = db.prepare("SELECT id, pod FROM boxes WHERE pod IS NOT NULL");
   const insertBuild = db.prepare("INSERT INTO builds (id, sketch_id, commit_sha, builder, state, by_id, by_name, at) VALUES (?, ?, ?, ?, 'building', ?, ?, ?)");
@@ -408,11 +409,8 @@ export function openDb(path: string) {
     boxFor: (sketchId: string, userId: string) => selectBoxFor.get(sketchId, userId) as BoxRow | undefined,
 
     addBox(b: Omit<BoxRow, "pod">) {
-      insertBox.run(b.id, b.sketch_id, b.user_id, b.user_name, b.branch, b.at);
+      insertBox.run(b.id, b.sketch_id, b.user_id, b.user_name, b.at);
     },
-
-    /** Whether someone's box for a sketch already works on this branch. */
-    sketchBranchTaken: (sketchId: string, branch: string) => selectBranch.get(sketchId, branch) !== undefined,
 
     setBoxPod(id: string, pod: string | null) {
       updateBoxPod.run(pod, id);
@@ -507,8 +505,6 @@ export interface BoxRow {
   sketch_id: string;
   user_id: string;
   user_name: string;
-  /** Their branch in the sketch's repo. */
-  branch: string;
   /** When it was first opened, in ms. */
   at: number;
   /** The box it was last claimed in, unless it's been let go since. */

@@ -1,5 +1,5 @@
 // Boxes: one person's VS Code for one sketch (openvscode-server, with vibes'
-// extension), with their own clone of the sketch on their own branch. A box
+// extension), with their own clone of the sketch, on main. A box
 // runs somewhere a runner can start one (Docker here, or a pod on the
 // cluster), and is reached only through vibes (box-proxy.ts).
 //
@@ -129,13 +129,6 @@ export function createBoxes(config: Config, sketches: SketchesConfig, db: Db, ru
   let retryAt = 0;
   let stopped = false;
 
-  const branchFor = (sketchId: string, name: string) => {
-    const base = name.toLowerCase().replace(/[^a-z0-9]+/g, "-").replace(/^-|-$/g, "") || "me";
-    let branch = base;
-    for (let n = 2; db.sketchBranchTaken(sketchId, branch); n++) branch = `${base}-${n}`;
-    return branch;
-  };
-
   function envFor(box: BoxRow): Record<string, string> {
     return {
       VIBES_BOX_ID: box.id,
@@ -143,7 +136,6 @@ export function createBoxes(config: Config, sketches: SketchesConfig, db: Db, ru
       VIBES_VSCODE_TOKEN: vscodeToken(config.sessionSecret, box.id),
       VIBES_URL: sketches.vibesUrl,
       VIBES_GIT_URL: `${sketches.vibesUrl}/git/${box.sketch_id}.git`,
-      VIBES_BRANCH: box.branch,
       VIBES_USER_NAME: box.user_name,
       VIBES_USER_EMAIL: `${box.user_id.replace(/[^a-z0-9]+/gi, "-")}@users.vibes.invalid`,
       VIBES_BASE_PATH: boxPath(box.id),
@@ -318,7 +310,7 @@ export function createBoxes(config: Config, sketches: SketchesConfig, db: Db, ru
       await adopted;
       let box = db.boxFor(sketchId, user.id);
       if (!box) {
-        box = { id: randomUUID(), sketch_id: sketchId, user_id: user.id, user_name: user.name, branch: branchFor(sketchId, user.name), at: Date.now(), pod: null };
+        box = { id: randomUUID(), sketch_id: sketchId, user_id: user.id, user_name: user.name, at: Date.now(), pod: null };
         db.addBox(box);
       }
       let l = live.get(box.id);

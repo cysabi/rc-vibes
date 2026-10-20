@@ -237,7 +237,7 @@ ever be built from one of its commits. On while `SKETCHES=1`.
   put in the room. Those come later.
 - **Your own VS Code: a box.** Opening a sketch starts your box for it
   (`src/server/boxes.ts`): openvscode-server with your own clone of the
-  sketch, on your own branch, and vibes' extension, from the box image
+  sketch, on main, and vibes' extension, from the box image
   (`flake.nix`, started by `box/start.sh`). On kokuzo it's a pod in
   `vibes-boxes`, in a Kata VM, reached only by vibes and reaching only DNS,
   vibes and the public internet (`.kube/boxes.yaml`); locally, a Docker
@@ -291,8 +291,12 @@ ever be built from one of its commits. On while `SKETCHES=1`.
 - **Sync is git.** The sketch's canonical repo is on vibes' volume
   (`/data/sketches/<uuid>.git`), served over HTTP at `/git/<uuid>.git` to its
   boxes, each with its own token (`src/server/git.ts`). Plain VS Code source
-  control brings changes together; anyone can change `main`. What saving
-  commits comes later.
+  control brings changes together: your own clone keeps what you've staged
+  and committed until you sync, which pulls main (your commits rebased on
+  top of everyone else's) and pushes it. Anyone can change `main`. (Clones
+  once started on a branch of each person's own, which the room never
+  builds; `box/start.sh` moves one that can to main.) What saving commits
+  comes later.
 - **The preview runs in the browser, on its own** (`src/web/preview`), in a
   "Sketch" panel in VS Code beside the console (`box/extension`). The sketch
   runs in its own worker, on its own clock, drawn on its own map from the
