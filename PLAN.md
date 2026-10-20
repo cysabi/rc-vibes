@@ -413,6 +413,45 @@ commits, and the room: the trusted builder, the stamp (an
 HMAC over the built script, so an edited copy shows as edited), and putting
 sketches in the room.
 
+## Shaders, as vibes has them (in progress)
+
+The browser knows shaders only as vibes has them, never as arclamp does.
+vibes' server takes in everything it hears (arclamp's scene and events,
+builds, instances, and what browsers ask for) and sends browsers one list,
+the stack, of vibes shaders: a superset of arclamp's, able to be a shader
+that's still building, or couldn't go in, as well as one in the room. All
+of the mediating, ids and positions included, is the server's.
+
+- **One id, for a shader's whole life.** A shader's key is vibes' own: an
+  instance's id for one put in from a sketch (the same while it builds and
+  once it's live), or `rclamp-<id>` for one vibes only knows by arclamp's
+  id (put in some other way). The browser never reads anything into a key.
+- **Stages.** `building`, `failed` (couldn't go in, and why) and `live` come
+  from the server; `draft` (a sketch you're adding, not applied) exists only
+  in your browser, the same kind of shader as the rest.
+- **Pending edits stay in the browser,** each person's own, keyed by shader
+  key. A sketch you add is a draft shader at once: its build asked for then,
+  its build's id sent with it on Apply, so what goes in is exactly what was
+  built (and previewed), and the server carries it on from building to live.
+- **Shaders made outside vibes** can be switched, moved and removed like
+  any other. Removing one asks first: vibes only ever puts in its own
+  builds, so it can't put one back.
+- **Phase 1:** the server sends the unified list (`{ shaders, roomtone }`,
+  the stack top first), and routes take shader keys: mute, mask and remove
+  one (`/api/shaders/<key>/…`), and the stack's order (`PUT /api/stack`). The
+  routes by arclamp's id go. A shader on its way in sits where it'll go in,
+  on top, and can't be switched or moved yet.
+- **Phase 2:** a shader on its way in (or a draft one) can be switched,
+  masked and moved: vibes keeps what's wanted of it (muted, mask, its place
+  as just above or below another) and puts it in that way, in one step
+  (rclamp's create with a mask and mute, and anchored places). Every stamp
+  names its shader's key (`shader=` in a v2 stamp), so which shader is which
+  can be read from the room itself, and a shader made just before vibes
+  stopped is found again.
+- **Phase 3:** one socket between browser and server, for the list and for
+  what's asked of it; Apply is one message, which the server makes one
+  change to the room (rclamp's batch), all or nothing.
+
 ## Gaps in arclamp (PRs to rclamp)
 
 1. **Shader logs.** `console.log` from a running shader only reaches arclamp's
@@ -433,6 +472,11 @@ sketches in the room.
 6. **`update()` returning `null` kills the sandbox without an error.** The
    shader crash-loops until arclamp gives up after 8 tries; nothing explains
    why.
+7. **Putting a shader in in one step**, for vibes' shaders: created already
+   masked or muted (JCLemme/rclamp#21); an atomic batch of scene changes,
+   with places anchored to other shaders (stacked on #21); and a new shader
+   passing its input through until its sandbox's first frame, instead of
+   freezing everything above it while it starts.
 
 ## Local development
 
