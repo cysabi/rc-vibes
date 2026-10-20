@@ -8,11 +8,11 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HTTPException } from "hono/http-exception";
 import { streamSSE } from "hono/streaming";
 import { z } from "zod";
-import { normalizeLights, type LightsResponse, type ShaderDescriptor } from "../shared/arclamp.ts";
+import { normalizeLights, type LightsResponse } from "../shared/arclamp.ts";
 import { orientationsOf } from "../shared/fixtures.ts";
 import { clampAlong, hangsOnRails, RAIL_ID, railLength } from "../shared/rails.ts";
 import { MAX_TAGS, TAG } from "../shared/tags.ts";
-import type { Lights, SceneNode, Spot, Status } from "../shared/vibes.ts";
+import type { Lights, Spot, Status } from "../shared/vibes.ts";
 import { ArclampError, type Arclamp } from "./arclamp.ts";
 import { requireUser, type AuthEnv } from "./auth.ts";
 import type { Db } from "./db.ts";
@@ -21,7 +21,7 @@ import type { HealthWatch } from "./health.ts";
 import { instanceRoutes, type Instances } from "./instances.ts";
 import { applyEdits, lightsFile } from "./lights.ts";
 import type { SceneFeedSource } from "./scene-feed.ts";
-import { sketchOf } from "./stamp.ts";
+import { shaderRoutes } from "./shaders.ts";
 import type { StreamRelay } from "./stream.ts";
 
 // A browser this far behind on the light stream skips frames until it
@@ -84,7 +84,6 @@ export const handleError: ErrorHandler = (err, c) => {
   return c.json({ error: "internal error", code: "internal" }, 500);
 };
 
-const idParam = z.object({ id: z.coerce.number().int().positive() });
 // Any finite number: arclamp keeps values as given, out of range included (rclamp §4.1).
 const channelValue = z.number().finite();
 const coords = z.object({
@@ -99,10 +98,6 @@ const placement = z.union([
   z.object({ id: z.number().int(), rail: z.object({ id: railId, mm_along: z.number().finite() }) }),
   z.object({ id: z.number().int(), coords: coords.nullable() }),
 ]);
-
-const noSuchShader = (result: { success: boolean }, c: Context) => {
-  if (!result.success) return c.json({ error: "no such shader", code: "not_found" }, 404);
-};
 
 const badBody = (result: { success: boolean; error?: unknown }, c: Context) => {
   if (!result.success) {
@@ -138,10 +133,10 @@ export function apiRoutes({ config, arclamp, db, relay, origins, lights, feed, s
   if (sketches) {
     api.route("/sketches", sketches);
     // Sketches' builds, in the room.
-    api.route("/", instanceRoutes(config, arclamp, db, instances));
+    if (instances) api.route("/", instanceRoutes(instances));
   }
-
-  const nameOf = (d: ShaderDescriptor) => `Shader #${d.id}`;
+  // Shaders, by vibes' keys: muted, masked, reordered, taken out.
+  api.route("/", shaderRoutes({ config, arclamp, db, instances }));
 
   return api
     .get("/me", (c) => c.json(c.get("user")))
@@ -275,15 +270,6 @@ export function apiRoutes({ config, arclamp, db, relay, origins, lights, feed, s
       return c.body(`${JSON.stringify(lightsFile(await currentLights()), null, 2)}\n`, 200, { "Content-Type": "application/json" });
     })
 
-    // With the sketch each was built from, by its stamp.
-    .get("/scene", async (c) => {
-      const scene: SceneNode[] = (await arclamp.scene()).map((n) => {
-        const sketch = n.type === "js" ? sketchOf(n.script, config.signingKey, db) : undefined;
-        return sketch ? { ...n, sketch } : n;
-      });
-      return c.json(scene);
-    })
-
     // The scene feed (scene-feed.ts): as it is, then each time it changes.
     .get("/scene/events", (c) => {
       c.header("Cache-Control", "no-cache");
@@ -320,56 +306,6 @@ export function apiRoutes({ config, arclamp, db, relay, origins, lights, feed, s
       const limit = Math.min(Math.max(Number(c.req.query("limit")) || 100, 1), 500);
       return c.json(db.activity(limit));
     })
-
-    .get("/shaders/:id", zValidator("param", idParam, noSuchShader), async (c) => c.json(await arclamp.shader(c.req.valid("param").id)))
-
-    .post(
-      "/shaders/:id/position",
-      zValidator("param", idParam, noSuchShader),
-      zValidator("json", z.object({ position: z.number().int().min(1) }), badBody),
-      async (c) => {
-        const user = c.get("user");
-        const { id } = c.req.valid("param");
-        const { position } = c.req.valid("json");
-        const d = await arclamp.shader(id);
-        await arclamp.moveShader(id, position);
-        db.log({ user, action: "shader.move", shaderId: id, shaderName: nameOf(d), detail: { from: d.position, to: position } });
-        return c.body(null, 204);
-      },
-    )
-
-    .post(
-      "/shaders/:id/muted",
-      zValidator("param", idParam, noSuchShader),
-      zValidator("json", z.object({ muted: z.boolean() }), badBody),
-      async (c) => {
-        const user = c.get("user");
-        const { id } = c.req.valid("param");
-        const { muted } = c.req.valid("json");
-        const d = await arclamp.shader(id);
-        await arclamp.setMuted(id, muted);
-        db.log({ user, action: muted ? "shader.mute" : "shader.unmute", shaderId: id, shaderName: nameOf(d) });
-        return c.body(null, 204);
-      },
-    )
-
-    // The lights a shader may not change: its whole mask ([] clears it).
-    .post(
-      "/shaders/:id/mask",
-      zValidator("param", idParam, noSuchShader),
-      zValidator("json", z.object({ mask: z.array(z.number().int()).max(2000) }), badBody),
-      async (c) => {
-        const user = c.get("user");
-        const { id } = c.req.valid("param");
-        const asked = [...new Set(c.req.valid("json").mask)].sort((a, b) => a - b);
-        // An instance stays masked off everything outside its home.
-        const mask = instances ? await instances.within(id, asked) : asked;
-        const d = await arclamp.shader(id);
-        await arclamp.setMask(id, mask);
-        db.log({ user, action: "shader.mask", shaderId: id, shaderName: nameOf(d), detail: { lights: mask.length } });
-        return c.body(null, 204);
-      },
-    )
 
     .put(
       "/roomtone",

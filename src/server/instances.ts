@@ -2,8 +2,7 @@
 // only way vibes makes a shader or changes one's script, and what it sends
 // rclamp is always a build's own stamped script, looked up here by the
 // build's id: never a script from the browser. So vibes never makes a plain
-// shader, or turns someone else's into one; and only vibes' own shaders
-// (stamped, edited or not) are its to change or remove.
+// shader, or turns someone else's into one.
 //
 // An instance is a sketch put in the room from vibes, on a home: the lights
 // it was put on, from a branch (main, so far), at a commit (the branch's head
@@ -20,7 +19,6 @@ import { zValidator } from "@hono/zod-validator";
 import { Hono, type Context } from "hono";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import type { ShaderDescriptor } from "../shared/arclamp.ts";
 import type { Instance, Me, Person } from "../shared/vibes.ts";
 import type { Arclamp } from "./arclamp.ts";
 import type { AuthEnv } from "./auth.ts";
@@ -30,16 +28,11 @@ import type { Config } from "./env.ts";
 import { branchHead, isBranchName } from "./git.ts";
 import { readStamp } from "./stamp.ts";
 
-const fromBuild = z.object({ build: z.string().min(1) });
-const idParam = z.object({ id: z.coerce.number().int().positive() });
 const home = z.array(z.number().int()).min(1).max(2000);
 const branch = z.string().refine(isBranchName).default("main");
 
 type Status = 400 | 404 | 409 | 410 | 503;
 const refuse = (c: Context, status: Status, error: string, code: string) => c.json({ error, code }, status);
-
-/** Whether a shader is one of vibes' own: its script has vibes' stamp (checked or not). */
-const isVibes = (d: ShaderDescriptor) => d.type === "js" && typeof d.script === "string" && readStamp(d.script, null) !== null;
 
 const detail = (b: BuildRow, s: SketchRow) => ({ sketch: s.id, commit: b.commit_sha, build: b.id });
 
@@ -71,7 +64,6 @@ export function createInstances({ config, db, arclamp, builds, lightIds, changed
       branch: row.branch,
       head: config.sketches ? branchHead(config.sketches.dir, row.sketch_id, row.branch) : null,
       home: row.home,
-      shaderId: row.shader_id,
       state: row.state,
       error: row.error && plainText(row.error),
       // Once it's built it's swapped in (swap), so only one building or failed is news.
@@ -282,58 +274,14 @@ export function createInstances({ config, db, arclamp, builds, lightIds, changed
 
 export type Instances = ReturnType<typeof createInstances>;
 
-export function instanceRoutes(config: Config, arclamp: Pick<Arclamp, "shader" | "createShader" | "setScript" | "deleteShader">, db: Db, instances: Instances | null = null) {
-  /** A build that can go in the room: built, its sketch not deleted, its stamp good. */
-  function usable(c: Context, id: string): { build: BuildRow & { script: string }; sketch: SketchRow } | Response {
-    const build = db.build(id);
-    if (!build || build.state !== "built" || !build.script) return refuse(c, 404, "no such build, or it didn't build", "no_build");
-    const sketch = db.sketch(build.sketch_id);
-    if (!sketch || sketch.deleted_at !== null) return refuse(c, 410, "its sketch was deleted", "deleted");
-    if (!readStamp(build.script, config.signingKey)?.verified) return refuse(c, 409, "its stamp doesn't check out (was vibes' key changed?): build it again", "bad_stamp");
-    return { build: build as BuildRow & { script: string }, sketch };
-  }
-
-  const badBody = (r: { success: boolean }, c: Context) => (r.success ? undefined : refuse(c, 400, "say which build", "bad_body"));
-  const badId = (r: { success: boolean }, c: Context) => (r.success ? undefined : refuse(c, 404, "no such shader", "not_found"));
+export function instanceRoutes(instances: Instances) {
   const badInstance = (r: { success: boolean }, c: Context) => (r.success ? undefined : refuse(c, 400, "say which sketch, and its home: the lights to put it on", "bad_body"));
   const answer = (c: Context, made: { instance: Instance } | Refusal, status: 200 | 202 = 200) =>
     "refused" in made ? refuse(c, made.status, made.refused, made.code) : c.json(made.instance, status);
 
-  const routes = new Hono<AuthEnv>()
-    // A build, in the room: a new shader, on top.
-    .post("/shaders", zValidator("json", fromBuild, badBody), async (c) => {
-      const it = usable(c, c.req.valid("json").build);
-      if (it instanceof Response) return it;
-      const d = await arclamp.createShader(it.build.script);
-      db.log({ user: c.get("user"), action: "shader.create", shaderId: d.id, shaderName: it.sketch.name, detail: detail(it.build, it.sketch) });
-      return c.json(d, 201);
-    })
-
-    // One of vibes' shaders, running another build instead (another commit, or another sketch).
-    .put("/shaders/:id/build", zValidator("param", idParam, badId), zValidator("json", fromBuild, badBody), async (c) => {
-      const { id } = c.req.valid("param");
-      const it = usable(c, c.req.valid("json").build);
-      if (it instanceof Response) return it;
-      if (!isVibes(await arclamp.shader(id))) return refuse(c, 409, "that shader isn't one vibes made", "not_vibes");
-      const d = await arclamp.setScript(id, it.build.script);
-      db.log({ user: c.get("user"), action: "shader.edit", shaderId: id, shaderName: it.sketch.name, detail: detail(it.build, it.sketch) });
-      return c.json(d);
-    })
-
-    // One of vibes' shaders, out of the room (and the instance it was, if it was one).
-    .delete("/shaders/:id", zValidator("param", idParam, badId), async (c) => {
-      const { id } = c.req.valid("param");
-      const d = await arclamp.shader(id);
-      if (!isVibes(d)) return refuse(c, 409, "that shader isn't one vibes made", "not_vibes");
-      await arclamp.deleteShader(id);
-      instances?.forget(id);
-      db.log({ user: c.get("user"), action: "shader.delete", shaderId: id, shaderName: `Shader #${id}` });
-      return c.body(null, 204);
-    });
-
-  if (!instances) return routes;
+  // Taken out, it's a shader like any other: DELETE /shaders/:key (shaders.ts).
   return (
-    routes
+    new Hono<AuthEnv>()
       // A sketch, put in the room on the lights given (its home): from a
       // branch (main, unless it says), at a commit (the branch's head, unless it says).
       // With a key, put in once however often it's asked.
@@ -349,9 +297,5 @@ export function instanceRoutes(config: Config, arclamp: Pick<Arclamp, "shader" |
       .put("/instances/:id/home", zValidator("json", z.object({ home }), badInstance), async (c) => {
         return answer(c, await instances.setHome(c.req.param("id"), c.req.valid("json").home, c.get("user")));
       })
-
-      .delete("/instances/:id", async (c) =>
-        (await instances.remove(c.req.param("id"), c.get("user"))) ? c.body(null, 204) : refuse(c, 404, "no such instance", "not_found"),
-      )
   );
 }

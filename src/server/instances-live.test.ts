@@ -6,6 +6,7 @@ import type { AuthEnv } from "./auth.ts";
 import { openDb, type Db } from "./db.ts";
 import { loadConfig } from "./env.ts";
 import { createInstances, instanceRoutes, type Instances } from "./instances.ts";
+import { shaderRoutes } from "./shaders.ts";
 import { stamp } from "./stamp.ts";
 
 const KEY = "k".repeat(32);
@@ -40,6 +41,8 @@ function done(id: string, ok = true) {
 }
 
 const settle = () => new Promise((r) => setTimeout(r, 0));
+/** An instance's shader in arclamp, once it's in. */
+const shaderOf = (inst: Instance) => db.instance(inst.id)?.shader_id ?? null;
 
 beforeEach(() => {
   db = openDb(":memory:");
@@ -65,6 +68,9 @@ beforeEach(() => {
     },
     setMask: async (id: number, mask: number[]) => void shaders.set(id, { ...shaders.get(id)!, mask }),
     deleteShader: async (id: number) => void shaders.delete(id),
+    scene: async () => [...shaders.values()],
+    setMuted: async (id: number, muted: boolean) => void shaders.set(id, { ...shaders.get(id)!, muted }),
+    moveShader: async () => {},
   };
   asked = [];
   const builds = {
@@ -85,7 +91,8 @@ beforeEach(() => {
       c.set("user", ada);
       await next();
     })
-    .route("/", instanceRoutes(config, arclamp, db, instances));
+    .route("/", instanceRoutes(instances))
+    .route("/", shaderRoutes({ config, arclamp, db, instances }));
 });
 
 const send = (method: string, path: string, body?: unknown) =>
@@ -98,7 +105,7 @@ describe("an instance", () => {
     expect(res.status).toBe(202);
     const inst = (await res.json()) as Instance;
     expect(inst).toMatchObject({ state: "live", home: [2, 3], commit: "a".repeat(40), sketchName: "Warm wave", by: { name: "Ada" } });
-    const d = shaders.get(inst.shaderId!)!;
+    const d = shaders.get(shaderOf(inst)!)!;
     expect(d.script).toBe(scriptOf("a".repeat(40)));
     expect(d.mask).toEqual([1, 4, 5, 6]);
     expect(db.activity(1)[0]).toMatchObject({ action: "shader.create", shaderName: "Warm wave" });
@@ -107,14 +114,15 @@ describe("an instance", () => {
   it("is only in vibes while it builds, and goes in once built", async () => {
     nextBuild = { id: "b2", commit: "b".repeat(40), built: false };
     const inst = (await (await send("POST", "/instances", { sketch: SKETCH, home: LIGHTS })).json()) as Instance;
-    expect(inst).toMatchObject({ state: "building", shaderId: null });
+    expect(inst).toMatchObject({ state: "building" });
+    expect(shaderOf(inst)).toBeNull();
     expect(shaders.size).toBe(0);
     done("b2");
     await settle();
     const live = instances.view(db.instance(inst.id)!);
     expect(live.state).toBe("live");
     // Home is every light: nothing to mask.
-    expect(shaders.get(live.shaderId!)!.mask).toBeUndefined();
+    expect(shaders.get(shaderOf(live)!)!.mask).toBeUndefined();
     expect(changes).toBeGreaterThan(1);
   });
 
@@ -123,8 +131,8 @@ describe("an instance", () => {
     const inst = (await (await send("POST", "/instances", { sketch: SKETCH, home: [1] })).json()) as Instance;
     done("b3", false);
     await settle();
-    expect(instances.view(db.instance(inst.id)!)).toMatchObject({ state: "failed", error: "it didn't compile", shaderId: null });
-    expect((await send("DELETE", `/instances/${inst.id}`)).status).toBe(204);
+    expect(instances.view(db.instance(inst.id)!)).toMatchObject({ state: "failed", error: "it didn't compile" });
+    expect((await send("DELETE", `/shaders/${inst.id}`)).status).toBe(204);
     expect(db.instance(inst.id)).toBeUndefined();
   });
 
@@ -175,10 +183,10 @@ describe("an instance", () => {
     nextBuild = { id: "b6", commit: "f".repeat(40), built: false };
     const updating = (await (await send("POST", `/instances/${inst.id}/update`, {})).json()) as Instance;
     expect(updating.next).toMatchObject({ commit: "f".repeat(40), state: "building" });
-    expect(shaders.get(inst.shaderId!)!.script).toBe(scriptOf("e".repeat(40)));
+    expect(shaders.get(shaderOf(inst)!)!.script).toBe(scriptOf("e".repeat(40)));
     done("b6");
     await settle();
-    expect(shaders.get(inst.shaderId!)!.script).toBe(scriptOf("f".repeat(40)));
+    expect(shaders.get(shaderOf(inst)!)!.script).toBe(scriptOf("f".repeat(40)));
     expect(instances.view(db.instance(inst.id)!)).toMatchObject({ commit: "f".repeat(40), next: null });
   });
 
@@ -186,20 +194,22 @@ describe("an instance", () => {
     nextBuild = { id: "b7", commit: "1".repeat(40), built: true };
     const inst = (await (await send("POST", "/instances", { sketch: SKETCH, home: [1, 2, 3] })).json()) as Instance;
     // Switched off on 2, through the mask (and kept off outside its home).
-    expect(await instances.within(inst.shaderId!, [2])).toEqual([2, 4, 5, 6]);
-    shaders.set(inst.shaderId!, { ...shaders.get(inst.shaderId!)!, mask: [2, 4, 5, 6] });
+    expect(await instances.within(shaderOf(inst)!, [2])).toEqual([2, 4, 5, 6]);
+    shaders.set(shaderOf(inst)!, { ...shaders.get(shaderOf(inst)!)!, mask: [2, 4, 5, 6] });
     const moved = (await (await send("PUT", `/instances/${inst.id}/home`, { home: [2, 3, 4] })).json()) as Instance;
     expect(moved.home).toEqual([2, 3, 4]);
-    expect(shaders.get(inst.shaderId!)!.mask).toEqual([1, 2, 5, 6]);
+    expect(shaders.get(shaderOf(inst)!)!.mask).toEqual([1, 2, 5, 6]);
   });
 
   it("goes when it's taken out, or its shader's removed", async () => {
     nextBuild = { id: "b8", commit: "2".repeat(40), built: true };
     const one = (await (await send("POST", "/instances", { sketch: SKETCH, home: [1] })).json()) as Instance;
     const two = (await (await send("POST", "/instances", { sketch: SKETCH, home: [2] })).json()) as Instance;
-    expect((await send("DELETE", `/instances/${one.id}`)).status).toBe(204);
-    expect(shaders.has(one.shaderId!)).toBe(false);
-    expect((await send("DELETE", `/shaders/${two.shaderId}`)).status).toBe(204);
+    const first = shaderOf(one)!;
+    expect((await send("DELETE", `/shaders/${one.id}`)).status).toBe(204);
+    expect(shaders.has(first)).toBe(false);
+    // By arclamp's id, it's still the instance.
+    expect((await send("DELETE", `/shaders/rclamp-${shaderOf(two)}`)).status).toBe(204);
     expect(db.instances()).toEqual([]);
     // A shader that's no instance has no home to keep to.
     expect(await instances.within(42, [3])).toEqual([3]);

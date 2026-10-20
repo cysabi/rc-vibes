@@ -8,8 +8,9 @@
 // these lights, as the room builds their light: room tone, then each shader
 // up the stack that's about any of them (its home, or where its code's lit),
 // joined by a rail as the light builds up through them, then any on their
-// way in. Each has a switch for whether it's on for these lights and a
-// handle to drag it to another place among them; both are pending edits.
+// way in, then any you're adding. Each in the room has a switch for whether
+// it's on for these lights and a handle to drag it to another place among
+// them; both are pending edits.
 // Each shader's arrow opens it in the panel in place of the selection
 // (ShaderPanel.tsx).
 
@@ -35,7 +36,7 @@ import type { Channels, LightInfo } from "../../shared/arclamp.ts";
 import { baseType, isBinary, isOn, lemtoneOf, requestedOf } from "../../shared/fixtures.ts";
 import { colorName, lemtoneCode, lumensText } from "../../shared/lemtone.ts";
 import { tagLabel } from "../../shared/tags.ts";
-import type { Instance, SceneNode } from "../../shared/vibes.ts";
+
 import { useBranchHead, useLights, useStatus } from "../api.ts";
 import {
   drafts,
@@ -56,14 +57,14 @@ import {
 import { ChevronUpIcon, CloseIcon, GripIcon, OpenIcon, PlusIcon } from "../icons.tsx";
 import { useFrames } from "../live.ts";
 import { useNarrow } from "../narrow.ts";
-import { usePendingInstances, useScene } from "../scene.ts";
+import { useScene, type Scene } from "../scene.ts";
 import { commitName, listOf, ordinal } from "../words.ts";
 import { AddSketch } from "./AddSketch.tsx";
 import { Reveal } from "./Reveal.tsx";
 import { RoomToneEditor } from "./RoomToneEditor.tsx";
 import { AddingBody, AddingTitle, ComingBody, ComingTitle, ShaderBody, ShaderTitle } from "./ShaderPanel.tsx";
 
-const NO_NODES: SceneNode[] = [];
+const NO_SCENE: Scene = { shaders: [], roomtone: null };
 
 const KINDS: Record<string, { one: string; many: string }> = {
   br30: { one: "color bulb", many: "color bulbs" },
@@ -103,20 +104,19 @@ export function SelectionPanel({ floor, here, selected, shader, onShader, onClos
 
   // What's on these lights, bottom of the stack first: each shader whose
   // home (or, with none, where its code has lit: reachOf) takes in any of
-  // them, then any instance on its way in that's homed on any. A row only
-  // moves if you move it. Its switch is whether it's on for these lights.
+  // them, then any on its way in that's homed on any, then any you're adding.
+  // A row only moves if you move it. Its switch is whether it's on for these lights.
   const scene = useScene();
-  const pending = usePendingInstances();
   const lights = useLights();
   const draft = useDraft();
-  const live = scene.data ?? NO_NODES;
+  const live = scene.data ?? NO_SCENE;
   const template = templateOf(live, draft);
   const ids = chosen.map((l) => l.id);
   const all = (lights.data?.lights ?? []).map((l) => l.id);
   const stack = layersOf(live, draft);
   const onThese = [...stack].reverse().filter((layer) => reachOf(layer).some((id) => selected.has(id)));
-  const rows: Row[] = onThese.filter((layer) => !layer.adding).map((layer) => ({ layer, state: switchState(layer, ids) }));
-  const coming = pending.filter((i) => i.home.some((id) => selected.has(id)));
+  const rows: Row[] = onThese.filter((layer) => layer.stage === "live").map((layer) => ({ layer, state: switchState(layer, ids) }));
+  const coming = onThese.filter((layer) => layer.stage === "building" || layer.stage === "failed");
   // Sketches you're adding (pending edits), on top.
   const adding = onThese.flatMap((layer) => (layer.adding ? [layer.adding] : []));
 
@@ -133,10 +133,10 @@ export function SelectionPanel({ floor, here, selected, shader, onShader, onClos
   };
 
   // The shader open in place of the selection: one in the room, one on its way in, or one you're adding.
-  const openLayer = shader?.startsWith("#") ? layerOf(live, draft, shader) : null;
-  const openComing = shader?.startsWith("i:") ? (pending.find((i) => `i:${i.id}` === shader) ?? null) : null;
-  const openAdding = shader?.startsWith("+") ? (draft.added.find((a) => a.key === shader) ?? null) : null;
-  const open = openLayer !== null || openComing !== null || openAdding !== null;
+  const inPanel = shader ? layerOf(live, draft, shader) : null;
+  const openLayer = inPanel?.stage === "live" ? inPanel : null;
+  const openComing = inPanel?.stage === "building" || inPanel?.stage === "failed" ? inPanel.instance : null;
+  const openAdding = inPanel?.adding ?? null;
 
   /** A shader switched off for these lights, or on: pending edits, like a mute. */
   const setOn = (row: Row, on: boolean) => drafts.patchShader(row.layer.key, switchFor(row.layer, ids, on, all));
@@ -349,8 +349,8 @@ export function SelectionPanel({ floor, here, selected, shader, onShader, onClos
                       />
                     ))}
                     {/* On their way in, on top; then the ones you're adding. */}
-                    {coming.map((instance) => (
-                      <ComingRow key={instance.id} instance={instance} onOpen={() => onShader(`i:${instance.id}`)} />
+                    {coming.map((layer) => (
+                      <ComingRow key={layer.key} layer={layer} onOpen={() => onShader(layer.key)} />
                     ))}
                     {adding.map((a) => (
                       <AddingRow key={a.key} adding={a} onOpen={() => onShader(a.key)} />
@@ -464,7 +464,7 @@ function RowParts({ row, onSwitch, onOpen, details, opened, onToggle }: RowProps
         : state === "off"
           ? `${layer.name} is off for these lights. Switch it back on for them.`
           : `${layer.name} is on for some of these lights. Switch it on for all of them.`;
-  const sketch = layer.node.sketch;
+  const sketch = layer.sketch;
   const meta = metaOf(row);
   return (
     <>
@@ -514,7 +514,7 @@ function RowParts({ row, onSwitch, onOpen, details, opened, onToggle }: RowProps
 /** Under a shader's name: its commit (or branch), if it's a sketch's, and anything that's become of it. */
 function metaOf({ layer, state }: Row): string | null {
   const parts: string[] = [];
-  const sketch = layer.node.sketch;
+  const sketch = layer.sketch;
   const instance = layer.instance;
   if (sketch) parts.push(instance ? commitName(sketch.commit, instance.branch, instance.head) : sketch.commit.slice(0, 7));
   const status = statusOf(layer);
@@ -524,17 +524,19 @@ function metaOf({ layer, state }: Row): string | null {
   return parts.length > 0 ? parts.join(" · ") : null;
 }
 
-/** An instance on its way in, homed on some of these lights: building, or why it couldn't go in. */
-function ComingRow({ instance, onOpen }: { instance: Instance; onOpen: () => void }) {
-  const name = instance.sketchName ?? "Unknown sketch";
+/** A shader on its way in, homed on some of these lights: building, or why it couldn't go in. */
+function ComingRow({ layer, onOpen }: { layer: Layer; onOpen: () => void }) {
+  const { name, instance } = layer;
+  const failed = layer.stage === "failed";
   return (
     <li className="layer coming">
       <span className="layer-grip" aria-hidden="true" />
       <span className="layer-node" aria-hidden="true" />
       <span className="layer-text">
         <span className="layer-name">{name}</span>
-        <span className={instance.state === "failed" ? "layer-meta bad" : "layer-meta"}>
-          {commitName(instance.commit, instance.branch, instance.head)} · {instance.state === "failed" ? "couldn't go in" : "building…"}
+        <span className={failed ? "layer-meta bad" : "layer-meta"}>
+          {instance ? `${commitName(instance.commit, instance.branch, instance.head)} · ` : ""}
+          {failed ? "couldn't go in" : "building…"}
         </span>
       </span>
       <button className="icon-button layer-open" aria-label={`Open ${name}`} title={`Open ${name}`} onClick={onOpen}>

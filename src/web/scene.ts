@@ -1,23 +1,33 @@
-// The scene, as vibes pushes it (/api/scene/events, scene-feed.ts on the
-// server): every shader with its sketch, footprint and instance, and the
-// instances not in the room yet; sent again each time it changes, while
-// anything here is watching. The feed leaves scripts out (scriptHash says
-// which each is); the preview needs them to run pending edits, so they're
-// fetched once each, by hash, and put back.
+// The room, as vibes pushes it (/api/scene/events, scene-feed.ts on the
+// server): the stack of shaders as vibes has them (top first: the ones on
+// their way in, then the ones in the room), and the room tone; sent again
+// each time it changes, while anything here is watching. The feed leaves
+// scripts out (scriptHash says which each is); the preview needs them to run
+// pending edits, so they're fetched once each, by hash, and put back.
 
 import { useSyncExternalStore } from "react";
-import type { Instance, SceneFeed, SceneNode } from "../shared/vibes.ts";
+import type { RoomTemplate } from "../shared/arclamp.ts";
+import type { SceneFeed, Shader } from "../shared/vibes.ts";
 import { request } from "./api.ts";
 
+/** A shader as vibes sent it, with its script once that's here. */
+export interface SceneShader extends Shader {
+  script?: string;
+}
+
+/** The room: its shaders, top first, and its room tone. */
+export interface Scene {
+  shaders: SceneShader[];
+  roomtone: RoomTemplate | null;
+}
+
 interface State {
-  /** The shaders, with their scripts once fetched; undefined until the first scene. */
-  nodes: SceneNode[] | undefined;
-  pending: Instance[];
+  /** Undefined until the first scene. */
+  scene: Scene | undefined;
   error: Error | null;
 }
 
-const NO_PENDING: Instance[] = [];
-let state: State = { nodes: undefined, pending: NO_PENDING, error: null };
+let state: State = { scene: undefined, error: null };
 let feed: SceneFeed | null = null;
 const scripts = new Map<string, string>();
 const fetching = new Set<string>();
@@ -26,11 +36,11 @@ let source: EventSource | null = null;
 
 function publish() {
   if (!feed) return;
-  const nodes = feed.nodes.map((n) => {
-    const script = n.scriptHash ? scripts.get(n.scriptHash) : undefined;
-    return script === undefined ? n : { ...n, script };
+  const shaders = feed.shaders.map((s) => {
+    const script = s.scriptHash ? scripts.get(s.scriptHash) : undefined;
+    return script === undefined ? s : { ...s, script };
   });
-  state = { nodes, pending: feed.pending.length > 0 ? feed.pending : NO_PENDING, error: null };
+  state = { scene: { shaders, roomtone: feed.roomtone }, error: null };
   for (const l of listeners) l();
 }
 
@@ -43,7 +53,7 @@ function take(next: SceneFeed) {
 /** The scripts the scene has that aren't here yet; the ones it's dropped, forgotten. */
 async function fetchScripts() {
   if (!feed) return;
-  const now = new Set(feed.nodes.flatMap((n) => (n.scriptHash ? [n.scriptHash] : [])));
+  const now = new Set(feed.shaders.flatMap((s) => (s.scriptHash ? [s.scriptHash] : [])));
   for (const hash of scripts.keys()) if (!now.has(hash)) scripts.delete(hash);
   const missing = [...now].filter((h) => !scripts.has(h) && !fetching.has(h));
   if (missing.length === 0) return;
@@ -97,7 +107,7 @@ function open() {
         if (listeners.size > 0 && !source) open();
       }, RETRY_MS);
     }
-    if (state.nodes === undefined) {
+    if (state.scene === undefined) {
       state = { ...state, error: new Error("couldn't reach vibes for the scene") };
       for (const l of listeners) l();
     }
@@ -120,15 +130,10 @@ function subscribe(listener: () => void) {
 
 const snapshot = () => state;
 
-/** The shaders in the scene, bottom first, as `{ data }` (undefined until the first scene). */
-export function useScene(): { data: SceneNode[] | undefined; error: Error | null } {
+/** The room, as `{ data }` (undefined until the first scene). */
+export function useScene(): { data: Scene | undefined; error: Error | null } {
   const s = useSyncExternalStore(subscribe, snapshot);
-  return { data: s.nodes, error: s.error };
-}
-
-/** The instances not in the room yet: building, or couldn't go in. */
-export function usePendingInstances(): Instance[] {
-  return useSyncExternalStore(subscribe, snapshot).pending;
+  return { data: s.scene, error: s.error };
 }
 
 /** The scene, looked at again now (after changing it, to see it changed). */

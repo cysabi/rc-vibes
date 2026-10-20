@@ -4,11 +4,12 @@
 // anything that's become of it (failing, updating), where it's about (its
 // home, which it can move to the selection, or where its code's lit; ringed
 // on the map meanwhile), where it sits in the stack, its code, updating it
-// to its sketch's latest commit, and, for vibes' own, taking it out. On, off
+// to its sketch's latest commit, and taking it out (however it was put in:
+// one made outside vibes, vibes can't put back, so that asks first). On, off
 // and taking it out are pending edits like any other; moving home and
-// updating happen at once. One on its way in (an instance building, or that
-// couldn't go in) has a panel of its own (ComingTitle, ComingBody), and so
-// does one you're adding, not yet applied (AddingTitle, AddingBody).
+// updating happen at once. One on its way in (building, or that couldn't go
+// in) has a panel of its own (ComingTitle, ComingBody), and so does one
+// you're adding, not yet applied (AddingTitle, AddingBody).
 
 import { useState } from "react";
 import type { LightInfo } from "../../shared/arclamp.ts";
@@ -24,7 +25,7 @@ import { commitName, count, listOf, ordinal } from "../words.ts";
 
 /** Its head: back to the selection, its name, and where it's from. */
 export function ShaderTitle({ layer, onBack }: { layer: Layer; onBack: () => void }) {
-  const sketch = layer.node.sketch;
+  const sketch = layer.sketch;
   const instance = layer.instance;
   return (
     <>
@@ -61,8 +62,7 @@ interface BodyProps {
 }
 
 export function ShaderBody({ layer, stack, removing, lights, selected }: BodyProps) {
-  const { key, node, instance } = layer;
-  const sketch = node.sketch;
+  const { key, sketch, instance } = layer;
   const reach = reachOf(layer);
   const state = switchState(layer);
   const masked = new Set(layer.mask);
@@ -130,11 +130,7 @@ export function ShaderBody({ layer, stack, removing, lights, selected }: BodyPro
       <div className="shader-actions">
         {sketch?.name != null && <OpenCode sketch={sketch} />}
         {instance && <Update instance={instance} />}
-        {sketch ? (
-          !removing && <RemoveShader layer={layer} />
-        ) : (
-          <p className="muted">Made outside vibes, so only whoever made it can take it out. Switch it off to keep it off.</p>
-        )}
+        {!removing && <RemoveShader layer={layer} />}
       </div>
     </div>
   );
@@ -142,12 +138,12 @@ export function ShaderBody({ layer, stack, removing, lights, selected }: BodyPro
 
 /** Anything that's become of it: failing, restarting, updating, or couldn't. */
 function Status({ layer }: { layer: Layer }) {
-  const { node, instance } = layer;
-  if (node.state !== "running") {
+  const { shader, instance } = layer;
+  if (shader?.state && shader.state !== "running") {
     return (
       <p className="shader-error">
-        {node.state === "restarting" ? "Restarting" : "Failing"}
-        {node.error ? `: ${node.error}` : ""}
+        {shader.state === "restarting" ? "Restarting" : "Failing"}
+        {shader.error ? `: ${shader.error}` : ""}
       </p>
     );
   }
@@ -246,7 +242,7 @@ export function ComingTitle({ instance, onBack }: { instance: Instance; onBack: 
 /**
  * One on its way in: building, or why it couldn't go in, and trying again (at
  * its branch's head, so a fix pushed there is what's built) or letting it go.
- * Tried again, it's a new instance, which the panel goes on showing
+ * Tried again, it's a new shader, which the panel goes on showing
  * (onRetried, with its key).
  */
 export function ComingBody({ instance, lights, onRetried }: { instance: Instance; lights: LightInfo[]; onRetried: (key: string) => void }) {
@@ -265,10 +261,10 @@ export function ComingBody({ instance, lights, onRetried }: { instance: Instance
   const retry = async () => {
     const made = await act(async () => {
       const again = await request<Instance>("POST", "/api/instances", { sketch: instance.sketchId, branch: instance.branch, home: instance.home });
-      await request("DELETE", `/api/instances/${instance.id}`);
+      await request("DELETE", `/api/shaders/${instance.id}`);
       return again;
     });
-    onRetried(`i:${made.id}`);
+    onRetried(made.id);
   };
   return (
     <div className="shader-body">
@@ -290,7 +286,7 @@ export function ComingBody({ instance, lights, onRetried }: { instance: Instance
           <OpenIcon /> Open its sketch
         </button>
         {instance.state === "failed" && <Rebuild commit={instance.commit} branch={instance.branch} head={instance.head} disabled={busy} onClick={() => void retry()} />}
-        <button className="quiet danger shader-action" disabled={busy} onClick={() => void act(() => request("DELETE", `/api/instances/${instance.id}`))}>
+        <button className="quiet danger shader-action" disabled={busy} onClick={() => void act(() => request("DELETE", `/api/shaders/${instance.id}`))}>
           <TrashIcon /> {instance.state === "failed" ? "Let it go" : "Stop putting it in"}
         </button>
       </div>
@@ -446,13 +442,16 @@ function OpenCode({ sketch }: { sketch: ShaderSketch }) {
 /**
  * Taking it out of the room. Previewing, that's a pending edit like any
  * other, to keep or apply; live, it goes out straight away, so it asks first.
+ * One made outside vibes (no sketch), vibes can't put back once it's out, so
+ * that asks first either way.
  */
 function RemoveShader({ layer }: { layer: Layer }) {
   const live = useLiveMode();
   const [asking, setAsking] = useState(false);
+  const outside = layer.sketch === null;
   if (!asking) {
     return (
-      <button className="quiet danger shader-action" onClick={() => (live ? setAsking(true) : drafts.remove(layer.key))}>
+      <button className="quiet danger shader-action" onClick={() => (live || outside ? setAsking(true) : drafts.remove(layer.key))}>
         <TrashIcon /> Remove from the room
       </button>
     );
@@ -461,6 +460,7 @@ function RemoveShader({ layer }: { layer: Layer }) {
     <div className="confirm-delete">
       <span>
         Take <b>{layer.name}</b> out of the room?
+        {outside && ` It was made outside vibes (by ${layer.by}), so vibes can't put it back.`}
       </span>
       <button className="quiet danger" onClick={() => drafts.remove(layer.key)}>
         Take it out

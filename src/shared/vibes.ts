@@ -1,6 +1,6 @@
 // Types for vibes' own API (/api/*), shared by the server and the browser.
 
-import type { Coords, LightsResponse, RailSpot, ShaderDescriptor } from "./arclamp.ts";
+import type { Coords, LightsResponse, RailSpot, RoomTemplate, ShaderState } from "./arclamp.ts";
 import type { RailShape } from "./rails.ts";
 
 export interface Person {
@@ -19,27 +19,46 @@ export interface LoginOptions {
 }
 
 /**
- * A shader in the scene, as vibes passes it on from arclamp, with the sketch
- * it was built from, if its script has vibes' stamp. As the scene feed has it
- * (SceneFeed), its script is left out: scriptHash says which it is.
+ * vibes' key for a shader, the same for its whole life: its instance's id,
+ * for one put in from a sketch in vibes (while it builds, as once it's live),
+ * or "rclamp-<id>" for one vibes only knows by arclamp's id (put in some
+ * other way). Nothing's to be read into it.
  */
-export type SceneNode = ShaderDescriptor & {
-  sketch?: ShaderSketch;
-  /** The sha256 of its script, in hex. */
-  scriptHash?: string;
-  /**
-   * Every light it's changed since its script last did, before its mask or
-   * mute: where its code lights. Learned as it runs.
-   */
-  footprint?: number[];
-  /** The instance it is, if it was put in from a sketch in vibes. */
-  instance?: Instance;
-};
+export type ShaderKey = string;
+
+/**
+ * A shader in the stack, as vibes has it: in the room (live), on its way
+ * there (building), or not, and why (failed). The browser knows shaders only
+ * this way, never as arclamp does.
+ */
+export interface Shader {
+  key: ShaderKey;
+  stage: "building" | "failed" | "live";
+  /** Its sketch's name, or for one put in some other way, "Shader #<n>". */
+  name: string;
+  /** How it's running, once it's live. */
+  state: ShaderState | null;
+  /** Why it's failing (live), or couldn't go in (failed). */
+  error: string | null;
+  muted: boolean;
+  /** The lights it may not change (there its output is its input), sorted. */
+  mask: number[];
+  /** The sketch it's built from: by its stamp once it's live, by its instance before. */
+  sketch: ShaderSketch | null;
+  /** Put in from a sketch in vibes: its home, branch and builds. */
+  instance: Instance | null;
+  /** Who made it, as arclamp has it (the name of the key it was made with); before it's live, who put it in. */
+  by: string;
+  /** Every light it's changed since its script last did, before its mask or mute: where its code lights. Learned as it runs. */
+  footprint: number[];
+  /** Its script's sha256, in hex, for the preview to fetch it by; null until it's live. */
+  scriptHash: string | null;
+}
 
 /**
  * A sketch put in the room from vibes, on a home: the lights it was put on,
- * which it's masked to. It's in vibes before it's in arclamp: until its build
- * is built, it's only here (SceneFeed.pending).
+ * which it's masked to. It's a shader in vibes' stack from the moment it's put
+ * in (its key is this id), building, then live once its build is.
  */
 export interface Instance {
   id: string;
@@ -58,8 +77,6 @@ export interface Instance {
   head: string | null;
   /** The lights it was put on, by id: it's masked off every other. */
   home: number[];
-  /** Its shader in arclamp, once it's there. */
-  shaderId: number | null;
   /** Building; couldn't go in (error says why); or in the room. */
   state: "building" | "failed" | "live";
   error: string | null;
@@ -70,10 +87,10 @@ export interface Instance {
   at: number;
 }
 
-/** What vibes pushes of the scene (/api/scene/events): the shaders, and the instances not in arclamp yet. */
+/** What vibes pushes of the room (/api/scene/events): the stack of shaders, top first, and the room tone. */
 export interface SceneFeed {
-  nodes: SceneNode[];
-  pending: Instance[];
+  shaders: Shader[];
+  roomtone: RoomTemplate | null;
 }
 
 /** The sketch a shader was built from, as its stamp says. */

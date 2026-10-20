@@ -3,7 +3,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { LightsResponse, ShaderDescriptor } from "../shared/arclamp.ts";
 import type { SceneFeed } from "../shared/vibes.ts";
 import { ArclampError, type Arclamp } from "./arclamp.ts";
-import { openDb, type Db } from "./db.ts";
+import { openDb, type Db, type InstanceRow } from "./db.ts";
 import { loadConfig } from "./env.ts";
 import type { EventHandlers } from "./event-stream.ts";
 import type { Instances } from "./instances.ts";
@@ -93,6 +93,7 @@ const removed = (id: number) => on.event("removed", JSON.stringify({ id }), null
 // Past the feed gathering events together, and any script fetches.
 const settle = () => new Promise((r) => setTimeout(r, 50));
 const now = () => feed.current()!.feed;
+const byKey = (f: SceneFeed, key: string) => f.shaders.find((s) => s.key === key);
 
 describe("the scene feed", () => {
   it("follows arclamp: the whole scene, then each shader as it changes, and as it goes", async () => {
@@ -101,10 +102,11 @@ describe("the scene feed", () => {
     snapshot();
     await settle();
     // Its script fetched once, by its hash, for the preview; left out of the feed.
-    expect(now().nodes[1]).not.toHaveProperty("script");
-    expect(now().nodes[1]!.scriptHash).toBe(sha("function update(p) { return p; }"));
+    expect(now().shaders).toEqual([
+      { key: "rclamp-3", stage: "live", name: "Shader #3", state: "running", error: null, muted: false, mask: [], sketch: null, instance: null, by: "x", footprint: [], scriptHash: sha("function update(p) { return p; }") },
+    ]);
     expect(feed.scripts().get(sha("function update(p) { return p; }"))).toBe("function update(p) { return p; }");
-    expect(now().nodes[0]).not.toHaveProperty("footprint");
+    expect(now().roomtone).toEqual({ lights: {} });
 
     const heard: SceneFeed[] = [];
     feed.subscribe((f) => heard.push(f));
@@ -115,11 +117,11 @@ describe("the scene feed", () => {
     changed(shader(3, "function update(p) { return p; }", { muted: true }));
     await settle();
     expect(heard).toHaveLength(1);
-    expect(heard[0]!.nodes[1]!.muted).toBe(true);
+    expect(heard[0]!.shaders[0]!.muted).toBe(true);
 
     removed(3);
     await settle();
-    expect(now().nodes.map((n) => n.id)).toEqual([0]);
+    expect(now().shaders).toEqual([]);
   });
 
   it("learns each shader's footprint from what it touches, keeps it, and starts again with a new script", async () => {
@@ -129,7 +131,7 @@ describe("the scene feed", () => {
     feed.touched(touching([{ id: 3, touched: [1, 2] }]));
     feed.touched(touching([{ id: 3, touched: [2, 5] }]));
     await settle();
-    expect(now().nodes[1]!.footprint).toEqual([1, 2, 5]);
+    expect(now().shaders[0]!.footprint).toEqual([1, 2, 5]);
     feed.stop();
     expect(db.footprints()).toEqual([{ shaderId: 3, scriptHash: sha("one"), lights: [1, 2, 5] }]);
 
@@ -137,27 +139,28 @@ describe("the scene feed", () => {
     start();
     snapshot();
     await settle();
-    expect(now().nodes[1]!.footprint).toEqual([1, 2, 5]);
+    expect(now().shaders[0]!.footprint).toEqual([1, 2, 5]);
 
     scene = [roomtone, shader(3, "two")];
     changed(scene[1]!);
     feed.touched(touching([{ id: 3, touched: [6] }]));
     await settle();
-    expect(now().nodes[1]!.footprint).toEqual([6]);
+    expect(now().shaders[0]!.footprint).toEqual([6]);
     removed(3);
     await settle();
     expect(db.footprints()).toEqual([]);
   });
 
-  it("shows each shader's instance, and the instances not in the room yet; forgets one when arclamp says its shader's gone", async () => {
+  it("shows each shader's instance by its key, and the instances not in the room yet on top; forgets one when arclamp says its shader's gone", async () => {
     db.addSketch({ id: "s1", name: "Warm wave", by_id: "rc:1", by_name: "Ada", at: 0 });
     db.addBuild({ id: "b1", sketch_id: "s1", commit_sha: "a".repeat(40), builder: "1", by_id: "rc:1", by_name: "Ada", at: 0 });
-    for (const [id, at] of [["i1", 1], ["i2", 2], ["i3", 3]] as const) db.addInstance({ id, sketch_id: "s1", build_id: "b1", home: [at], by_id: "rc:1", by_name: "Ada", at });
+    for (const [id, at] of [["i1", 1], ["i2", 2], ["i3", 3], ["i4", 4]] as const) db.addInstance({ id, sketch_id: "s1", build_id: "b1", home: [at], by_id: "rc:1", by_name: "Ada", at });
     db.updateInstance("i1", { shader_id: 3, state: "live" });
     db.updateInstance("i3", { shader_id: 4, state: "live" });
+    db.updateInstance("i4", { state: "failed", error: "it didn't compile" });
     const forgot: number[] = [];
     const fake = {
-      view: (row: { id: string; home: number[] }) => ({ id: row.id, home: row.home }),
+      view: (row: InstanceRow) => ({ id: row.id, sketchId: row.sketch_id, sketchName: "Warm wave", commit: "a".repeat(40), home: row.home, state: row.state, error: row.error, by: { id: row.by_id, name: row.by_name }, at: row.at }),
       forget: (id: number) => {
         forgot.push(id);
         const inst = db.instanceOfShader(id);
@@ -169,12 +172,15 @@ describe("the scene feed", () => {
     start(() => fake);
     on.event("snapshot", JSON.stringify([roomtone, shader(3, "one")].map(sent)), null);
     await settle();
-    expect(now().nodes[1]!.instance).toEqual({ id: "i1", home: [1] });
-    // 4's shader not heard of yet: still on its way in, not nowhere.
-    expect(now().pending).toEqual([
-      { id: "i2", home: [2] },
-      { id: "i3", home: [3] },
+    // 4's shader not heard of yet: still on its way in, not nowhere. The latest on top.
+    expect(now().shaders.map((s) => [s.key, s.stage, s.name])).toEqual([
+      ["i4", "failed", "Warm wave"],
+      ["i3", "building", "Warm wave"],
+      ["i2", "building", "Warm wave"],
+      ["i1", "live", "Warm wave"],
     ]);
+    expect(byKey(now(), "i1")!.instance).toMatchObject({ id: "i1", home: [1] });
+    expect(byKey(now(), "i4")).toMatchObject({ error: "it didn't compile", state: null, scriptHash: null, by: "Ada", sketch: { id: "s1", name: "Warm wave", commit: "a".repeat(40) } });
     expect(forgot).toEqual([]);
 
     // 3 removed some other way: its instance goes too. And 4, missing from a scene and from arclamp.
@@ -183,7 +189,7 @@ describe("the scene feed", () => {
     snapshot();
     await settle();
     expect(forgot).toEqual([3, 4]);
-    expect(db.instances().map((i) => i.id)).toEqual(["i2"]);
+    expect(db.instances().map((i) => i.id)).toEqual(["i2", "i4"]);
   });
 
   it("shows what vibes changes at once, ahead of arclamp's events, which have the last word", async () => {
@@ -192,15 +198,16 @@ describe("the scene feed", () => {
     snapshot();
     await settle();
     const room = feed.noting(writes);
-    const order = (f: SceneFeed) => f.nodes.filter((n) => n.type === "js").map((n) => `${n.id}@${n.position}`);
+    // Top first.
+    const order = (f: SceneFeed) => f.shaders.map((s) => s.key);
 
     await room.setMuted(2, true);
     await room.setMask(3, [6, 5, 5]);
     await room.moveShader(3, 1);
     let f = (await feed.now())!;
-    expect(f.nodes.find((n) => n.id === 2)!.muted).toBe(true);
-    expect(f.nodes.find((n) => n.id === 3)!.mask).toEqual([5, 6]);
-    expect(order(f)).toEqual(["3@1", "1@2", "2@3"]);
+    expect(byKey(f, "rclamp-2")!.muted).toBe(true);
+    expect(byKey(f, "rclamp-3")!.mask).toEqual([5, 6]);
+    expect(order(f)).toEqual(["rclamp-2", "rclamp-1", "rclamp-3"]);
 
     // arclamp put it somewhere else after all (someone else moving shaders at
     // once): its events say so for 2 and 3, and 1, which no event says
@@ -209,18 +216,18 @@ describe("the scene feed", () => {
     changed(shader(2, "two", { position: 2, muted: true }));
     await settle();
     await settle();
-    expect(order(now())).toEqual(["1@1", "2@2", "3@3"]);
+    expect(order(now())).toEqual(["rclamp-3", "rclamp-2", "rclamp-1"]);
 
     await room.setMask(3, []);
     await room.mergeRoomtone({ lights: { "1": { brightness: 0.2 } } });
     await room.createShader("nine");
     await room.deleteShader(1);
     f = (await feed.now())!;
-    expect(f.nodes.find((n) => n.id === 3)).not.toHaveProperty("mask");
-    expect(f.nodes[0]!.template).toEqual({ lights: { "1": { brightness: 0.2 } } });
-    expect(f.nodes.find((n) => n.id === 9)!.scriptHash).toBe(sha("nine"));
+    expect(byKey(f, "rclamp-3")!.mask).toEqual([]);
+    expect(f.roomtone).toEqual({ lights: { "1": { brightness: 0.2 } } });
+    expect(byKey(f, "rclamp-9")!.scriptHash).toBe(sha("nine"));
     expect(feed.scripts().get(sha("nine"))).toBe("nine");
-    expect(f.nodes.map((n) => n.id)).not.toContain(1);
+    expect(order(f)).toEqual(["rclamp-9", "rclamp-3", "rclamp-2"]);
   });
 
   it("shows nothing of vibes' changes before it's heard the whole scene", async () => {

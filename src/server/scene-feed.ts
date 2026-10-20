@@ -1,11 +1,14 @@
-// The scene, as vibes pushes it to browsers (/api/scene/events): arclamp's,
+// The room, as vibes pushes it to browsers (/api/scene/events): the stack of
+// shaders as vibes has them (Shader, in shared/vibes.ts), top first, and the
+// room tone; sent whenever it's different. It's made from arclamp's scene,
 // followed as it changes (/v1/scene/events: the whole scene to start, then
-// each shader as it's added or changes, and each one removed), with each
-// shader's sketch, footprint and instance, and the instances not in arclamp
-// yet; sent whenever it's different. Scripts are left out, as arclamp's
-// events leave them out, saying which by hash: vibes fetches each new one
-// once, for its stamp and for the preview (which fetches the ones it needs,
-// by hash: /api/scene/scripts). So it's small.
+// each shader as it's added or changes, and each one removed), each shader
+// with its sketch (by its stamp), footprint and instance; and, on top, the
+// instances not in arclamp yet, on their way in (or that couldn't go in).
+// Each shader has vibes' key (shader-keys.ts), never arclamp's id. Scripts
+// are left out, as arclamp's events leave them out, saying which by hash:
+// vibes fetches each new one once, for its stamp and for the preview (which
+// fetches the ones it needs, by hash: /api/scene/scripts). So it's small.
 //
 // What vibes changes in the scene itself (through noting(arclamp), which
 // every route writes through) is shown at once, to every browser, as it's
@@ -25,13 +28,14 @@
 // says there's no such shader (rather than one too new to be in it).
 
 import { createHash } from "node:crypto";
-import { decodeTouched, lightsOf, type LightsResponse, type ShaderDescriptor } from "../shared/arclamp.ts";
-import type { SceneFeed, SceneNode, ShaderSketch } from "../shared/vibes.ts";
+import { decodeTouched, lightsOf, type LightsResponse, type RoomTemplate, type ShaderDescriptor } from "../shared/arclamp.ts";
+import type { Instance, SceneFeed, Shader, ShaderSketch } from "../shared/vibes.ts";
 import { ArclampError, type Arclamp } from "./arclamp.ts";
 import type { Db } from "./db.ts";
 import type { Config } from "./env.ts";
 import type { EventHandlers, Following } from "./event-stream.ts";
 import type { Instances } from "./instances.ts";
+import { rclampKey } from "./shaders.ts";
 import { sketchOf } from "./stamp.ts";
 
 // Events that come together (a move shifts several shaders) go on as one.
@@ -157,34 +161,71 @@ export function createSceneFeed({ config, db, arclamp, follow, layout, instances
     // Each instance whose shader's in the scene goes with it (however far its going in has got).
     const byShader = new Map(db.instances().flatMap((i) => (i.shader_id !== null && shaders.has(i.shader_id) ? [[i.shader_id, i] as const] : [])));
     const inUse = new Set<string>();
-    const nodes: SceneNode[] = [...shaders.values()]
-      .sort((a, b) => a.position - b.position)
-      .map((n) => {
-        if (n.type !== "js") return n;
-        const { script_hash: hash = "", ...rest } = n;
-        inUse.add(hash);
-        const sketch = sketches.get(hash);
-        const inst = byShader.get(n.id);
-        return {
-          ...rest,
-          scriptHash: hash,
-          footprint: sorted(footprintOf(n.id, hash || null).lights),
-          ...(sketch ? { sketch } : {}),
-          ...(inst && live ? { instance: live.view(inst) } : {}),
-        };
+    let roomtone: RoomTemplate | null = null;
+    const inRoom: Shader[] = [];
+    for (const n of [...shaders.values()].sort((a, b) => b.position - a.position)) {
+      if (n.type === "roomtone") {
+        roomtone = n.template ?? null;
+        continue;
+      }
+      const hash = n.script_hash ?? "";
+      inUse.add(hash);
+      const sketch = sketches.get(hash) ?? null;
+      const inst = byShader.get(n.id);
+      const instance = inst && live ? live.view(inst) : null;
+      inRoom.push({
+        key: inst ? inst.id : rclampKey(n.id),
+        stage: "live",
+        // Built from a sketch: the sketch's name (by the shader's stamp, or its instance).
+        name: sketch || instance ? (sketch?.name ?? instance?.sketchName ?? "Unknown sketch") : `Shader #${n.id}`,
+        state: n.state,
+        error: n.error ?? null,
+        muted: n.muted,
+        mask: n.mask ?? [],
+        sketch,
+        instance,
+        by: n.created_by,
+        footprint: sorted(footprintOf(n.id, hash || null).lights),
+        scriptHash: hash || null,
       });
+    }
     for (const hash of [...scripts.keys()]) {
       if (inUse.has(hash)) continue;
       scripts.delete(hash);
       sketches.delete(hash);
     }
-    // The rest aren't in the room yet: building, couldn't go in, or just put in and their shader not heard of yet.
-    const pending = live ? db.instances().filter((i) => i.shader_id === null || !shaders.has(i.shader_id)).map((i) => live.view(i)) : [];
-    const feed: SceneFeed = { nodes, pending };
+    // The rest aren't in the room yet: building, couldn't go in, or just put
+    // in and their shader not heard of yet. They go in on top, the latest topmost.
+    const coming = live
+      ? db
+          .instances()
+          .filter((i) => i.shader_id === null || !shaders.has(i.shader_id))
+          .sort((a, b) => b.at - a.at)
+          .map((i) => comingOf(live.view(i)))
+      : [];
+    const feed: SceneFeed = { shaders: [...coming, ...inRoom], roomtone };
     const json = JSON.stringify(feed);
     if (json === latest?.json) return;
     latest = { feed, json };
     for (const listener of listeners) listener(feed, json);
+  }
+
+  /** An instance on its way in (or that couldn't go in), as a shader in the stack. */
+  function comingOf(i: Instance): Shader {
+    return {
+      key: i.id,
+      stage: i.state === "failed" ? "failed" : "building",
+      name: i.sketchName ?? "Unknown sketch",
+      state: null,
+      error: i.error,
+      muted: false,
+      mask: [],
+      sketch: { id: i.sketchId, name: i.sketchName, commit: i.commit, edited: false, deleted: db.sketch(i.sketchId)?.deleted_at != null },
+      instance: i,
+      by: i.by.name,
+      footprint: [],
+      scriptHash: null,
+    };
   }
 
   // One make at a time; asked for while one's going, one more after it.

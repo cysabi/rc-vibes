@@ -349,12 +349,10 @@ ever be built from one of its commits. On while `SKETCHES=1`.
   once per builder version. `POST /api/sketches/<id>/builds` (`{ commit }`,
   main's by default), `GET …/builds`, `…/builds/<id>` (with its log),
   `…/builds/<id>/script`.
-- **Builds in the room** (phase 7; `src/server/instances.ts`). The only way
-  vibes makes a shader or changes one's script, and it takes a build's id,
-  never a script: `POST /api/shaders { build }` (a new shader running that
-  build's stamped script), `PUT /api/shaders/<id>/build { build }` and
-  `DELETE /api/shaders/<id>`, both for vibes' own shaders only (stamped). A
-  build goes in only if it built, its sketch isn't deleted, and its stamp
+- **Builds in the room** (phase 7; `src/server/instances.ts`). An instance
+  (below) is the only way vibes makes a shader or changes one's script, and
+  it takes a build, never a script: what goes in is the build's own stamped
+  script, and only if it built, its sketch isn't deleted, and its stamp
   checks out with vibes' key.
 - **Instances: a sketch is a class, a shader in the room an instance**
   (`src/server/instances.ts`). An instance is put in from a selection on the
@@ -366,8 +364,8 @@ ever be built from one of its commits. On while `SKETCHES=1`.
   Its home is vibes' own, kept apart from arclamp's mask, so switching lights
   on and off never moves it (`PUT …/home` does). `POST …/update` builds main's
   latest (or a commit) and swaps it in once built, the old one running
-  meanwhile; `DELETE /api/instances/<id>` takes it out, as does its shader
-  going any other way.
+  meanwhile; `DELETE /api/shaders/<key>` (its key is its id) takes it out,
+  as does its shader going any other way.
 - **Adding it with your changes** (`src/server/changes.ts`,
   `box/publish.sh`). What goes in is built from main, so adding a sketch on
   the map first asks vibes whether your editor has changes main hasn't (files
@@ -386,7 +384,7 @@ ever be built from one of its commits. On while `SKETCHES=1`.
   takes in any of its lights, or, for one with no home (made outside vibes, or
   before instances), whose *footprint* does: every light its code has changed,
   before its mask or mute, since its script last changed (learned from
-  arclamp's `changing`, kept in vibes' database). Plus instances on their way
+  arclamp's `changing`, kept in vibes' database). Plus shaders on their way
   in, homed on any of them. Rows are in stack order and never move. A shader
   is **on**, **on for some** or **off** (muted and masked off everything are
   one off); its switch is for these lights. Its own panel says what's become of it (building, couldn't go
@@ -396,10 +394,10 @@ ever be built from one of its commits. On while `SKETCHES=1`.
 - **The scene is pushed** (`src/server/scene-feed.ts`, `src/web/scene.ts`).
   vibes looks at arclamp's scene twice a second (learning footprints as it
   goes) and pushes it to browsers as Server-Sent Events
-  (`/api/scene/events`) whenever it's different: each shader with its
-  sketch, footprint and instance, but not its script (a hash says which;
-  the preview fetches scripts it hasn't got, `/api/scene/scripts`), and the
-  instances not in arclamp yet. Anything changed through vibes is looked at
+  (`/api/scene/events`) whenever it's different: the stack of shaders as
+  vibes has them (below), each with its sketch, footprint and instance, but
+  not its script (a hash says which; the preview fetches scripts it hasn't
+  got, `/api/scene/scripts`). Anything changed through vibes is looked at
   again at once. A ping every 10 s lets a page tell a quiet stream from a
   dead one and open it again (a restarting vibes, behind a proxy that keeps
   the connection, never says).
@@ -436,11 +434,13 @@ of the mediating, ids and positions included, is the server's.
 - **Shaders made outside vibes** can be switched, moved and removed like
   any other. Removing one asks first: vibes only ever puts in its own
   builds, so it can't put one back.
-- **Phase 1:** the server sends the unified list (`{ shaders, roomtone }`,
-  the stack top first), and routes take shader keys: mute, mask and remove
-  one (`/api/shaders/<key>/…`), and the stack's order (`PUT /api/stack`). The
-  routes by arclamp's id go. A shader on its way in sits where it'll go in,
-  on top, and can't be switched or moved yet.
+- **Phase 1** (done; `src/server/shaders.ts`): the server sends the unified
+  list (`{ shaders, roomtone }`, the stack top first), and routes take shader
+  keys: mute, mask and remove one (`/api/shaders/<key>/…`), and the stack's
+  order (`PUT /api/stack`, which moves them bottom first, one reorder at a
+  time). The routes by arclamp's id are gone. A shader on its way in sits
+  where it'll go in, on top, and can't be switched or moved yet; opened, it
+  stays open as it goes in, since its key doesn't change.
 - **Phase 2:** a shader on its way in (or a draft one) can be switched,
   masked and moved: vibes keeps what's wanted of it (muted, mask, its place
   as just above or below another) and puts it in that way, in one step

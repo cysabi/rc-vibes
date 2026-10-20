@@ -1,9 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Rail } from "../shared/arclamp.ts";
-import type { SceneNode } from "../shared/vibes.ts";
 import { useAddingBuilds } from "./adding.ts";
 import { useLights, useMe } from "./api.ts";
-import { usePendingInstances, useScene } from "./scene.ts";
+import { useScene, type Scene } from "./scene.ts";
 import { applyDraft, layerOf, layersOf, pendingCount, reachOf, templateOf, useDraft, type LayerKey } from "./draft.ts";
 import { Banners } from "./components/Banners.tsx";
 import { ColorPreview } from "./components/ColorPreview.tsx";
@@ -23,7 +22,7 @@ import { usePath } from "./route.ts";
 import { SketchesLink, SketchPages } from "./sketches/SketchPages.tsx";
 
 const NO_RAILS: Rail[] = [];
-const NO_NODES: SceneNode[] = [];
+const NO_SCENE: Scene = { shaders: [], roomtone: null };
 
 export function App() {
   const me = useMe();
@@ -61,7 +60,7 @@ function Shell() {
   // (each as soon as the last lands), and only a failed send shows them as
   // pending, to try again or drop.
   const draft = useDraft();
-  const live = scene.data ?? NO_NODES;
+  const live = scene.data ?? NO_SCENE;
   const pending = scene.data ? pendingCount(live, draft) : 0;
   const peeking = usePeek();
   const liveMode = useLiveMode();
@@ -88,8 +87,8 @@ function Shell() {
   const previewing = pending > 0 && (!liveMode || liveError !== null);
   const simulated = previewing || peeking;
   const simInputs = useMemo(() => {
-    // A sketch being added is previewed once it's built (its script here).
-    const layers = layersOf(live, draft).filter((l) => !l.adding || l.script !== "");
+    // Each is previewed once its script's here: a sketch being added, once it's built.
+    const layers = layersOf(live, draft).filter((l) => l.script !== "");
     return { lights: all, layers: peeking ? layers.map((l) => ({ ...l, muted: true })) : layers, template: templateOf(live, draft) };
   }, [all, live, draft, peeking]);
   // Their builds, asked for and watched.
@@ -109,29 +108,20 @@ function Shell() {
     return new Set([...selected].filter((id) => ids.has(id)));
   }, [here, selected]);
 
-  // A shader opened from the selection panel, in its place: one in the room
-  // ("#12"), one on its way in ("i:" and its instance's id), or one you're
-  // adding ("+…"). The map rings where it's on (of its home, or where its
-  // code's lit) instead of the selection, which is kept, to go back to.
-  // Anything selected on the map goes back to selecting lights. Gone (taken
-  // out, by you or anyone), it closes.
+  // A shader opened from the selection panel, in its place, by its key: one
+  // in the room or on its way in (it keeps its key, going in), or one you're
+  // adding. The map rings where it's on (of its home, or where its code's
+  // lit) instead of the selection, which is kept, to go back to. Anything
+  // selected on the map goes back to selecting lights. Gone (taken out, by
+  // you or anyone), it closes.
   const [shader, setShader] = useState<LayerKey | null>(null);
-  const pendingInstances = usePendingInstances();
-  const openLayer = shader?.startsWith("#") && selectedHere.size > 0 ? layerOf(live, draft, shader) : null;
-  const openComing = shader?.startsWith("i:") && selectedHere.size > 0 ? (pendingInstances.find((i) => `i:${i.id}` === shader) ?? null) : null;
-  const openAdding = shader?.startsWith("+") && selectedHere.size > 0 ? (draft.added.find((a) => a.key === shader) ?? null) : null;
+  const openLayer = shader && selectedHere.size > 0 ? layerOf(live, draft, shader) : null;
   const reach = useMemo(() => {
-    let on: Set<number> | null = null;
-    if (openLayer) {
-      const masked = new Set(openLayer.mask);
-      on = new Set(reachOf(openLayer).filter((id) => !masked.has(id)));
-    } else if (openComing) {
-      on = new Set(openComing.home);
-    } else if (openAdding) {
-      on = new Set(openAdding.home);
-    }
-    return on && new Set(here.filter((l) => on.has(l.id)).map((l) => l.id));
-  }, [openLayer, openComing, openAdding, here]);
+    if (!openLayer) return null;
+    const masked = new Set(openLayer.mask);
+    const on = new Set(reachOf(openLayer).filter((id) => !masked.has(id)));
+    return new Set(here.filter((l) => on.has(l.id)).map((l) => l.id));
+  }, [openLayer, here]);
 
   const showFloor = (id: number) => {
     setFloor(id);
@@ -164,7 +154,7 @@ function Shell() {
   );
 
   // With a shader open, picking on the map starts a new selection.
-  const open = openLayer !== null || openComing !== null || openAdding !== null;
+  const open = openLayer !== null;
   const selectOnMap = useCallback((ids: number[], mode: SelectMode) => select(ids, open ? "replace" : mode), [select, open]);
 
   // Escape goes back from a shader to the selection, then lets go of it.

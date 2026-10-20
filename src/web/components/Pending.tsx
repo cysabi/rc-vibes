@@ -1,12 +1,12 @@
 import { useState } from "react";
-import type { SceneNode } from "../../shared/vibes.ts";
 import { applyDraft, drafts } from "../draft.ts";
+import type { Scene } from "../scene.ts";
 
 /**
  * Simulated mode's controls, floating over the bottom of the map: send the
  * pending changes to the room, or drop them.
  */
-export function Pending({ live, pending }: { live: SceneNode[]; pending: number }) {
+export function Pending({ live, pending }: { live: Scene; pending: number }) {
   const [applying, setApplying] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const apply = async () => {
