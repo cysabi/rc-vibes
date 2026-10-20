@@ -3444,3 +3444,121 @@ button.apply:hover:not(:disabled) {
     transition: none !important;
   }
 }
+
+/* ── Touch ─────────────────────────────────────────────────────────────────
+   For fingers (a wall display, a phone, a tablet). Everything under
+   (pointer: coarse) leaves the mouse and trackpad as they were. */
+
+/* No grey flash over whatever's tapped. */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Pinching anywhere but the map (which pinches itself) mustn't zoom the
+   page; scrolling still scrolls. */
+html {
+  touch-action: pan-x pan-y;
+}
+
+/* A list scrolled to its end stops there, rather than dragging the page. */
+.selection-body,
+.add-sketch-scroll,
+.drawer-body,
+.tag-chips,
+.menu-panel {
+  overscroll-behavior: contain;
+}
+
+@media (pointer: coarse) {
+  /* Holding a finger on a label or a name shouldn't start selecting text. */
+  .app {
+    user-select: none;
+    -webkit-user-select: none;
+    -webkit-touch-callout: none;
+  }
+
+  .app input,
+  .app textarea,
+  .shader-log,
+  .shader-error {
+    user-select: text;
+    -webkit-user-select: text;
+  }
+
+  /* Bigger to tap, the same to look at: each grows an invisible margin. */
+  .icon-button,
+  .layer-grip,
+  .layer-open,
+  .layer-chevron,
+  .tag-remove {
+    position: relative;
+  }
+
+  .icon-button::after,
+  .switch::after,
+  .slider-track::after,
+  .layer-grip::after,
+  .layer-open::after,
+  .layer-chevron::after,
+  .tag-remove::after {
+    content: "";
+    position: absolute;
+  }
+
+  .icon-button::after {
+    inset: -7px;
+  }
+
+  /* The rows these sit in are 56px tall: as tall as the row, and half the gap either side. */
+  .switch::after,
+  .layer-grip::after,
+  .layer-open::after,
+  .layer-chevron::after {
+    inset: -11px -3px;
+  }
+
+  /* The track is 10px tall: 44 to touch. */
+  .slider-track::after {
+    inset: -17px -10px;
+  }
+
+  .tag-remove::after {
+    inset: -8px -4px;
+  }
+
+  .slider-thumb {
+    width: 26px;
+    height: 26px;
+    margin: -13px 0 0 -13px;
+  }
+
+  /* The corner's floors and zoom: big enough for a finger, which on a wall
+     display is most of what's tapped. */
+  .zoom .floor-switch button,
+  .zoom button {
+    width: 46px;
+    height: 46px;
+  }
+
+  .chip,
+  .tag-clear,
+  .tool,
+  button.quiet,
+  .segmented button,
+  .menu-item {
+    min-height: 40px;
+  }
+
+  /* The preview's Color / White tabs: tiny text, so a margin to tap. */
+  .preview-tabs button {
+    padding: 12px 8px;
+    margin: -12px -8px;
+  }
+
+  /* The marks round the wheel only carry a title, which no finger can read;
+     taps go through them to the map. */
+  .color-preview .goo-mark,
+  .color-preview .tick {
+    pointer-events: none;
+  }
+}

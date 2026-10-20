@@ -135,9 +135,10 @@ top-left wall corner. They're drawn as faint lines under the lights, over a
 grid whose spacing follows the zoom, with a metric and imperial scale bar.
 
 Dragging across the map box-selects lights (shift adds to the selection,
-⌘-click toggles one). ⌘-drag, middle-drag or one finger pans; scroll or pinch
-zooms around the pointer (or the buttons, with "fit" to see the whole
-building). Switching floors keeps the view, so the building never jumps.
+⌘-click toggles one); so does one finger, adding, with no hold first, and
+holding a finger on a light shows what it is. ⌘-drag, middle-drag or two
+fingers pan; scroll or pinch zooms around the pointer (or the buttons, with
+"fit" to see the whole building). Switching floors keeps the view, so the building never jumps.
 
 A light's position is arclamp's `coords`: `{ "mm_x", "mm_y", "floor" }`, or
 absent until placed (rclamp PR #2). 4×1 panels are drawn at their real

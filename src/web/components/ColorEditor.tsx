@@ -43,6 +43,8 @@ const STRIP_H = 96;
 const STRIP_W = 320;
 /** Let go this near (px) another circle, and it takes that one's color. */
 const SNAP_PX = 14;
+// How near (px) a finger has to land to a circle to pick it.
+const FINGER_PX = 24;
 /** Circles whose lights land this near (px) each other are one circle there. */
 const SAME_PX = 4;
 /** A press that moves less than this (px) is a tap: it only picks. */
@@ -343,9 +345,23 @@ function Picker({
     return best;
   };
 
+  /** The circle or ghost nearest a finger, within FINGER_PX of its middle. */
+  const nearest = (e: PointerEvent): HTMLElement | null => {
+    let best: HTMLElement | null = null;
+    let bestD = FINGER_PX;
+    for (const el of box.current!.querySelectorAll<HTMLElement>("[data-ghost], [data-spot]")) {
+      const r = el.getBoundingClientRect();
+      const d = Math.hypot(r.left + r.width / 2 - e.clientX, r.top + r.height / 2 - e.clientY);
+      if (d < bestD) [best, bestD] = [el, d];
+    }
+    return best;
+  };
+
   const down = (e: PointerEvent<HTMLDivElement>) => {
-    // A ghost is its circle's alone; a circle, every one landing there.
-    const hit = (e.target as Element).closest<HTMLElement>("[data-ghost], [data-spot]");
+    // A ghost is its circle's alone; a circle, every one landing there. A
+    // finger is less exact than a mouse: landing near one picks it, rather
+    // than moving the active ones there (which, live, goes to the room).
+    const hit = (e.target as Element).closest<HTMLElement>("[data-ghost], [data-spot]") ?? (e.pointerType === "touch" ? nearest(e) : null);
     const picked = !hit ? null : hit.dataset.spot !== undefined ? spots[Number(hit.dataset.spot)]!.circles : [circles[Number(hit.dataset.ghost)]!];
     onPick(picked, e.altKey);
     // Pressing off the circles takes the active ones there at once.

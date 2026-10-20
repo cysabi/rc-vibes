@@ -7,14 +7,16 @@
 // Getting around works the way each device's own maps do. With a mouse, drag
 // to select, ⌘-drag or middle-drag to pan, scroll to zoom, and double-click to
 // zoom in (⌥ zooms out). On a trackpad, two fingers pan and a pinch zooms. On a
-// touch screen, one finger pans (a flick glides on), two pinch, a double tap
-// zooms in and a two-finger tap zooms out.
+// touch screen (a wall display as much as a phone), one finger selects and two
+// move: two fingers pan and pinch (a flick glides on), a double tap zooms in
+// and a two-finger tap zooms out.
 //
 // Click or tap a light to select it; shift adds to the selection, ⌘-click
 // toggles one light, ⌘A selects them all, and double-clicking a light selects
-// its whole rail. On a touch screen, once anything's selected, taps add and
+// its whole rail. On a touch screen, dragging one finger draws a box that adds
+// to the selection, straight away; once anything's selected, taps add and
 // remove lights (and double taps whole rails) until the selection chip lets
-// go; a long press, then a drag, draws a box.
+// go. Holding a finger on a light shows what it is, as hovering does.
 //
 // In Edit lights (admin mode), dragging a light moves it (with the rest of
 // the selection, if it's selected); near a rail it hangs on it and slides
@@ -98,8 +100,11 @@ const FLY_MS = 280;
 // Flying to the selection: this much room (mm) round its lights, and no closer than this (px per mm).
 const FRAME_MM = 1000;
 const FRAME_SCALE = 0.25;
-// Holding a finger still this long (ms) starts a box instead of a pan.
+// Holding a finger still on a light this long (ms) shows what it is.
 const LONG_PRESS_MS = 450;
+// How far (px) a press goes before it's a box: a finger wobbles more than a mouse.
+const BOX_SLOP = 4;
+const BOX_SLOP_TOUCH = 10;
 
 export type SelectMode = "replace" | "add" | "toggle";
 
@@ -148,7 +153,8 @@ type Drag =
 // `trail`: the pan's last few positions, to tell how fast it was flicked.
 type Press =
   | { kind: "pan"; id: number; x: number; y: number; view: View; hit: PlacedLight | null; panned: boolean; touch: boolean; trail: Sample[] }
-  | { kind: "box"; x: number; y: number; hit: PlacedLight | null; add: boolean };
+  // `stopped`: the press stopped a glide, so it isn't a tap. `peeked`: held on a light, showing what it is.
+  | { kind: "box"; x: number; y: number; hit: PlacedLight | null; add: boolean; touch: boolean; stopped: boolean; peeked: boolean };
 
 /** Two fingers on the map: where they started, and the view then. */
 interface Pinch {
@@ -159,6 +165,8 @@ interface Pinch {
   /** Where their midpoint is now. */
   last: Point;
   moved: boolean;
+  /** Their midpoint's last few positions, for a flick as they let go. */
+  trail: Sample[];
 }
 
 /** Safari's trackpad pinch. */
@@ -681,7 +689,9 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
     dirty.current = true;
     setPanning(false);
     const center = midpoint(a, b);
-    pinch.current = { view, center, distance: Math.hypot(a.x - b.x, a.y - b.y), at: performance.now(), last: center, moved: false };
+    setHover(null);
+    const at = performance.now();
+    pinch.current = { view, center, distance: Math.hypot(a.x - b.x, a.y - b.y), at, last: center, moved: false, trail: [{ t: at, ...center }] };
   };
 
   /** Every light on a light's rail (or just the light, if it's on none). */
@@ -781,25 +791,20 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
         return;
       }
     }
-    if (!touch) {
-      // A mouse drags out a box.
-      press.current = { kind: "box", ...p, hit, add: e.shiftKey };
-      return;
-    }
-    // A finger pans, or, held still a moment, starts a box from there that
-    // adds to the selection (taking the light under it along).
-    const pr = panFrom();
+    // A mouse drags out a box (shift adds to the selection). So does a
+    // finger, straight away, always adding (as its taps do): two fingers move
+    // the map. Held still on a light, a finger shows what it is instead.
+    const pr: Extract<Press, { kind: "box" }> = { kind: "box", ...p, hit, add: touch || e.shiftKey, touch, stopped, peeked: false };
     press.current = pr;
     window.clearTimeout(longPress.current);
-    longPress.current = window.setTimeout(() => {
-      if (press.current !== pr || pr.panned) return;
-      press.current = { kind: "box", ...p, hit: null, add: true };
-      marquee.current = { x0: p.x, y0: p.y, x1: p.x, y1: p.y };
-      if (hit) onSelect([hit.id], "add");
-      setBoxing([...new Set([...selected, ...(hit ? [hit.id] : [])])]);
-      navigator.vibrate?.(10);
-      dirty.current = true;
-    }, LONG_PRESS_MS);
+    if (touch && hit) {
+      longPress.current = window.setTimeout(() => {
+        if (press.current !== pr || marquee.current) return;
+        pr.peeked = true;
+        setHover(hit);
+        navigator.vibrate?.(10);
+      }, LONG_PRESS_MS);
+    }
   };
 
   const move = (e: PointerEvent<HTMLCanvasElement>) => {
@@ -814,6 +819,8 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
       const spread = Math.hypot(a.x - b.x, a.y - b.y);
       if (Math.abs(spread - pz.distance) > 10 || Math.hypot(c.x - pz.center.x, c.y - pz.center.y) > 10) pz.moved = true;
       pz.last = c;
+      pz.trail.push({ t: e.timeStamp, ...c });
+      if (pz.trail.length > 12) pz.trail.shift();
       setView(pinchView(pz.view, pz.center, pz.distance, c, spread, minScale(), MAX_SCALE));
       return;
     }
@@ -862,7 +869,12 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
       if (hover) setHover(null);
       return;
     }
-    if (pr?.kind === "box" && view && (marquee.current || Math.hypot(p.x - pr.x, p.y - pr.y) > 4)) {
+    if (pr?.kind === "box" && view && (marquee.current || Math.hypot(p.x - pr.x, p.y - pr.y) > (pr.touch ? BOX_SLOP_TOUCH : BOX_SLOP))) {
+      if (!marquee.current) {
+        window.clearTimeout(longPress.current);
+        if (pr.peeked) setHover(null);
+        pr.peeked = false;
+      }
       marquee.current = { x0: pr.x, y0: pr.y, x1: p.x, y1: p.y };
       dirty.current = true;
       const inside = boxed(marquee.current, view);
@@ -891,8 +903,13 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
       if (fingers.current.size > 1) startPinch();
       // Two fingers tapped together: zoom out, as in Maps.
       else if (!pz.moved && performance.now() - pz.at < 300) zoomBy(0.5, pz.center.x, pz.center.y);
-      // A finger still down pans on from where it is.
-      else if (rest && view) press.current = { kind: "pan", id: rest[0], ...rest[1], view, hit: null, panned: true, touch: true, trail: [] };
+      // A finger still down pans on from where it is, keeping the pinch's
+      // pace (its trail, moved over to the finger) so letting go glides.
+      else if (rest && view) {
+        const [dx, dy] = [rest[1].x - pz.last.x, rest[1].y - pz.last.y];
+        const trail = pz.trail.map((s) => ({ t: s.t, x: s.x + dx, y: s.y + dy }));
+        press.current = { kind: "pan", id: rest[0], ...rest[1], view, hit: null, panned: true, touch: true, trail };
+      }
       else settle(pz.last.x, pz.last.y);
       return;
     }
@@ -930,6 +947,12 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
     marquee.current = null;
     setBoxing(null);
     dirty.current = true;
+    if (!box && pr.touch) {
+      // Held to see what a light is: letting go only puts the card away.
+      if (pr.peeked) setHover(null);
+      else if (!pr.stopped) tap(toLocal(e), pr.hit, e.timeStamp);
+      return;
+    }
     if (!pr.add) setRailSel(null);
     if (!box) {
       if (pr.hit) onSelect([pr.hit.id], pr.add ? "toggle" : "replace");

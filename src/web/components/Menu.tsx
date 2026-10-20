@@ -17,13 +17,15 @@ export function Menu({ label, title, className, align = "start", children }: Pro
   const ref = useRef<HTMLSpanElement>(null);
   useEffect(() => {
     if (!open) return;
-    const close = (e: MouseEvent | KeyboardEvent) => {
+    // Any press outside, finger or mouse: pointerdown, in the capture phase,
+    // since the map cancels the mouse events a touch would otherwise make.
+    const close = (e: PointerEvent | KeyboardEvent) => {
       if (e instanceof KeyboardEvent ? e.key === "Escape" : !ref.current?.contains(e.target as Node)) setOpen(false);
     };
-    document.addEventListener("mousedown", close);
+    document.addEventListener("pointerdown", close, true);
     document.addEventListener("keydown", close);
     return () => {
-      document.removeEventListener("mousedown", close);
+      document.removeEventListener("pointerdown", close, true);
       document.removeEventListener("keydown", close);
     };
   }, [open]);

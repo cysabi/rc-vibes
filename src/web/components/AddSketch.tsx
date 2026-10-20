@@ -45,8 +45,11 @@ export function AddSketch({ open, lights, onPick, onClose }: Props) {
       setAsking(null);
       create.reset();
       d.showModal();
-      // Straight to searching (not the first button, the close).
-      search.current?.focus();
+      // Straight to searching (not the first button, the close), with a
+      // mouse. On a touch screen that would open the on-screen keyboard over
+      // half the screen before anyone asked to type: tapping the search does.
+      if (matchMedia("(pointer: fine)").matches) search.current?.focus();
+      else (document.activeElement as HTMLElement | null)?.blur();
     } else if (!open && d.open) {
       d.close();
     }
