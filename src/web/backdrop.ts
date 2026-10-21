@@ -2,13 +2,15 @@
 // fast enough to follow the brightness slider as it's dragged. At each
 // place: whether the active lights, at their brightness, make that color as
 // asked (every kind of light among them, some, or none: the color bulbs and
-// the 4×1 panels each make their own), and what one of them makes instead if
-// none do, from tables of what each kind makes worked out ahead (cutoffs.ts),
+// the 4×1 panels each make their own), and what each makes instead if it
+// doesn't, from tables of what each kind makes worked out ahead (cutoffs.ts),
 // on a grid a little coarser than the screen; then each pixel is painted
-// from it as ColorEditor paints them on the CPU: the color asked for where
-// every one makes it; where only some do, the same, lightly striped; past
-// that, what's made instead, striped; with a border outside the outer edge,
-// and the inner one dotted. With one kind of light, the two edges are one. (The bulb's
+// from it as ColorEditor paints them on the CPU. With one kind of light: the
+// color asked for where it makes it; past the edge what it makes instead,
+// striped darker, with a border outside the edge. With two: stripes of what
+// the least capable of them makes and of what the most capable does (both
+// the color asked for, inside the inner edge, which is dotted; the most
+// capable's, as far as the outer one, which is bordered). (The bulb's
 // solve itself ran here once, in a shader, which some drivers took half a
 // minute to compile.)
 //
@@ -45,8 +47,6 @@ export interface BackdropJob {
   brightness: number;
   /** The kinds of light among them that solve lemtones (devices.ts); with none, they make every color as asked. */
   devices: Device[];
-  /** The kind whose light shows where none make a color as asked (what it makes instead), if any. */
-  shown: Device | null;
   /** The strip of whites' temperatures, end to end, and its tint at the edges and how steeply it grows. */
   whites: { kMin: number; kMax: number; tint: number; tintCurve: number };
   /** How it looks past the edge: stripes (the darker ones this much darker, a pair this wide), the border (this wide, this color, this strong), and the inner edge's dots (this big, about this far apart). */
@@ -144,9 +144,8 @@ uniform sampler2D u_cutWheel1; // the 4×1 panels'
 uniform sampler2D u_cutStrip1;
 uniform float u_bright; // the active lights' brightness as the slider has it, its cube root (0: off)
 uniform bvec2 u_active; // which kinds of light are among them: the color bulbs, the panels
-uniform int u_shown; // the kind whose light shows where none make a color as asked (0, 1)
-uniform vec2 u_whiteCool; // its white line, cool end to warm, which a color it can't make pales toward
-uniform vec2 u_whiteWarm;
+uniform vec4 u_whiteLine0; // the color bulbs' white line, cool end (xy) to warm (zw), which a color they can't make pales toward
+uniform vec4 u_whiteLine1; // the panels'
 const int BISECT_STEPS = 10;
 
 // A table's cutoff at a place (fractions across and down), spread between its points.
@@ -179,18 +178,37 @@ int madeAt(vec2 at) {
   return bulb || panel ? 1 : 0;
 }
 
-// Whether the shown kind makes a color (a, b) as asked, from where it is on the wheel.
-bool makes(vec2 p) {
+// Whether a kind of light makes a color (a, b) as asked, from where it is on the wheel.
+bool makes(int device, vec2 p) {
   float c = length(p);
   vec2 at = vec2(0.5);
   if (c > 0.0) at += 0.5 * vec2(p.x, -p.y) / c * pow(c / ${glf(WHEEL_CHROMA)}, 1.0 / ${glf(CURVE)});
-  return (u_shown == 0 ? cutoffAt(u_cutWheel0, at) : cutoffAt(u_cutWheel1, at)) >= u_bright;
+  return (device == 0 ? cutoffAt(u_cutWheel0, at) : cutoffAt(u_cutWheel1, at)) >= u_bright;
 }
 
 // Where p projects onto the white line from cw to ww: 0 at cw, 1 at ww.
 float betaOn(vec2 cw, vec2 ww, vec2 p) {
   vec2 d = ww - cw;
   return clamp(dot(p - cw, d) / dot(d, d), 0.0, 1.0);
+}
+
+// How far a kind of light moves color p (in a, b), as solver.ts's output does:
+// none where it makes it as asked; else toward its point on its white line,
+// as far as it still makes it (desat), or all the way, too bright for any
+// color (clamp: that white, dimmer).
+vec2 shiftBy(int device, vec2 p, bool asked) {
+  if (asked) return vec2(0.0);
+  vec4 line = device == 0 ? u_whiteLine0 : u_whiteLine1;
+  vec2 w = line.xy + betaOn(line.xy, line.zw, p) * (line.zw - line.xy);
+  if (!makes(device, w)) return w - p;
+  float lo = 0.0;
+  float hi = 1.0;
+  for (int s = 0; s < BISECT_STEPS; s++) {
+    float mid = 0.5 * (lo + hi);
+    if (makes(device, w + mid * (p - w))) lo = mid;
+    else hi = mid;
+  }
+  return (lo - 1.0) * (p - w);
 }
 `;
 
@@ -201,46 +219,42 @@ void main() {
 }`;
 
 // Each grid point: whether it's made as asked by every kind of light (1), some
-// (0.5) or none (0); if none, how far the shown kind moves its color (in a,
-// b), as solver.ts's output does; and whether it's worked out at all (on the
-// wheel, not far past the rim).
+// (0.5) or none (0); how far the least capable of them moves its color (in a,
+// b: the one that moves it furthest), and the most capable; and whether it's
+// worked out at all (on the wheel, not far past the rim).
 const SOLVE_FS = `#version 300 es
 precision highp float;
 precision highp int;
 uniform vec2 u_grid;
-out vec4 result;
+layout(location = 0) out vec4 result; // made, the least capable's shift, worked out
+layout(location = 1) out vec4 most; // the most capable's shift
 ${COLOR}
 ${PLACES}
 ${TABLES}
 void main() {
   vec2 at = (gl_FragCoord.xy - 0.5) / (u_grid - 1.0);
+  most = vec4(0.0);
   // Past the rim, but for the points its pixels are spread from: not worked out.
   if (u_kind == 0 && outOf(at) > 1.08) {
     result = vec4(0.0);
     return;
   }
   int made = madeAt(at);
-  if (made > 0) {
-    result = vec4(made == 2 ? 1.0 : 0.5, 0.0, 0.0, 1.0);
-    return;
+  vec2 least = vec2(0.0);
+  vec2 best = vec2(0.0);
+  if (made < 2) {
+    vec2 p = colorAt(at);
+    bool first = true;
+    for (int d = 0; d < 2; d++) {
+      if (!(d == 0 ? u_active.x : u_active.y)) continue;
+      vec2 s = shiftBy(d, p, cutoffOf(d, at) >= u_bright);
+      if (first || length(s) > length(least)) least = s;
+      if (first || length(s) < length(best)) best = s;
+      first = false;
+    }
   }
-  vec2 p = colorAt(at);
-  // Its point on the light's white line, which the solve pales it toward.
-  vec2 w = u_whiteCool + betaOn(u_whiteCool, u_whiteWarm, p) * (u_whiteWarm - u_whiteCool);
-  // Too bright for any color: the brightest white it can make there (clamp), that white, dimmer.
-  if (!makes(w)) {
-    result = vec4(0.0, w - p, 1.0);
-    return;
-  }
-  // Paled toward the white line, keeping the lumens (desat), as far as it still makes it.
-  float lo = 0.0;
-  float hi = 1.0;
-  for (int s = 0; s < BISECT_STEPS; s++) {
-    float mid = 0.5 * (lo + hi);
-    if (makes(w + mid * (p - w))) lo = mid;
-    else hi = mid;
-  }
-  result = vec4(0.0, (lo - 1.0) * (p - w), 1.0);
+  result = vec4(made == 2 ? 1.0 : made == 1 ? 0.5 : 0.0, least, 1.0);
+  most = vec4(best, 0.0, 1.0);
 }`;
 
 // One edge's crossings (u_least: 2 for every kind of light's, 1 for at least
@@ -294,6 +308,7 @@ const PAINT_FS = `#version 300 es
 precision highp float;
 precision highp int;
 uniform sampler2D u_solved;
+uniform sampler2D u_most; // the most capable kind's shift at each grid point
 uniform sampler2D u_edgesAny; // the edge round what at least one kind of light makes as asked
 uniform sampler2D u_edgesAll; // round what every one does
 uniform bool u_two; // whether there are two edges (more than one kind of light), or one
@@ -319,14 +334,14 @@ vec3 swatch(vec2 ab) {
 }
 
 // Spread between grid points, as paintBackdrop's shiftAt.
-vec4 solvedAt(vec2 at) {
+vec4 spread(sampler2D grid, vec2 at) {
   vec2 g = clamp(at * (u_grid - 1.0), vec2(0.0), u_grid - 1.0 - 1e-4);
   ivec2 i = ivec2(floor(g));
   vec2 t = g - vec2(i);
-  vec4 a = texelFetch(u_solved, i, 0);
-  vec4 b = texelFetch(u_solved, i + ivec2(1, 0), 0);
-  vec4 c = texelFetch(u_solved, i + ivec2(0, 1), 0);
-  vec4 d = texelFetch(u_solved, i + ivec2(1, 1), 0);
+  vec4 a = texelFetch(grid, i, 0);
+  vec4 b = texelFetch(grid, i + ivec2(1, 0), 0);
+  vec4 c = texelFetch(grid, i + ivec2(0, 1), 0);
+  vec4 d = texelFetch(grid, i + ivec2(1, 1), 0);
   return mix(mix(a, b, t.x), mix(c, d, t.x), t.y);
 }
 
@@ -437,7 +452,9 @@ void main() {
   // The pixel's middle, from the top left.
   vec2 px = vec2(gl_FragCoord.x, u_size.y - gl_FragCoord.y);
   vec2 at = px / u_size;
-  vec4 s = solvedAt(at);
+  // How far the least capable kind of light moves the color here, and the most.
+  vec2 least = spread(u_solved, at).yz;
+  vec2 best = spread(u_most, at).xy;
   float anyPx = signedTo(px, at, u_edgesAny, 1);
   float allPx = u_two ? signedTo(px, at, u_edgesAll, 2) : anyPx;
   // The wheel, softened at the rim.
@@ -455,16 +472,24 @@ void main() {
   vec3 asked = swatch(ab);
   vec3 rgb = asked * inAll;
   if (inAll < 1.0) {
-    // Striped at 45 degrees: how much of the pixel is in a darker stripe.
+    // Striped at 45 degrees: how much of the pixel is in the one stripe (the darker, with one kind of light).
     vec2 xy = px - 0.5;
     float stripe = u_look.y;
     float u = mod((xy.x + xy.y) / sqrt(2.0), stripe);
     float into = u < stripe / 2.0 ? min(u, stripe / 2.0 - u) : -min(u - stripe / 2.0, stripe - u);
     float dark = clamp(0.5 + into, 0.0, 1.0);
-    // Made by some: as asked, lightly striped. By none: what the shown kind makes instead, striped.
-    vec3 some = asked * (1.0 - 0.5 * u_look.x * dark);
-    vec3 under = swatch(ab + s.yz) * (1.0 - u_look.x * dark);
-    rgb += some * (inAny - inAll) + under * (1.0 - inAny) + (u_border - under) * u_look.w * onAny;
+    if (u_two) {
+      // Stripes of what the least capable kind makes (as asked, inside the inner edge) and
+      // of what the most capable does (as asked, inside the outer one), bordered past that.
+      vec3 most = asked * inAny + swatch(ab + best) * (1.0 - inAny);
+      vec3 fewest = asked * inAll + swatch(ab + least) * (1.0 - inAll);
+      rgb = mix(most, fewest, dark);
+      rgb += (u_border - rgb) * u_look.w * onAny;
+    } else {
+      // What it makes instead, striped darker, bordered.
+      vec3 under = swatch(ab + least) * (1.0 - u_look.x * dark);
+      rgb += under * (1.0 - inAny) + (u_border - under) * u_look.w * onAny;
+    }
   }
   // The inner edge, dotted, over whatever's there (or, without its dots, a thin line outside it).
   if (u_two) {
@@ -490,6 +515,8 @@ class Painter {
   private readonly paint: { program: WebGLProgram; u: Uniforms };
   // The grid: each point as it's made, and where each edge crosses to its neighbors.
   private readonly solved: Target;
+  // The most capable kind of light's shift at each point: the solve's second output, with `solved`.
+  private readonly most: WebGLTexture;
   private readonly crossedAny: Target;
   private readonly crossedAll: Target;
   // The tables (cutoffs.ts), each kind of light's, on texture units of their own.
@@ -503,11 +530,12 @@ class Painter {
     this.canvas = canvas;
     this.gl = gl;
     canvas.addEventListener("webglcontextlost", () => (this.lost = true));
-    const grid = ["u_grid", "u_bright", "u_active", "u_shown", "u_kind", "u_whites", "u_cutWheel0", "u_cutStrip0", "u_cutWheel1", "u_cutStrip1", "u_whiteCool", "u_whiteWarm"];
+    const grid = ["u_grid", "u_bright", "u_active", "u_kind", "u_whites", "u_cutWheel0", "u_cutStrip0", "u_cutWheel1", "u_cutStrip1", "u_whiteLine0", "u_whiteLine1"];
     this.solve = program(gl, SOLVE_FS, grid);
     this.edges = program(gl, EDGE_FS, [...grid, "u_solved", "u_least"]);
-    this.paint = program(gl, PAINT_FS, ["u_solved", "u_edgesAny", "u_edgesAll", "u_two", "u_dot", "u_dots", "u_dotted", "u_grid", "u_size", "u_rgb", "u_look", "u_border", "u_kind", "u_whites"]);
+    this.paint = program(gl, PAINT_FS, ["u_solved", "u_most", "u_edgesAny", "u_edgesAll", "u_two", "u_dot", "u_dots", "u_dotted", "u_grid", "u_size", "u_rgb", "u_look", "u_border", "u_kind", "u_whites"]);
     this.solved = { texture: gl.createTexture()!, fbo: gl.createFramebuffer()! };
+    this.most = gl.createTexture()!;
     this.crossedAny = { texture: gl.createTexture()!, fbo: gl.createFramebuffer()! };
     this.crossedAll = { texture: gl.createTexture()!, fbo: gl.createFramebuffer()! };
     this.cuts = [cutoffs.bulb.wheel, cutoffs.bulb.strip, cutoffs.panel.wheel, cutoffs.panel.strip].map((t) => table(gl, t));
@@ -602,32 +630,38 @@ class Painter {
     const gx = Math.round(job.width / GRID_PX) + 1;
     const gy = Math.round(job.height / GRID_PX) + 1;
     if (gx !== this.grid.width || gy !== this.grid.height) {
-      for (const t of [this.solved, this.crossedAny, this.crossedAll]) {
-        gl.bindTexture(gl.TEXTURE_2D, t.texture);
+      const grid = (texture: WebGLTexture) => {
+        gl.bindTexture(gl.TEXTURE_2D, texture);
         gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, gx, gy, 0, gl.RGBA, gl.HALF_FLOAT, null);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
         gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+      };
+      for (const t of [this.solved, this.crossedAny, this.crossedAll]) {
+        grid(t.texture);
         gl.bindFramebuffer(gl.FRAMEBUFFER, t.fbo);
         gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT0, gl.TEXTURE_2D, t.texture, 0);
       }
+      // The solve's second output.
+      grid(this.most);
+      gl.bindFramebuffer(gl.FRAMEBUFFER, this.solved.fbo);
+      gl.framebufferTexture2D(gl.FRAMEBUFFER, gl.COLOR_ATTACHMENT1, gl.TEXTURE_2D, this.most, 0);
+      gl.drawBuffers([gl.COLOR_ATTACHMENT0, gl.COLOR_ATTACHMENT1]);
       this.grid = { width: gx, height: gy };
     }
     const kind = job.kind === "wheel" ? 0 : 1;
     const { kMin, kMax, tint, tintCurve } = job.whites;
     // Off, as the solve has it, below a billionth of a lumen.
     const bright = job.brightness * LUMENS_PER_BRIGHTNESS > 1e-9 ? Math.cbrt(job.brightness) : 0;
-    const shown = job.shown ?? job.devices[0] ?? "bulb";
     const two = job.devices.length > 1;
     const gridUniforms = (u: Uniforms) => {
       gl.uniform2f(u.u_grid!, gx, gy);
       gl.uniform1f(u.u_bright!, bright);
       gl.uniform2i(u.u_active!, job.devices.includes("bulb") ? 1 : 0, job.devices.includes("panel") ? 1 : 0);
-      gl.uniform1i(u.u_shown!, shown === "bulb" ? 0 : 1);
       gl.uniform1i(u.u_kind!, kind);
       gl.uniform4f(u.u_whites!, kMin, kMax, tint, tintCurve);
       ["u_cutWheel0", "u_cutStrip0", "u_cutWheel1", "u_cutStrip1"].forEach((name, i) => gl.uniform1i(u[name]!, 2 + i));
-      gl.uniform2f(u.u_whiteCool!, ...SOLVERS[shown].cwAb);
-      gl.uniform2f(u.u_whiteWarm!, ...SOLVERS[shown].wwAb);
+      gl.uniform4f(u.u_whiteLine0!, ...SOLVERS.bulb.cwAb, ...SOLVERS.bulb.wwAb);
+      gl.uniform4f(u.u_whiteLine1!, ...SOLVERS.panel.cwAb, ...SOLVERS.panel.wwAb);
     };
     this.cuts.forEach((t, i) => {
       gl.activeTexture(gl.TEXTURE2 + i);
@@ -667,6 +701,9 @@ class Painter {
     gl.activeTexture(gl.TEXTURE0);
     gl.bindTexture(gl.TEXTURE_2D, this.solved.texture);
     gl.uniform1i(p.u_solved!, 0);
+    gl.activeTexture(gl.TEXTURE8);
+    gl.bindTexture(gl.TEXTURE_2D, this.most);
+    gl.uniform1i(p.u_most!, 8);
     gl.activeTexture(gl.TEXTURE1);
     gl.bindTexture(gl.TEXTURE_2D, this.crossedAny.texture);
     gl.uniform1i(p.u_edgesAny!, 1);
