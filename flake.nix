@@ -25,7 +25,9 @@
         # The server's Node: Node's own build of 24.22.1, which fixes
         # CVE-2026-111497 (an out-of-bounds write in its Brotli decoder, which
         # fetch reaches). nixpkgs is still on 24.21.0; back to its nodejs_24
-        # once that has 24.22.1.
+        # once that has 24.22.1. Only its interpreter is patched (patchelf
+        # --set-rpath leaves it segfaulting), so libstdc++ comes by
+        # LD_LIBRARY_PATH.
         nodejsFor =
           p:
           let
@@ -48,12 +50,15 @@
                 }
                 .${arch};
             };
-            nativeBuildInputs = [ p.autoPatchelfHook ];
-            buildInputs = [ p.stdenv.cc.cc.lib ];
+            nativeBuildInputs = [ p.makeBinaryWrapper ];
+            dontStrip = true;
+            dontPatchELF = true;
             installPhase = ''
               runHook preInstall
-              mkdir -p $out/bin
-              cp bin/node $out/bin/
+              install -Dm755 bin/node $out/libexec/node
+              patchelf --set-interpreter ${p.stdenv.cc.bintools.dynamicLinker} $out/libexec/node
+              makeWrapper $out/libexec/node $out/bin/node \
+                --prefix LD_LIBRARY_PATH : ${p.lib.makeLibraryPath [ p.stdenv.cc.cc.lib ]}
               runHook postInstall
             '';
             meta.mainProgram = "node";
