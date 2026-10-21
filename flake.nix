@@ -22,7 +22,43 @@
         pkgsLocalLinux = import nixpkgs {
           system = if pkgs.stdenv.hostPlatform.isAarch64 then "aarch64-linux" else "x86_64-linux";
         };
-        nodejs = pkgsLinux.nodejs_24;
+        # The server's Node: Node's own build of 24.22.1, which fixes
+        # CVE-2026-111497 (an out-of-bounds write in its Brotli decoder, which
+        # fetch reaches). nixpkgs is still on 24.21.0; back to its nodejs_24
+        # once that has 24.22.1.
+        nodejsFor =
+          p:
+          let
+            arch =
+              {
+                x86_64-linux = "x64";
+                aarch64-linux = "arm64";
+              }
+              .${p.stdenv.hostPlatform.system};
+          in
+          p.stdenv.mkDerivation (finalAttrs: {
+            pname = "nodejs";
+            version = "24.22.1";
+            src = p.fetchurl {
+              url = "https://nodejs.org/dist/v${finalAttrs.version}/node-v${finalAttrs.version}-linux-${arch}.tar.xz";
+              sha256 =
+                {
+                  x64 = "6c172a9ab6718f7b801fb5a7bd486af2ee5e32758086a04b84fcce2aa77095e6";
+                  arm64 = "dbabf7a1cbf947e6059ffad2c27b80041db97dea1e553b62afdee7f13fca336e";
+                }
+                .${arch};
+            };
+            nativeBuildInputs = [ p.autoPatchelfHook ];
+            buildInputs = [ p.stdenv.cc.cc.lib ];
+            installPhase = ''
+              runHook preInstall
+              mkdir -p $out/bin
+              cp bin/node $out/bin/
+              runHook postInstall
+            '';
+            meta.mainProgram = "node";
+          });
+        nodejs = nodejsFor pkgsLinux;
         tag = self.rev or self.dirtyRev or "dev";
 
         # Just what building and running vibes needs: never .env, the
