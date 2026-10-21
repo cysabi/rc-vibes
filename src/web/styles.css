@@ -1815,7 +1815,9 @@ button.layer-chevron:hover {
 }
 
 /* Where the picker's lights land, as goo (Goo.tsx), over its backdrop and
-   under its ghosts; a readout, picked through the handles over it. */
+   under its ghosts, looking as its circles always have: white-rimmed, with a
+   faint line round them and a soft shadow; a readout, picked through the
+   handles over it. */
 .picker-goo {
   position: absolute;
   inset: 0;
@@ -1823,8 +1825,36 @@ button.layer-chevron:hover {
   pointer-events: none;
 }
 
+.picker-goo .goo {
+  filter: drop-shadow(0 2px 6px rgb(0 0 0 / 0.45));
+}
+
 .picker-goo .goo-mark {
   pointer-events: none;
+  font-size: 9px;
+}
+
+.picker-goo .goo-mark.on {
+  font-size: 10.5px;
+}
+
+/* The active circle's halo and its deeper shadow, under the goo. */
+.picker-halo {
+  position: absolute;
+  width: 30px;
+  height: 30px;
+  border-radius: 50%;
+  box-shadow:
+    0 0 0 5px rgb(255 255 255 / 0.22),
+    0 4px 12px rgb(0 0 0 / 0.5);
+  transform: translate(-50%, -50%);
+  pointer-events: none;
+}
+
+.picker:focus-visible .picker-halo {
+  box-shadow:
+    0 0 0 5px var(--sim),
+    0 4px 12px rgb(0 0 0 / 0.5);
 }
 
 /* Each mark of goo, to pick: unseen, a little bigger than its ball. */

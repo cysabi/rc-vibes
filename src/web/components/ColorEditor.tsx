@@ -52,7 +52,7 @@ import type { Output } from "../../shared/solver.ts";
 import { paintOnGpu } from "../backdrop.ts";
 import { dotsAlong, type Piece } from "../edge-dots.ts";
 import { useGamut } from "../display.ts";
-import { dotsOf, exact, sizeOf, titleOf, type Group, type Placed } from "../marks.ts";
+import { dotsOf, exact, titleOf, type Group, type Placed } from "../marks.ts";
 import { chromaAt, WHEEL_CHROMA, wheelColor, wheelSpot } from "../wheel.ts";
 import { across, heightOf, K_MAX, K_MIN, TINT, TINT_CURVE, tintAt, whiteAt } from "../whites.ts";
 import { count } from "../words.ts";
@@ -393,17 +393,25 @@ function Picker({
   // and balls near each other run together, so lights that land apart (made on
   // calibrations of their own) are a blob as long as they're spread.
   const circleOf = new Map(circles.flatMap((c) => c.members.map((i) => [i, c] as const)));
+  // Lights it can't show where they land (on the strip of whites, one that isn't a white): hollow, at the nearest place.
+  const hollow = new Set<number>();
   const placed: Placed[] = circles.flatMap((c) =>
     c.members.map((i) => {
       const l = landings[i]!;
       const p = at(l.a, l.b);
-      // One it can't show where it is (on the strip of whites, one that isn't one): faint.
-      const faint = outside?.(l.a, l.b) ?? false;
+      if (outside?.(l.a, l.b)) hollow.add(i);
       const said = fallsShort(c) ? `${nameOf(c.a, c.b)}, coming out ${nameOf(l.a, l.b)}` : nameOf(c.a, c.b);
-      return { id: i, same: exact(l.a, l.b), x: p.x * w, y: p.y * h, t: { ...l, brightness: faint ? 0 : 1 }, label: said };
+      return { id: i, same: exact(l.a, l.b), x: p.x * w, y: p.y * h, t: { ...l, brightness: 1 }, label: said };
     }),
   );
   const marks = dotsOf(placed);
+  // Each mark as the circles always looked: white-rimmed, the active ones bigger (and haloed, under the goo), the hollow ones see-through.
+  const marked = (g: Group) => g.ids.some((i) => on.has(i));
+  const lookOf = (g: Group) => {
+    const big = marked(g);
+    const empty = g.ids.every((i) => hollow.has(i));
+    return { size: big ? 30 : 20, rim: WHITE, rimPx: big ? 3 : 2, ...(empty ? { fill: WHITE, fillAlpha: 0.25 } : {}), className: big ? "on" : undefined };
+  };
   // Each mark drawn as its own, a handle: what it picks is the circles of the lights in it.
   const handles = marks.filter((g) => !(g.into && g.ids.length === 1));
   const circlesIn = (g: Group) => [...new Set(g.ids.map((i) => circleOf.get(i)!))];
@@ -518,9 +526,13 @@ function Picker({
           </g>
         </svg>
       )}
-      {/* Where the lights land, as goo, the active ones rimmed in white. */}
+      {/* The active marks' halos, under the goo. */}
+      {handles.filter(marked).map((g) => (
+        <span key={g.key} className="picker-halo" style={{ left: pct(g.x / w), top: pct(g.y / h) }} />
+      ))}
+      {/* Where the lights land, as goo. */}
       <div className="picker-goo">
-        <Goo marks={marks} width={w} height={h} gamut={gamut} rimOf={(g) => (g.ids.some((i) => on.has(i)) ? WHITE : BLACK)} />
+        <Goo marks={marks} width={w} height={h} gamut={gamut} lookOf={lookOf} outline={OUTLINE} />
       </div>
       {/* Where a color the lights can't make is asked for: a ghost of its circle. */}
       {ghosts.map((c, i) => {
@@ -541,7 +553,7 @@ function Picker({
           key={g.key}
           data-spot={k}
           className="picker-handle"
-          style={{ left: pct(g.x / w), top: pct(g.y / h), width: sizeOf(g.ids.length) + 4, height: sizeOf(g.ids.length) + 4 }}
+          style={{ left: pct(g.x / w), top: pct(g.y / h), width: lookOf(g).size + 4, height: lookOf(g).size + 4 }}
           title={titleOf(g)}
         />
       ))}
@@ -550,7 +562,8 @@ function Picker({
 }
 
 const WHITE: Vec3 = [1, 1, 1];
-const BLACK: Vec3 = [0, 0, 0];
+// The faint dark line round the circles, outside their rims.
+const OUTLINE = { px: 1, rgb: [0, 0, 0] as Vec3, alpha: 0.45 };
 
 /** Values at the same color, the circles: the most first. `landings` says what each value's light makes of it. */
 function circlesOf(values: Lemtone[], landings: Lemtone[]): Circle[] {
