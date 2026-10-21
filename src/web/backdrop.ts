@@ -7,8 +7,8 @@
 // on a grid a little coarser than the screen; then each pixel is painted
 // from it as ColorEditor paints them on the CPU: the color asked for where
 // every one makes it; where only some do, the same, lightly striped; past
-// that, what's made instead, striped; with a border round each edge,
-// outside it. With one kind of light, the two edges are one. (The bulb's
+// that, what's made instead, striped; with a border outside the outer edge,
+// and the inner one dotted. With one kind of light, the two edges are one. (The bulb's
 // solve itself ran here once, in a shader, which some drivers took half a
 // minute to compile.)
 //
@@ -46,8 +46,8 @@ export interface BackdropJob {
   shown: Device | null;
   /** The strip of whites' temperatures, end to end, and its tint at the edges and how steeply it grows. */
   whites: { kMin: number; kMax: number; tint: number; tintCurve: number };
-  /** How it looks past the edge: stripes (the darker ones this much darker, a pair this wide), and the border (this wide, this color, this strong). */
-  look: { stripeDark: number; stripePx: number; borderPx: number; borderRgb: Vec3; borderInk: number };
+  /** How it looks past the edge: stripes (the darker ones this much darker, a pair this wide), the border (this wide, this color, this strong), and the inner edge's dots (this big, about this far apart). */
+  look: { stripeDark: number; stripePx: number; borderPx: number; borderRgb: Vec3; borderInk: number; dotPx: number; dotGapPx: number };
 }
 
 // Grid points every this many CSS pixels, and where the edge crosses between them found to this many halvings.
@@ -299,6 +299,8 @@ uniform vec2 u_size; // device px
 uniform mat3 u_rgb; // OKLab's LMS -> linear RGB in the screen's gamut, a row to a vec3
 uniform vec4 u_look; // darker stripes' darkness, a pair's width (px), the border's width (px), its strength
 uniform vec3 u_border;
+uniform float u_dot; // the inner edge's dots' radius (px)
+uniform int u_dotEvery; // a dot where it crosses every this many grid lines
 out vec4 color;
 ${COLOR}
 ${PLACES}
@@ -378,6 +380,23 @@ float toSegment(vec2 p, vec4 s) {
 
 bool sideOf(vec2 p, vec4 s) { return (s.z - s.x) * (p.y - s.y) - (s.w - s.y) * (p.x - s.x) > 0.0; }
 
+// How much of the pixel at px is one of the inner edge's dots: they're where it
+// crosses every u_dotEvery-th grid line, across (a row) or down (a column).
+float dotted(vec2 px, vec2 at) {
+  ivec2 cell = min(ivec2(at * (u_grid - 1.0)), ivec2(u_grid) - 2);
+  float cover = 0.0;
+  for (int dj = -2; dj <= 2; dj++) {
+    for (int di = -2; di <= 2; di++) {
+      ivec2 g = cell + ivec2(di, dj);
+      if (any(lessThan(g, ivec2(0))) || any(greaterThanEqual(g, ivec2(u_grid)))) continue;
+      vec4 e = texelFetch(u_edgesAll, g, 0);
+      if (e.x >= 0.0 && g.y % u_dotEvery == 0) cover = max(cover, clamp(u_dot + 0.5 - length(px - mix(placeOf(g), placeOf(g + ivec2(1, 0)), e.x)), 0.0, 1.0));
+      if (e.y >= 0.0 && g.x % u_dotEvery == 0) cover = max(cover, clamp(u_dot + 0.5 - length(px - mix(placeOf(g), placeOf(g + ivec2(0, 1)), e.y)), 0.0, 1.0));
+    }
+  }
+  return cover;
+}
+
 // How far the pixel at px (at, as fractions) is inside an edge (device px; negative outside it).
 float signedTo(vec2 px, vec2 at, sampler2D edges, int least) {
   ivec2 last = ivec2(u_grid) - 2;
@@ -426,12 +445,11 @@ void main() {
     alpha = out_ > 1.0 ? 0.0 : min(1.0, (1.0 - out_) * u_size.x * 0.5 * 0.9 + 0.1);
   }
   // How much of the pixel every kind of light makes as asked, how much at least one does,
-  // and how much is each edge's border (outside it: the inner one's, inside the outer).
+  // and how much is the outer edge's border (outside it).
   vec2 ab = colorAt(at);
   float inAny = clamp(0.5 + anyPx, 0.0, 1.0);
   float inAll = min(inAny, clamp(0.5 + allPx, 0.0, 1.0));
   float onAny = clamp(0.5 - anyPx, 0.0, 1.0) - clamp(0.5 - anyPx - u_look.z, 0.0, 1.0);
-  float onAll = u_two ? min(inAny - inAll, clamp(0.5 - allPx, 0.0, 1.0) - clamp(0.5 - allPx - u_look.z, 0.0, 1.0)) : 0.0;
   vec3 asked = swatch(ab);
   vec3 rgb = asked * inAll;
   if (inAll < 1.0) {
@@ -444,8 +462,10 @@ void main() {
     // Made by some: as asked, lightly striped. By none: what the shown kind makes instead, striped.
     vec3 some = asked * (1.0 - 0.5 * u_look.x * dark);
     vec3 under = swatch(ab + s.yz) * (1.0 - u_look.x * dark);
-    rgb += some * (inAny - inAll) + under * (1.0 - inAny) + (u_border - some) * u_look.w * onAll + (u_border - under) * u_look.w * onAny;
+    rgb += some * (inAny - inAll) + under * (1.0 - inAny) + (u_border - under) * u_look.w * onAny;
   }
+  // The inner edge, dotted, over whatever's there.
+  if (u_two) rgb += (u_border - rgb) * u_look.w * dotted(px, at);
   color = vec4(rgb * alpha, alpha);
 }`;
 
@@ -479,7 +499,7 @@ class Painter {
     const grid = ["u_grid", "u_bright", "u_active", "u_shown", "u_kind", "u_whites", "u_cutWheel0", "u_cutStrip0", "u_cutWheel1", "u_cutStrip1", "u_whiteCool", "u_whiteWarm"];
     this.solve = program(gl, SOLVE_FS, grid);
     this.edges = program(gl, EDGE_FS, [...grid, "u_solved", "u_least"]);
-    this.paint = program(gl, PAINT_FS, ["u_solved", "u_edgesAny", "u_edgesAll", "u_two", "u_grid", "u_size", "u_rgb", "u_look", "u_border", "u_kind", "u_whites"]);
+    this.paint = program(gl, PAINT_FS, ["u_solved", "u_edgesAny", "u_edgesAll", "u_two", "u_dot", "u_dotEvery", "u_grid", "u_size", "u_rgb", "u_look", "u_border", "u_kind", "u_whites"]);
     this.solved = { texture: gl.createTexture()!, fbo: gl.createFramebuffer()! };
     this.crossedAny = { texture: gl.createTexture()!, fbo: gl.createFramebuffer()! };
     this.crossedAll = { texture: gl.createTexture()!, fbo: gl.createFramebuffer()! };
@@ -564,6 +584,8 @@ class Painter {
     gl.bindTexture(gl.TEXTURE_2D, this.crossedAll.texture);
     gl.uniform1i(p.u_edgesAll!, 6);
     gl.uniform1i(p.u_two!, two ? 1 : 0);
+    gl.uniform1f(p.u_dot!, (job.look.dotPx / 2) * job.dpr);
+    gl.uniform1i(p.u_dotEvery!, Math.max(1, Math.ceil(job.look.dotGapPx / GRID_PX)));
     gl.uniform2f(p.u_grid!, gx, gy);
     gl.uniform2f(p.u_size!, w, h);
     gl.uniformMatrix3fv(p.u_rgb!, false, LMS_RGB[job.gamut].flat());

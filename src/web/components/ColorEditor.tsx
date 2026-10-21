@@ -18,9 +18,9 @@
 // Where the active lights, at their brightness, can't make colors as asked,
 // the wheel and the strip show what they make instead, striped, bordered
 // round what they can. With both kinds of light among them (color bulbs and
-// panels each make their own), there are two borders: round what every one
-// of them makes as asked, and round what at least one does, the colors
-// between lightly striped. A circle asked for there sits where its light lands,
+// panels each make their own), there are two edges: round what at least one
+// of them makes as asked (bordered), and, dotted, round what every one
+// does, the colors between lightly striped. A circle asked for there sits where its light lands,
 // in its color, with a ghost of it where it's asked for, and it says how far
 // short the lights fall. Circles whose lights land in the same spot are one
 // circle there, counting them all: tapping it makes them all active, and
@@ -719,8 +719,11 @@ const STRIPE_PX = 6;
 const BORDER_PX = 2;
 const BORDER_RGB: Vec3 = [26 / 255, 22 / 255, 18 / 255];
 const BORDER_INK = 0.75;
+// The inner edge's dots: this big across, about this far apart (at the grid line it crosses nearest that).
+const DOT_PX = 2.4;
+const DOT_GAP_PX = 6;
 // The same, and the strip of whites' shape, for the GPU.
-const LOOK = { stripeDark: STRIPE_DARK, stripePx: STRIPE_PX, borderPx: BORDER_PX, borderRgb: BORDER_RGB, borderInk: BORDER_INK };
+const LOOK = { stripeDark: STRIPE_DARK, stripePx: STRIPE_PX, borderPx: BORDER_PX, borderRgb: BORDER_RGB, borderInk: BORDER_INK, dotPx: DOT_PX, dotGapPx: DOT_GAP_PX };
 const WHITES = { kMin: K_MIN, kMax: K_MAX, tint: TINT, tintCurve: TINT_CURVE };
 
 /**
@@ -755,10 +758,11 @@ function toSegment(x: number, y: number, x0: number, y0: number, x1: number, y1:
 /** Which side of the line through (x0, y0)–(x1, y1) (x, y) is on. */
 const sideOf = (x: number, y: number, x0: number, y0: number, x1: number, y1: number) => (x1 - x0) * (y - y0) - (y1 - y0) * (x - x0) > 0;
 
-/** An edge's pieces in each grid cell (up to two: x0, y0, x1, y1 each), in pixels. */
+/** An edge's pieces in each grid cell (up to two: x0, y0, x1, y1 each), in pixels; and, dotted, its dots in each (x, y each). */
 interface Edge {
   segs: Float32Array;
   nsegs: Uint8Array;
+  dots: number[][];
 }
 
 /**
@@ -766,9 +770,10 @@ interface Edge {
  * (`colorAt`, by fractions across and down) where every kind of light among
  * the active ones makes it as asked (`madeAt` 2); where only some do (1), the
  * same, lightly striped; past that, what they make instead (`lightAt`,
- * paler), striped; with a border round each edge, outside it, so it never
- * covers a color made as asked; a pixel an edge crosses is shared out by how
- * much of it is on either side. With one kind of light, the edges are one.
+ * paler), striped; with a border outside the outer edge, so it never covers
+ * a color made as asked, and the inner one dotted; a pixel an edge crosses
+ * is shared out by how much of it is on either side. With one kind of light,
+ * the edges are one.
  * `alphaAt` shapes it (0: not drawn); grid points `skip` says no drawn pixel
  * is spread from aren't worked out.
  */
@@ -870,10 +875,32 @@ function paintBackdrop(
         }
       }
     }
-    return { segs, nsegs };
+    // Its dots, if it's dotted: where it crosses every dotEvery-th grid line (a row, across; a column, down).
+    const dots: number[][] = Array.from({ length: cells }, () => []);
+    for (const [key, [x, y]] of crossings) {
+      const g = key >> 1;
+      const [i, j] = [g % gx, Math.floor(g / gx)];
+      if ((key & 1 ? i : j) % dotEvery !== 0) continue;
+      dots[Math.min(gy - 2, j) * (gx - 1) + Math.min(gx - 2, i)]!.push(x, y);
+    }
+    return { segs, nsegs, dots };
   };
+  // A dot where the inner edge crosses every this many grid lines.
+  const dotEvery = Math.max(1, Math.ceil((DOT_GAP_PX * dpr) / (w / (gx - 1))));
   const anyEdge = edgeOf(1);
   const allEdge = two ? edgeOf(2) : anyEdge;
+  const dotR = (DOT_PX / 2) * dpr;
+  /** How much of pixel (px, py), in grid cell (gi, gj), is one of the inner edge's dots. */
+  const dotted = (px: number, py: number, gi: number, gj: number): number => {
+    let cover = 0;
+    for (let nj = Math.max(0, gj - 1); nj <= Math.min(gy - 2, gj + 1); nj++) {
+      for (let ni = Math.max(0, gi - 1); ni <= Math.min(gx - 2, gi + 1); ni++) {
+        const d = allEdge.dots[nj * (gx - 1) + ni]!;
+        for (let s = 0; s < d.length; s += 2) cover = Math.max(cover, clamp01(dotR + 0.5 - Math.hypot(px - d[s]!, py - d[s + 1]!)));
+      }
+    }
+    return cover;
+  };
 
   /** How far pixel (px, py), in grid cell (gi, gj), is inside an edge (pixels; negative outside it). */
   const signedTo = ({ segs, nsegs }: Edge, least: number, px: number, py: number, gi: number, gj: number): number => {
@@ -936,11 +963,10 @@ function paintBackdrop(
       const anyPx = signedTo(anyEdge, 1, px, py, gi, gj);
       const allPx = two ? signedTo(allEdge, 2, px, py, gi, gj) : anyPx;
       // How much of the pixel every kind of light makes as asked, how much at least one
-      // does, and how much is each edge's border (outside it: the inner one's, inside the outer).
+      // does, and how much is the outer edge's border (outside it).
       const inAny = clamp01(0.5 + anyPx);
       const inAll = Math.min(inAny, clamp01(0.5 + allPx));
       const onAny = clamp01(0.5 - anyPx) - clamp01(0.5 - anyPx - border);
-      const onAll = two ? Math.min(inAny - inAll, clamp01(0.5 - allPx) - clamp01(0.5 - allPx - border)) : 0;
       const asked = swatch(a, b, gamut);
       let rgb: number[] = asked.map((c) => c * inAll);
       if (inAll < 1) {
@@ -954,8 +980,13 @@ function paintBackdrop(
         rgb = rgb.map((c, i) => {
           const some = asked[i]! * (1 - 0.5 * STRIPE_DARK * dark);
           const under = made[i]! * (1 - STRIPE_DARK * dark);
-          return c + some * (inAny - inAll) + under * (1 - inAny) + (BORDER_RGB[i]! - some) * BORDER_INK * onAll + (BORDER_RGB[i]! - under) * BORDER_INK * onAny;
+          return c + some * (inAny - inAll) + under * (1 - inAny) + (BORDER_RGB[i]! - under) * BORDER_INK * onAny;
         });
+      }
+      // The inner edge, dotted, over whatever's there.
+      if (two) {
+        const dot = dotted(px, py, gi, gj);
+        if (dot > 0) rgb = rgb.map((c, i) => c + (BORDER_RGB[i]! - c) * BORDER_INK * dot);
       }
       const i = k * 4;
       data[i] = rgb[0]! * 255;
