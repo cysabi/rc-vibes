@@ -29,7 +29,7 @@
 // dragging it takes them all, which makes them one; each one's ghost still
 // picks up just it.
 
-import { Fragment, useEffect, useId, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode, type RefObject } from "react";
+import { Fragment, useEffect, useId, useLayoutEffect, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode, type RefObject } from "react";
 import { DEVICES, SOLVERS, type Device } from "../../shared/devices.ts";
 import { deviceOf, madeOf, ratedBrightnessOf } from "../../shared/fixtures.ts";
 import {
@@ -52,10 +52,11 @@ import type { Output } from "../../shared/solver.ts";
 import { paintOnGpu } from "../backdrop.ts";
 import { dotsAlong, type Piece } from "../edge-dots.ts";
 import { useGamut } from "../display.ts";
-import { exact } from "../marks.ts";
+import { dotsOf, exact, sizeOf, titleOf, type Group, type Placed } from "../marks.ts";
 import { chromaAt, WHEEL_CHROMA, wheelColor, wheelSpot } from "../wheel.ts";
 import { across, heightOf, K_MAX, K_MIN, TINT, TINT_CURVE, tintAt, whiteAt } from "../whites.ts";
-import { count, listOf } from "../words.ts";
+import { count } from "../words.ts";
+import { Goo } from "./Goo.tsx";
 import { Segmented } from "./Segmented.tsx";
 import { Slider } from "./Slider.tsx";
 
@@ -86,23 +87,24 @@ interface Props {
   types?: string[];
 }
 
-/** Values at exactly the same color, on the same kind of light: one circle. */
+/** Values at exactly the same color: one circle. */
 interface Circle {
   a: number;
   b: number;
   /** Indices into the values. */
   members: number[];
-  /** The kind of light its values are for (a color bulb, a panel: each makes a color of its own), if it's known. */
-  kind: Device | null;
-  /** The light they make (of its most common brightness): what it's shown in. */
+  /** What its most common value's light makes of it. */
   seen: Lemtone;
+  /** Whether some of its lights (each on its own calibration) don't make its color as asked. */
+  short: boolean;
 }
 
 export function ColorEditor({ values, onChange, types }: Props) {
   const made = (t: Lemtone, i: number) => (types ? madeOf(t, types[i]!) : asked(t));
-  const kindOf = (i: number) => (types ? deviceOf(types[i]!) : null);
   const gamut = useGamut();
-  const circles = circlesOf(values, made, kindOf);
+  // Where each light lands: what it makes of what it's asked for.
+  const landings = values.map((t, i) => made(t, i).light);
+  const circles = circlesOf(values, landings);
   // The active circles, each known by one of its values, so they stay themselves as they
   // move and merge: one, or all of those whose lights land in a spot, picked up there.
   const [activeAt, setActiveAt] = useState<number[]>([]);
@@ -115,13 +117,9 @@ export function ColorEditor({ values, onChange, types }: Props) {
   if (!lead) return null;
 
   const mode = chosenMode ?? (isWhite(lead.a, lead.b) ? "white" : "color");
-  const spots = mode === "white" ? spotsOf(circles, stripPlace, STRIP_W, STRIP_H) : spotsOf(circles, wheelPlace, WHEEL, WHEEL);
-  // Until any are picked, the biggest circle, every one asked for the same color (on another
-  // kind of light, landing somewhere of its own), and every one landing with it.
-  const chosen =
-    picked.length > 0
-      ? picked
-      : [...new Set([...circles.filter((c) => c.a === lead.a && c.b === lead.b), ...spots.find((s) => s.circles.includes(lead))!.circles])];
+  const spots = mode === "white" ? spotsOf(circles, landings, stripPlace, STRIP_W, STRIP_H) : spotsOf(circles, landings, wheelPlace, WHEEL, WHEEL);
+  // Until any are picked, the biggest circle, and every one with lights landing with its lights.
+  const chosen = picked.length > 0 ? picked : [...new Set([lead, ...spots.filter((s) => s.circles.includes(lead)).flatMap((s) => s.circles)])];
   const active = chosen.length > 1 ? together(chosen) : chosen[0]!;
   const many = values.length > 1;
   const all = values.map((_, i) => i);
@@ -132,13 +130,23 @@ export function ColorEditor({ values, onChange, types }: Props) {
   // color, at their brightness: the backdrops show it (round what every one makes as asked,
   // and what at least one does). They're painted again when that or the gamut changes (lightKey).
   const devices = types ? DEVICES.filter((d) => active.members.some((i) => deviceOf(types[i]!) === d)) : [];
-  const light: Light = { brightness: common.brightness, devices };
-  const madeBy = (a: number, b: number): Output[] => {
+  const weights = devices.map((d) => active.members.filter((i) => deviceOf(types![i]!) === d).length);
+  const light: Light = { brightness: common.brightness, devices, weights };
+  // How far they typically move a color: each kind's shift, weighed by how many of its lights there are.
+  const typicalAt = (a: number, b: number): [number, number] => {
     const t = { a, b, brightness: common.brightness, fidelity: common.fidelity };
-    return devices.length > 0 ? devices.map((d) => SOLVERS[d].output(t)) : [asked(t)];
+    const total = weights.reduce((s, w) => s + w, 0);
+    if (total === 0) return [0, 0];
+    return devices.reduce<[number, number]>(
+      ([sa, sb], d, k) => {
+        const out = SOLVERS[d].output(t).light;
+        return [sa + (weights[k]! * (out.a - a)) / total, sb + (weights[k]! * (out.b - b)) / total];
+      },
+      [0, 0],
+    );
   };
   const madeAt = (a: number, b: number) => madeLevel(a, b, light, common.fidelity);
-  const lightKey = `${common.brightness} ${common.fidelity} ${devices.join()} ${gamut}`;
+  const lightKey = `${common.brightness} ${common.fidelity} ${devices.join()} ${weights.join()} ${gamut}`;
   // The brightness track: as the active circle's first light makes its color.
   const sample = active.members[0]!;
   const limit = limitText(active.members.map((i) => ({ asked: values[i]!, out: made(values[i]!, i), device: types ? deviceOf(types[i]!) : null })));
@@ -162,7 +170,7 @@ export function ColorEditor({ values, onChange, types }: Props) {
     }
     moving.current = null;
   };
-  const picker = { circles, spots, active, gamut, css, madeBy, madeAt, lightKey, light, onPick: pick, onMove: move, onDrop: drop };
+  const picker = { circles, landings, active, gamut, css, typicalAt, madeAt, lightKey, light, onPick: pick, onMove: move, onDrop: drop };
 
   return (
     <div className="color-editor">
@@ -236,13 +244,13 @@ export function ColorEditor({ values, onChange, types }: Props) {
 
 interface PickerProps {
   circles: Circle[];
-  /** Where the circles' lights land: one circle at each. */
-  spots: Spot[];
+  /** Where each value's light lands: what it makes of it. */
+  landings: Lemtone[];
   active: Circle;
   gamut: Gamut;
   css: (a: number, b: number) => string;
-  /** What each kind of light among the active ones makes of a color, which the backdrop shows; painted again when `lightKey` changes. */
-  madeBy: (a: number, b: number) => Output[];
+  /** How far the active lights typically move a color (in a, b), which the backdrop shows; painted again when `lightKey` changes. */
+  typicalAt: (a: number, b: number) => [number, number];
   /** How many of the active kinds of light make a color as asked: 2 every one, 1 some, 0 none. */
   madeAt: (a: number, b: number) => number;
   lightKey: string;
@@ -257,7 +265,7 @@ interface PickerProps {
 /** The colors round a wheel, each circle at its color. */
 function Wheel(props: PickerProps) {
   const canvas = useRef<HTMLCanvasElement>(null);
-  usePaint(canvas, props.lightKey, (c) => paintWheel(c, props.madeBy, props.madeAt, props.light, props.gamut));
+  usePaint(canvas, props.lightKey, (c) => paintWheel(c, props.typicalAt, props.madeAt, props.light, props.gamut));
   // A color at a place on the wheel (fractions across and down), the other way from wheelPlace, kept inside the rim.
   const colorAt = (x: number, y: number): [number, number] => {
     const dx = x * 2 - 1;
@@ -290,7 +298,7 @@ function Wheel(props: PickerProps) {
  */
 function WhiteStrip(props: PickerProps) {
   const canvas = useRef<HTMLCanvasElement>(null);
-  usePaint(canvas, props.lightKey, (c) => paintWhites(c, props.madeBy, props.madeAt, props.light, props.gamut));
+  usePaint(canvas, props.lightKey, (c) => paintWhites(c, props.typicalAt, props.madeAt, props.light, props.gamut));
   const colorAt = (x: number, y: number) => whiteAt(round(K_MIN + x * (K_MAX - K_MIN), 50), tintAt(1 - 2 * y));
   const step = (a: number, b: number, key: string, big: boolean): [number, number] | null => {
     const { k, tint } = whiteSpot(a, b);
@@ -332,9 +340,9 @@ function WhiteStrip(props: PickerProps) {
  */
 function Picker({
   circles,
-  spots,
+  landings,
   active,
-  css,
+  gamut,
   onPick,
   onMove,
   onDrop,
@@ -355,7 +363,7 @@ function Picker({
   at: (a: number, b: number) => { x: number; y: number };
   colorAt: (x: number, y: number) => [number, number];
   step: (a: number, b: number, key: string, big: boolean) => [number, number] | null;
-  /** Colors it can't show where they are: drawn hollow, at the nearest place. */
+  /** Colors it can't show where they are: drawn faint, at the nearest place. */
   outside?: (a: number, b: number) => boolean;
   label: string;
   children: ReactNode;
@@ -367,26 +375,57 @@ function Picker({
   const press = useRef<{ x: number; y: number; moved: boolean } | null>(null);
   const on = new Set(active.members);
   const isOn = (c: Circle) => on.has(c.members[0]!);
-  // Where a color the lights can't make is asked for: one ghost for it, whatever kinds of light it's asked of.
-  const byAsk = new Map<string, Circle[]>();
-  for (const c of circles.filter(fallsShort)) byAsk.set(exact(c.a, c.b), [...(byAsk.get(exact(c.a, c.b)) ?? []), c]);
-  // With any kind that makes it, sitting at the ghost.
-  const asks = [...byAsk.values()].map((cs) => [...cs, ...circles.filter((c) => !fallsShort(c) && c.a === cs[0]!.a && c.b === cs[0]!.b)]);
-  // Names the kind of light where there's more than one kind.
-  const kinds = new Set(circles.map((c) => c.kind));
+
+  // Its size as it's laid out (the strip of whites is as wide as there's room), for where the lights go on it.
+  const [size, setSize] = useState<readonly [number, number]>([width ?? STRIP_W, height]);
+  useLayoutEffect(() => {
+    const el = box.current!;
+    const measure = () => setSize((s) => (s[0] === el.clientWidth && s[1] === el.clientHeight ? s : [el.clientWidth, el.clientHeight]));
+    measure();
+    const watch = new ResizeObserver(measure);
+    watch.observe(el);
+    return () => watch.disconnect();
+  }, []);
+  const [w, h] = size;
+
+  // Each light where it lands, in what it makes there, as the color preview has
+  // them (marks.ts, Goo.tsx): lights landing together share a ball, with a count,
+  // and balls near each other run together, so lights that land apart (made on
+  // calibrations of their own) are a blob as long as they're spread.
+  const circleOf = new Map(circles.flatMap((c) => c.members.map((i) => [i, c] as const)));
+  const placed: Placed[] = circles.flatMap((c) =>
+    c.members.map((i) => {
+      const l = landings[i]!;
+      const p = at(l.a, l.b);
+      // One it can't show where it is (on the strip of whites, one that isn't one): faint.
+      const faint = outside?.(l.a, l.b) ?? false;
+      const said = fallsShort(c) ? `${nameOf(c.a, c.b)}, coming out ${nameOf(l.a, l.b)}` : nameOf(c.a, c.b);
+      return { id: i, same: exact(l.a, l.b), x: p.x * w, y: p.y * h, t: { ...l, brightness: faint ? 0 : 1 }, label: said };
+    }),
+  );
+  const marks = dotsOf(placed);
+  // Each mark drawn as its own, a handle: what it picks is the circles of the lights in it.
+  const handles = marks.filter((g) => !(g.into && g.ids.length === 1));
+  const circlesIn = (g: Group) => [...new Set(g.ids.map((i) => circleOf.get(i)!))];
+  // Where a circle's lights land, all told (a ghost's line goes there).
+  const centerOf = (c: Circle) => {
+    const ps = c.members.map((i) => at(landings[i]!.a, landings[i]!.b));
+    return { x: ps.reduce((s, p) => s + p.x, 0) / ps.length, y: ps.reduce((s, p) => s + p.y, 0) / ps.length };
+  };
+  const ghosts = circles.filter(fallsShort);
 
   const fraction = (e: PointerEvent) => {
     const r = box.current!.getBoundingClientRect();
     return [Math.min(1, Math.max(0, (e.clientX - r.left) / r.width)), Math.min(1, Math.max(0, (e.clientY - r.top) / r.height))] as const;
   };
-  /** The circle (other than those being dragged) within SNAP_PX of where it's let go: of it, or of its ghost. */
+  /** The circle (other than those being dragged) within SNAP_PX of where it's let go: of where it's asked for, or where its lights land. */
   const near = (e: PointerEvent): Circle | null => {
     const r = box.current!.getBoundingClientRect();
     let best: Circle | null = null;
     let bestD = SNAP_PX;
     for (const c of circles) {
       if (isOn(c)) continue;
-      for (const p of [at(c.a, c.b), at(c.seen.a, c.seen.b)]) {
+      for (const p of [at(c.a, c.b), centerOf(c)]) {
         const d = Math.hypot(r.left + p.x * r.width - e.clientX, r.top + p.y * r.height - e.clientY);
         if (d < bestD) [best, bestD] = [c, d];
       }
@@ -394,7 +433,7 @@ function Picker({
     return best;
   };
 
-  /** The circle or ghost nearest a finger, within FINGER_PX of its middle. */
+  /** The mark or ghost nearest a finger, within FINGER_PX of its middle. */
   const nearest = (e: PointerEvent): HTMLElement | null => {
     let best: HTMLElement | null = null;
     let bestD = FINGER_PX;
@@ -407,11 +446,11 @@ function Picker({
   };
 
   const down = (e: PointerEvent<HTMLDivElement>) => {
-    // A ghost is its circle's alone; a circle, every one landing there. A
+    // A ghost is its circle's alone; a mark, every circle with lights in it. A
     // finger is less exact than a mouse: landing near one picks it, rather
     // than moving the active ones there (which, live, goes to the room).
     const hit = (e.target as Element).closest<HTMLElement>("[data-ghost], [data-spot]") ?? (e.pointerType === "touch" ? nearest(e) : null);
-    const picked = !hit ? null : hit.dataset.spot !== undefined ? spots[Number(hit.dataset.spot)]!.circles : asks[Number(hit.dataset.ghost)]!;
+    const picked = !hit ? null : hit.dataset.spot !== undefined ? circlesIn(handles[Number(hit.dataset.spot)]!) : [ghosts[Number(hit.dataset.ghost)]!];
     onPick(picked, e.altKey);
     // Pressing off the circles takes the active ones there at once.
     press.current = { x: e.clientX, y: e.clientY, moved: !picked };
@@ -438,13 +477,8 @@ function Picker({
     onDrop(next[0], next[1], null);
   };
 
-  // Each circle the lights can't make as asked, from its ghost to the spot where its light lands.
-  const spotOf = new Map(spots.flatMap((s) => s.circles.map((c) => [c, s] as const)));
-  const links = circles.flatMap((c, i) => {
-    if (!fallsShort(c)) return [];
-    const to = spotOf.get(c)!;
-    return [{ i, from: at(c.a, c.b), to, rFrom: isOn(c) ? 15 : 10, rTo: to.circles.some(isOn) ? 15 : 10 }];
-  });
+  // From each ghost to where its lights land.
+  const links = ghosts.map((c, i) => ({ i, from: at(c.a, c.b), to: centerOf(c), rFrom: isOn(c) ? 15 : 10 }));
   const pct = (v: number) => `${v * 100}%`;
 
   return (
@@ -464,16 +498,13 @@ function Picker({
     >
       {children}
       {links.length > 0 && (
-        // A line from each ghost to its circle, stopping at their edges (so it doesn't show through the ghost).
+        // A line from each ghost to where its lights land, stopping at the ghost (so it doesn't show through it); the goo covers the other end.
         <svg className="picker-links" aria-hidden="true">
           <defs>
             <mask id={maskId}>
               <rect width="100%" height="100%" fill="#fff" />
               {links.map((l) => (
-                <Fragment key={l.i}>
-                  <circle cx={pct(l.from.x)} cy={pct(l.from.y)} r={l.rFrom} fill="#000" />
-                  <circle cx={pct(l.to.x)} cy={pct(l.to.y)} r={l.rTo} fill="#000" />
-                </Fragment>
+                <circle key={l.i} cx={pct(l.from.x)} cy={pct(l.from.y)} r={l.rFrom} fill="#000" />
               ))}
             </mask>
           </defs>
@@ -487,101 +518,91 @@ function Picker({
           </g>
         </svg>
       )}
-      {/* Where a color the lights can't make is asked for: a ghost of its circles, which sit where their lights land. */}
-      {asks.map((cs, i) => {
-        const [c] = cs as [Circle];
+      {/* Where the lights land, as goo, the active ones rimmed in white. */}
+      <div className="picker-goo">
+        <Goo marks={marks} width={w} height={h} gamut={gamut} rimOf={(g) => (g.ids.some((i) => on.has(i)) ? WHITE : BLACK)} />
+      </div>
+      {/* Where a color the lights can't make is asked for: a ghost of its circle. */}
+      {ghosts.map((c, i) => {
         const p = at(c.a, c.b);
         return (
           <span
             key={c.members[0]}
             data-ghost={i}
-            className={cs.some(isOn) ? "picker-ghost on" : "picker-ghost"}
-            style={{ left: `${p.x * 100}%`, top: `${p.y * 100}%` }}
-            title={`${nameOf(c.a, c.b)}, asked for: ${count(cs.reduce((n, x) => n + x.members.length, 0), "light")}`}
+            className={isOn(c) ? "picker-ghost on" : "picker-ghost"}
+            style={{ left: pct(p.x), top: pct(p.y) }}
+            title={`${nameOf(c.a, c.b)}, asked for: ${count(c.members.length, "light")}`}
           />
         );
       })}
-      {spots.map((s, k) => {
-        // Where the light lands, in its color: one circle for all that land here.
-        const first = s.circles[0]!;
-        // A color it can't show where it is (on the strip of whites, one that isn't one) is just an outline.
-        const hollow = outside?.(first.seen.a, first.seen.b) ?? false;
-        const n = s.circles.reduce((sum, c) => sum + c.members.length, 0);
-        const [r, g, b] = swatch(first.seen.a, first.seen.b) as Vec3;
-        const light = hollow || 0.2126 * r + 0.7152 * g + 0.0722 * b > 0.6;
-        const cls = ["picker-circle", s.circles.some(isOn) && "on", hollow && "hollow"].filter(Boolean).join(" ");
-        const names = listOf(s.circles.map((c) => (s.circles.length > 1 ? `${nameOf(c.a, c.b)} (${count(c.members.length, "light")})` : nameOf(c.a, c.b))));
-        const said = s.circles.some(fallsShort) ? `${names}, coming out ${nameOf(first.seen.a, first.seen.b)}` : names;
-        const kind = kinds.size > 1 && s.circles.every((c) => c.kind === first.kind) && first.kind ? `${KIND_NAMES[first.kind]}: ` : "";
-        const title = `${kind}${said}`;
-        return (
-          <span
-            key={first.members[0]}
-            data-spot={k}
-            className={cls}
-            style={{ left: `${s.x * 100}%`, top: `${s.y * 100}%`, background: hollow ? undefined : css(first.seen.a, first.seen.b), color: light ? "#1a1612" : "#fff" }}
-            title={`${title}: ${count(n, "light")}`}
-          >
-            {n > 1 && n}
-          </span>
-        );
-      })}
+      {/* Each mark, to pick (the goo can't be). */}
+      {handles.map((g, k) => (
+        <span
+          key={g.key}
+          data-spot={k}
+          className="picker-handle"
+          style={{ left: pct(g.x / w), top: pct(g.y / h), width: sizeOf(g.ids.length) + 4, height: sizeOf(g.ids.length) + 4 }}
+          title={titleOf(g)}
+        />
+      ))}
     </div>
   );
 }
 
-/** Values at the same color on the same kind of light, the circles: the most first. */
-function circlesOf(values: Lemtone[], made: (t: Lemtone, i: number) => Output, kindOf: (i: number) => Device | null): Circle[] {
+const WHITE: Vec3 = [1, 1, 1];
+const BLACK: Vec3 = [0, 0, 0];
+
+/** Values at the same color, the circles: the most first. `landings` says what each value's light makes of it. */
+function circlesOf(values: Lemtone[], landings: Lemtone[]): Circle[] {
   const by = new Map<string, Circle>();
   values.forEach((t, i) => {
-    const kind = kindOf(i);
-    const key = `${exact(t.a, t.b)} ${kind}`;
+    const key = exact(t.a, t.b);
     const c = by.get(key);
     if (c) c.members.push(i);
-    else by.set(key, { a: t.a, b: t.b, members: [i], kind, seen: t });
+    else by.set(key, { a: t.a, b: t.b, members: [i], seen: t, short: false });
   });
   for (const c of by.values()) {
     const usual = valuesOf(c.members.map((i) => values[i]!))[0]!;
-    c.seen = made(usual, c.members.find((i) => values[i] === usual)!).light;
+    c.seen = landings[c.members.find((i) => values[i] === usual)!]!;
+    c.short = c.members.some((i) => landings[i]!.a !== c.a || landings[i]!.b !== c.b);
   }
   return [...by.values()].sort((x, y) => y.members.length - x.members.length || x.members[0]! - y.members[0]!);
 }
 
-/** Each kind of light, as a picker names it where it shows more than one. */
-const KIND_NAMES: Record<Device, string> = { bulb: "Color bulbs", panel: "Panels" };
+/** Whether a circle's lights (some of them, at least) can't make its color as asked, so they land elsewhere. */
+const fallsShort = (c: Circle) => c.short;
 
-/** Whether a circle's lights can't make its color as asked, so they land elsewhere. */
-const fallsShort = (c: Circle) => c.seen.a !== c.a || c.seen.b !== c.b;
-
-/** Circles whose lights land in one spot (within SAME_PX of each other), most lights first, and where (fractions across and down). */
+/** Lights that land in one spot (within SAME_PX of each other), and the circles they're in; where (fractions across and down). */
 interface Spot {
   circles: Circle[];
   x: number;
   y: number;
 }
 
-/** The spots the circles' lights land in, on a picker this size (CSS px) that places colors with `at`. */
-function spotsOf(circles: Circle[], at: (a: number, b: number) => { x: number; y: number }, width: number, height: number): Spot[] {
+/** The spots the circles' lights land in (`landings`, by value), on a picker this size (CSS px) that places colors with `at`. */
+function spotsOf(circles: Circle[], landings: Lemtone[], at: (a: number, b: number) => { x: number; y: number }, width: number, height: number): Spot[] {
   const spots: Spot[] = [];
   for (const c of circles) {
-    const q = at(c.seen.a, c.seen.b);
-    const spot = spots.find((s) => Math.hypot((s.x - q.x) * width, (s.y - q.y) * height) < SAME_PX);
-    if (spot) spot.circles.push(c);
-    else spots.push({ circles: [c], x: q.x, y: q.y });
+    for (const i of c.members) {
+      const q = at(landings[i]!.a, landings[i]!.b);
+      const spot = spots.find((s) => Math.hypot((s.x - q.x) * width, (s.y - q.y) * height) < SAME_PX);
+      if (!spot) spots.push({ circles: [c], x: q.x, y: q.y });
+      else if (!spot.circles.includes(c)) spot.circles.push(c);
+    }
   }
   return spots;
 }
 
 /**
  * Circles picked up together, as one, of all their lights: asked for the same
- * color (each kind of light landing somewhere of its own), at that color; else
- * where their lights land, at the color they land at.
+ * color, at that color; else where their lights land, at the color they land at.
  */
 function together(circles: Circle[]): Circle {
   const [first] = circles as [Circle];
   const members = circles.flatMap((c) => c.members);
-  if (circles.every((c) => c.a === first.a && c.b === first.b)) return { a: first.a, b: first.b, members, kind: null, seen: first.seen };
-  return { a: first.seen.a, b: first.seen.b, members, kind: null, seen: first.seen };
+  const short = circles.some((c) => c.short);
+  if (circles.every((c) => c.a === first.a && c.b === first.b)) return { a: first.a, b: first.b, members, seen: first.seen, short };
+  return { a: first.seen.a, b: first.seen.b, members, seen: first.seen, short };
 }
 
 /** A light taken at its word: what it makes is what's asked. */
@@ -766,6 +787,8 @@ const WHITES = { kMin: K_MIN, kMax: K_MAX, tint: TINT, tintCurve: TINT_CURVE };
 interface Light {
   brightness: number;
   devices: Device[];
+  /** How many of the lights are each of those kinds. */
+  weights: number[];
 }
 
 /** How many of the kinds of light in `light` make (a, b) as asked at its brightness and this fidelity: 2 every one (or there are none), 1 some, 0 none. */
@@ -799,12 +822,11 @@ interface Edge {
  * Paint a picker's backdrop into `img`: each pixel the color asked for there
  * (`colorAt`, by fractions across and down) where every kind of light among
  * the active ones makes it as asked (`madeAt` 2); where only some do (1), the
- * stripes of what the least capable kind makes of it (`madeBy`) and of what
- * the most capable does, as asked or paler; past the outer edge, a border
- * outside it, so it never covers a color made as asked, and the inner edge
- * dotted. With one kind of light, the edges are one, and past it what that
- * kind makes instead, striped darker. A pixel an edge crosses is shared out
- * by how much of it is on either side.
+ * what they typically make instead (`typicalAt`: each kind's, weighed by how
+ * many of its lights there are), striped darker; with a border outside the
+ * outer edge, so it never covers a color made as asked, and the inner edge
+ * dotted. With one kind of light, the edges are one. A pixel an edge crosses
+ * is shared out by how much of it is on either side.
  * `alphaAt` shapes it (0: not drawn); grid points `skip` says no drawn pixel
  * is spread from aren't worked out.
  */
@@ -813,7 +835,7 @@ function paintBackdrop(
   dpr: number,
   gamut: Gamut,
   colorAt: (x: number, y: number) => [number, number],
-  madeBy: (a: number, b: number) => Output[],
+  typicalAt: (a: number, b: number) => [number, number],
   madeAt: (a: number, b: number) => number,
   two: boolean,
   [gx, gy]: readonly [number, number],
@@ -825,12 +847,10 @@ function paintBackdrop(
   const made = (x: number, y: number) => madeAt(...colorAt(x, y));
 
   // At each grid point: whether it's worked out, how many kinds of light make it
-  // as asked, and, if not every one does, how far the least capable of them moves
-  // the color (the one that moves it furthest), and the most capable.
+  // as asked, and, if not every one does, how far they typically move the color.
   const live = new Uint8Array(gx * gy);
   const level = new Uint8Array(gx * gy);
-  const least = new Float32Array(gx * gy * 2);
-  const most = new Float32Array(gx * gy * 2);
+  const shift = new Float32Array(gx * gy * 2);
   for (let j = 0; j < gy; j++) {
     for (let i = 0; i < gx; i++) {
       const [x, y] = [i / (gx - 1), j / (gy - 1)];
@@ -840,11 +860,7 @@ function paintBackdrop(
       live[k] = 1;
       level[k] = madeAt(a, b);
       if (level[k] === 2) continue;
-      const shifts = madeBy(a, b).map((out) => [out.light.a - a, out.light.b - b] as const);
-      const far = shifts.reduce((p, q) => (Math.hypot(...q) > Math.hypot(...p) ? q : p));
-      const near = shifts.reduce((p, q) => (Math.hypot(...q) < Math.hypot(...p) ? q : p));
-      [least[2 * k], least[2 * k + 1]] = far;
-      [most[2 * k], most[2 * k + 1]] = near;
+      [shift[2 * k], shift[2 * k + 1]] = typicalAt(a, b);
     }
   }
 
@@ -975,7 +991,7 @@ function paintBackdrop(
     return inside ? dist : -dist;
   };
 
-  const shiftAt = (shift: Float32Array, x: number, y: number): [number, number] => {
+  const shiftAt = (x: number, y: number): [number, number] => {
     const fx = Math.min(gx - 1 - 1e-9, Math.max(0, x * (gx - 1)));
     const fy = Math.min(gy - 1 - 1e-9, Math.max(0, y * (gy - 1)));
     const [i, j] = [Math.floor(fx), Math.floor(fy)];
@@ -1010,30 +1026,17 @@ function paintBackdrop(
       const asked = swatch(a, b, gamut);
       let rgb: number[] = asked.map((c) => c * inAll);
       if (inAll < 1) {
-        // Striped at 45°: how much of the pixel is in the one stripe (the darker, with one kind of light).
+        // Striped at 45°: how much of the pixel is in a darker stripe.
         const u = ((((x + y) / Math.SQRT2) % stripe) + stripe) % stripe;
         const into = u < stripe / 2 ? Math.min(u, stripe / 2 - u) : -Math.min(u - stripe / 2, stripe - u);
         const dark = clamp01(0.5 + into);
-        const [la, lb] = shiftAt(least, fx, fy);
-        const fewest = swatch(a + la, b + lb, gamut);
-        if (two) {
-          // Stripes of what the least capable kind makes (as asked, inside the inner edge) and
-          // of what the most capable does (as asked, inside the outer one), bordered past that.
-          const [ma, mb] = shiftAt(most, fx, fy);
-          const best = swatch(a + ma, b + mb, gamut);
-          rgb = asked.map((c, i) => {
-            const m = c * inAny + best[i]! * (1 - inAny);
-            const f = c * inAll + fewest[i]! * (1 - inAll);
-            const mixed = m + (f - m) * dark;
-            return mixed + (BORDER_RGB[i]! - mixed) * BORDER_INK * onAny;
-          });
-        } else {
-          // What it makes instead, striped darker, bordered.
-          rgb = rgb.map((c, i) => {
-            const under = fewest[i]! * (1 - STRIPE_DARK * dark);
-            return c + under * (1 - inAny) + (BORDER_RGB[i]! - under) * BORDER_INK * onAny;
-          });
-        }
+        // What they typically make instead, striped darker, bordered past the outer edge.
+        const [sa, sb] = shiftAt(fx, fy);
+        const made = swatch(a + sa, b + sb, gamut);
+        rgb = rgb.map((c, i) => {
+          const under = made[i]! * (1 - STRIPE_DARK * dark);
+          return c + under * (1 - inAll) + (BORDER_RGB[i]! - under) * BORDER_INK * onAny;
+        });
       }
       // The inner edge, dotted, over whatever's there.
       if (two) {
@@ -1054,7 +1057,7 @@ function paintBackdrop(
  * height) up and down, at the strip's size (so the stripes stay at 45°); as
  * the lights make them past what they make as asked. On the GPU if it can.
  */
-function paintWhites(c: HTMLCanvasElement, madeBy: (a: number, b: number) => Output[], madeAt: (a: number, b: number) => number, light: Light, gamut: Gamut) {
+function paintWhites(c: HTMLCanvasElement, typicalAt: (a: number, b: number) => [number, number], madeAt: (a: number, b: number) => number, light: Light, gamut: Gamut) {
   const [w, h] = [c.clientWidth || 320, STRIP_H];
   const dpr = Math.min(2, window.devicePixelRatio || 1);
   if (paintOnGpu(c, { kind: "whites", width: w, height: h, dpr, gamut, ...light, whites: WHITES, look: LOOK })) return;
@@ -1075,7 +1078,7 @@ function paintWhites(c: HTMLCanvasElement, madeBy: (a: number, b: number) => Out
     const tint = tintAt(1 - 2 * y);
     return [wa + na * tint, wb + nb * tint];
   };
-  paintBackdrop(img, dpr, gamut, colorAt, madeBy, madeAt, light.devices.length > 1, STRIP_GRID);
+  paintBackdrop(img, dpr, gamut, colorAt, typicalAt, madeAt, light.devices.length > 1, STRIP_GRID);
   ctx.putImageData(img, 0, 0);
 }
 
@@ -1083,7 +1086,7 @@ function paintWhites(c: HTMLCanvasElement, madeBy: (a: number, b: number) => Out
  * The wheel's colors, softened at the rim so it doesn't look clipped; as the
  * lights make them past what they make as asked. On the GPU if it can.
  */
-function paintWheel(c: HTMLCanvasElement, madeBy: (a: number, b: number) => Output[], madeAt: (a: number, b: number) => number, light: Light, gamut: Gamut) {
+function paintWheel(c: HTMLCanvasElement, typicalAt: (a: number, b: number) => [number, number], madeAt: (a: number, b: number) => number, light: Light, gamut: Gamut) {
   const dpr = Math.min(2, window.devicePixelRatio || 1);
   if (paintOnGpu(c, { kind: "wheel", width: WHEEL, height: WHEEL, dpr, gamut, ...light, whites: WHITES, look: LOOK })) return;
   const size = Math.round(WHEEL * dpr);
@@ -1099,7 +1102,7 @@ function paintWheel(c: HTMLCanvasElement, madeBy: (a: number, b: number) => Outp
     dpr,
     gamut,
     (x, y) => wheelColor(x * 2 - 1, 1 - y * 2),
-    madeBy,
+    typicalAt,
     madeAt,
     light.devices.length > 1,
     [WHEEL_GRID, WHEEL_GRID],

@@ -1,5 +1,6 @@
-// The color preview's dots as metaballs: each mark is a ball of goo, a
-// black-rimmed blob in its lights' color. Balls that come near each other
+// The color preview's dots as metaballs (and the color editor's, where its
+// lights land): each mark is a ball of goo, a black-rimmed blob (or rimmed in
+// a color of its own, `rimOf`) in its lights' color. Balls that come near each other
 // reach out and run together before they touch, as metaballs do, their colors
 // running together where they meet (the bigger ball's winning, as if on top);
 // counts are stiffer than single lights, keeping their shape more. Counts
@@ -39,6 +40,8 @@ interface Look {
   y: number;
   r: number;
   rgb: Vec3;
+  /** Its rim's color. */
+  rim: Vec3;
   alpha: number;
   /** How many lights its own dot holds. */
   n: number;
@@ -63,9 +66,13 @@ interface Props {
   width: number;
   height: number;
   gamut: Gamut;
+  /** A mark's rim's color (as it's shown: gamma-encoded, 0 to 1); black, without it. */
+  rimOf?: (g: Group) => Vec3;
 }
 
-export function Goo({ marks, width, height, gamut }: Props) {
+const BLACK: Vec3 = [0, 0, 0];
+
+export function Goo({ marks, width, height, gamut, rimOf }: Props) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const balls = useRef(new Map<string, Ball>());
   const labels = useRef(new Map<string, HTMLSpanElement>());
@@ -85,7 +92,7 @@ export function Goo({ marks, width, height, gamut }: Props) {
     // Per pixel (at its center): the field, the colors weighed into it, and
     // how far it is from the goo's edge, where that's near.
     const field = new Float32Array(w * h);
-    const sum = [0, 1, 2, 3, 4].map(() => new Float32Array(w * h)); // r, g, b, alpha, weight
+    const sum = [0, 1, 2, 3, 4, 5, 6, 7].map(() => new Float32Array(w * h)); // r, g, b, alpha, weight, then the rim's r, g, b
     const dist = new Float32Array(w * h);
     const rim = RIM * dpr;
     // As far from the edge as the rim (and its softening) reaches.
@@ -169,6 +176,9 @@ export function Goo({ marks, width, height, gamut }: Props) {
             sum[2]![i]! += weight * b.rgb[2];
             sum[3]![i]! += weight * b.alpha;
             sum[4]![i]! += weight;
+            sum[5]![i]! += weight * b.rim[0];
+            sum[6]![i]! += weight * b.rim[1];
+            sum[7]![i]! += weight * b.rim[2];
           }
         }
       }
@@ -229,10 +239,11 @@ export function Goo({ marks, width, height, gamut }: Props) {
           const weight = sum[4]![i]!;
           const per = weight > 0 ? 1 / weight : 0;
           const o = i * 4;
-          // Fill over black: premultiplied, then back out of the rim's coverage.
-          data[o] = ((sum[0]![i]! * per * aFill) / a) * 255;
-          data[o + 1] = ((sum[1]![i]! * per * aFill) / a) * 255;
-          data[o + 2] = ((sum[2]![i]! * per * aFill) / a) * 255;
+          // Fill over the rim: premultiplied, then back out of the rim's coverage.
+          const aRim = a - aFill;
+          data[o] = ((sum[0]![i]! * per * aFill + sum[5]![i]! * per * aRim) / a) * 255;
+          data[o + 1] = ((sum[1]![i]! * per * aFill + sum[6]![i]! * per * aRim) / a) * 255;
+          data[o + 2] = ((sum[2]![i]! * per * aFill + sum[7]![i]! * per * aRim) / a) * 255;
           data[o + 3] = a * (weight > 0 ? sum[3]![i]! * per : 1) * 255;
         }
       });
@@ -253,6 +264,7 @@ export function Goo({ marks, width, height, gamut }: Props) {
         b.r += (to.r - b.r) * t;
         b.alpha += (to.alpha - b.alpha) * t;
         b.rgb = b.rgb.map((v, i) => v + (to.rgb[i]! - v) * t) as Vec3;
+        b.rim = b.rim.map((v, i) => v + (to.rim[i]! - v) * t) as Vec3;
         if (to.r === 0 && b.r < 0.05) {
           balls.current.delete(key);
         } else if (Math.abs(to.x - b.x) + Math.abs(to.y - b.y) + Math.abs(to.r - b.r) > 0.02) {
@@ -332,7 +344,7 @@ export function Goo({ marks, width, height, gamut }: Props) {
       const n = g.ids.length;
       // A count that joined another is counted with it.
       const cluster = n > 1 && g.into ? g.into.key : g.key;
-      const to = { x: g.x + PAD, y: g.y + PAD, r: sizeOf(n) / 2, rgb: swatch(g.t.a, g.t.b, gamut), alpha: g.dim ? 0.5 : 1, n, cluster };
+      const to = { x: g.x + PAD, y: g.y + PAD, r: sizeOf(n) / 2, rgb: swatch(g.t.a, g.t.b, gamut), rim: rimOf?.(g) ?? BLACK, alpha: g.dim ? 0.5 : 1, n, cluster };
       const b = balls.current.get(g.key);
       if (!b) balls.current.set(g.key, { ...to, r: 0, to });
       else if (!sameLook(b.to, to)) b.to = to;
@@ -384,4 +396,11 @@ export function Goo({ marks, width, height, gamut }: Props) {
 const clamp = (v: number) => Math.min(1, Math.max(0, v));
 
 const sameLook = (a: Look, b: Look) =>
-  a.x === b.x && a.y === b.y && a.r === b.r && a.alpha === b.alpha && a.n === b.n && a.cluster === b.cluster && a.rgb.every((v, i) => v === b.rgb[i]);
+  a.x === b.x &&
+  a.y === b.y &&
+  a.r === b.r &&
+  a.alpha === b.alpha &&
+  a.n === b.n &&
+  a.cluster === b.cluster &&
+  a.rgb.every((v, i) => v === b.rgb[i]) &&
+  a.rim.every((v, i) => v === b.rim[i]);

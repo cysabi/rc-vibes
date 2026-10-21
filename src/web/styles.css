@@ -1814,6 +1814,27 @@ button.layer-chevron:hover {
   border-style: dashed;
 }
 
+/* Where the picker's lights land, as goo (Goo.tsx), over its backdrop and
+   under its ghosts; a readout, picked through the handles over it. */
+.picker-goo {
+  position: absolute;
+  inset: 0;
+  z-index: 1;
+  pointer-events: none;
+}
+
+.picker-goo .goo-mark {
+  pointer-events: none;
+}
+
+/* Each mark of goo, to pick: unseen, a little bigger than its ball. */
+.picker-handle {
+  position: absolute;
+  z-index: 2;
+  border-radius: 50%;
+  transform: translate(-50%, -50%);
+}
+
 /* Where a circle's color is asked for, when the lights can't make it: a
    ghost of the circle, which sits where their light lands. */
 .picker-ghost {
