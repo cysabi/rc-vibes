@@ -1838,25 +1838,6 @@ button.layer-chevron:hover {
   font-size: 10.5px;
 }
 
-/* The active circle's halo and its deeper shadow, under the goo. */
-.picker-halo {
-  position: absolute;
-  width: 30px;
-  height: 30px;
-  border-radius: 50%;
-  box-shadow:
-    0 0 0 5px rgb(255 255 255 / 0.22),
-    0 4px 12px rgb(0 0 0 / 0.5);
-  transform: translate(-50%, -50%);
-  pointer-events: none;
-}
-
-.picker:focus-visible .picker-halo {
-  box-shadow:
-    0 0 0 5px var(--sim),
-    0 4px 12px rgb(0 0 0 / 0.5);
-}
-
 /* Each mark of goo, to pick: unseen, a little bigger than its ball. */
 .picker-handle {
   position: absolute;

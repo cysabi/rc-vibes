@@ -405,13 +405,21 @@ function Picker({
     }),
   );
   const marks = dotsOf(placed);
-  // Each mark as the circles always looked: white-rimmed, the active ones bigger (and haloed, under the goo), the hollow ones see-through.
-  const marked = (g: Group) => g.ids.some((i) => on.has(i));
+  // Each mark as the circles always looked: white-rimmed, the active ones bigger and haloed, the hollow ones see-through.
   const lookOf = (g: Group) => {
-    const big = marked(g);
+    const big = g.ids.some((i) => on.has(i));
     const empty = g.ids.every((i) => hollow.has(i));
-    return { size: big ? 30 : 20, rim: WHITE, rimPx: big ? 3 : 2, ...(empty ? { fill: WHITE, fillAlpha: 0.25 } : {}), className: big ? "on" : undefined };
+    return {
+      size: big ? 30 : 20,
+      rim: WHITE,
+      rimPx: big ? 3 : 2,
+      haloPx: big ? 5 : 0,
+      ...(empty ? { fill: WHITE, fillAlpha: 0.25 } : {}),
+      className: big ? "on" : undefined,
+    };
   };
+  // The halo's in the accent color while the picker has the keyboard's focus.
+  const [focused, setFocused] = useState(false);
   // Each mark drawn as its own, a handle: what it picks is the circles of the lights in it.
   const handles = marks.filter((g) => !(g.into && g.ids.length === 1));
   const circlesIn = (g: Group) => [...new Set(g.ids.map((i) => circleOf.get(i)!))];
@@ -503,6 +511,8 @@ function Picker({
       onPointerUp={up}
       onPointerCancel={up}
       onKeyDown={key}
+      onFocus={(e) => setFocused(e.currentTarget.matches(":focus-visible"))}
+      onBlur={() => setFocused(false)}
     >
       {children}
       {links.length > 0 && (
@@ -526,13 +536,9 @@ function Picker({
           </g>
         </svg>
       )}
-      {/* The active marks' halos, under the goo. */}
-      {handles.filter(marked).map((g) => (
-        <span key={g.key} className="picker-halo" style={{ left: pct(g.x / w), top: pct(g.y / h) }} />
-      ))}
       {/* Where the lights land, as goo. */}
       <div className="picker-goo">
-        <Goo marks={marks} width={w} height={h} gamut={gamut} lookOf={lookOf} outline={OUTLINE} />
+        <Goo marks={marks} width={w} height={h} gamut={gamut} lookOf={lookOf} outline={OUTLINE} halo={focused ? FOCUS_HALO : HALO} />
       </div>
       {/* Where a color the lights can't make is asked for: a ghost of its circle. */}
       {ghosts.map((c, i) => {
@@ -562,8 +568,10 @@ function Picker({
 }
 
 const WHITE: Vec3 = [1, 1, 1];
-// The faint dark line round the circles, outside their rims.
+// The faint dark line round the circles, outside their rims; and the active ones' halo past it (the accent's, with the keyboard's focus).
 const OUTLINE = { px: 1, rgb: [0, 0, 0] as Vec3, alpha: 0.45 };
+const HALO = { rgb: WHITE, alpha: 0.22 };
+const FOCUS_HALO = { rgb: [0x8f / 255, 0xb9 / 255, 1] as Vec3, alpha: 1 };
 
 /** Values at the same color, the circles: the most first. `landings` says what each value's light makes of it. */
 function circlesOf(values: Lemtone[], landings: Lemtone[]): Circle[] {

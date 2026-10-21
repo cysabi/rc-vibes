@@ -1,6 +1,6 @@
 // The color preview's dots as metaballs (and the color editor's, where its
-// lights land, looking as its circles do: `lookOf`, `outline`): each mark is
-// a ball of goo, a black-rimmed blob in its lights' color. Balls that come near each other
+// lights land, looking as its circles do: `lookOf`, `outline`, `halo`): each
+// mark is a ball of goo, a black-rimmed blob in its lights' color. Balls that come near each other
 // reach out and run together before they touch, as metaballs do, their colors
 // running together where they meet (the bigger ball's winning, as if on top);
 // counts are stiffer than single lights, keeping their shape more. Counts
@@ -45,6 +45,8 @@ interface Look {
   /** Its rim's color, and how wide (CSS px). */
   rim: Vec3;
   rimPx: number;
+  /** How far its halo reaches past its edge (CSS px; 0: none). */
+  haloPx: number;
   alpha: number;
   /** How many lights its own dot holds. */
   n: number;
@@ -74,14 +76,16 @@ interface Props {
    * CSS px), its fill (a color, gamma-encoded, 0 to 1, and how opaque), its
    * rim's color and width, and a class for its count.
    */
-  lookOf?: (g: Group) => { size?: number; fill?: Vec3; fillAlpha?: number; rim?: Vec3; rimPx?: number; className?: string };
+  lookOf?: (g: Group) => { size?: number; fill?: Vec3; fillAlpha?: number; rim?: Vec3; rimPx?: number; haloPx?: number; className?: string };
   /** A line round the goo, outside its rim: this wide (CSS px), this color, this opaque. None, without it. */
   outline?: { px: number; rgb: Vec3; alpha: number };
+  /** The halos' color and opacity, round the balls that have one (lookOf's haloPx), outside the line round them. */
+  halo?: { rgb: Vec3; alpha: number };
 }
 
 const BLACK: Vec3 = [0, 0, 0];
 
-export function Goo({ marks, width, height, gamut, lookOf, outline }: Props) {
+export function Goo({ marks, width, height, gamut, lookOf, outline, halo }: Props) {
   const canvas = useRef<HTMLCanvasElement>(null);
   const balls = useRef(new Map<string, Ball>());
   const labels = useRef(new Map<string, HTMLSpanElement>());
@@ -101,8 +105,9 @@ export function Goo({ marks, width, height, gamut, lookOf, outline }: Props) {
     // Per pixel (at its center): the field, the colors weighed into it, and
     // how far it is from the goo's edge, where that's near.
     const field = new Float32Array(w * h);
-    // r, g, b, alpha, weight; the rim's r, g, b and width; the fill's opacity
-    const sum = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9].map(() => new Float32Array(w * h));
+    // r, g, b, alpha, weight; the rim's r, g, b and width; the fill's opacity;
+    // and the halo's width and its weight (reaching further than the field does).
+    const sum = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11].map(() => new Float32Array(w * h));
     const dist = new Float32Array(w * h);
     // The line round the goo, if it has one (device px).
     const linePx = (outline?.px ?? 0) * dpr;
@@ -139,8 +144,12 @@ export function Goo({ marks, width, height, gamut, lookOf, outline }: Props) {
 
     const draw = () => {
       let widest = 0;
-      for (const b of balls.current.values()) widest = Math.max(widest, b.rimPx);
-      band = Math.max(widest * dpr, linePx + 1) + 1.5;
+      let haloMost = 0;
+      for (const b of balls.current.values()) {
+        widest = Math.max(widest, b.rimPx);
+        haloMost = Math.max(haloMost, b.haloPx);
+      }
+      band = Math.max(widest * dpr, linePx + 1, haloMost * dpr + 1) + 1.5;
       // Where the goo can be this frame: around each ball, as far as its field and the edge's band reach.
       const box = { x0: w, y0: h, x1: -1, y1: -1 };
       for (const b of balls.current.values()) {
@@ -170,19 +179,30 @@ export function Goo({ marks, width, height, gamut, lookOf, outline }: Props) {
         const inv = 1 / (far * far);
         const scale = 1 / (1 - 1 / (reach * reach)) ** 3;
         const big = b.r ** 4;
-        const x0 = Math.max(0, Math.floor(cx - far));
-        const x1 = Math.min(w - 1, Math.ceil(cx + far));
-        const y0 = Math.max(0, Math.floor(cy - far));
-        const y1 = Math.min(h - 1, Math.ceil(cy + far));
+        // How far its say in the halo's width reaches: as far as any halo does past its rim.
+        const edge = b.r * dpr;
+        const outer = Math.max(far, edge + haloMost * dpr + 2);
+        const x0 = Math.max(0, Math.floor(cx - outer));
+        const x1 = Math.min(w - 1, Math.ceil(cx + outer));
+        const y0 = Math.max(0, Math.floor(cy - outer));
+        const y1 = Math.min(h - 1, Math.ceil(cy + outer));
         for (let py = y0; py <= y1; py++) {
           const dy = py + 0.5 - cy;
           for (let px = x0; px <= x1; px++) {
             const dx = px + 0.5 - cx;
-            const q = (dx * dx + dy * dy) * inv;
+            const d2 = dx * dx + dy * dy;
+            const i = py * w + px;
+            if (haloMost > 0) {
+              // The halo's width here: each ball's, the nearer its edge, the more it counts.
+              const off = Math.max(0, Math.sqrt(d2) - edge);
+              const hw = 1 / (1 + off * off);
+              sum[10]![i]! += hw * b.haloPx;
+              sum[11]![i]! += hw;
+            }
+            const q = d2 * inv;
             if (q >= 1) continue;
             const k = 1 - q;
             const g = k * k * k;
-            const i = py * w + px;
             field[i]! += g * scale;
             const weight = g * g * g * g * big;
             sum[0]![i]! += weight * b.rgb[0];
@@ -248,11 +268,14 @@ export function Goo({ marks, width, height, gamut, lookOf, outline }: Props) {
           if (f <= 0 && !(dist[i]! < Infinity)) continue;
           // How far inside the edge (device px); out past the band, as good as forever.
           const depth = (f >= EDGE ? 1 : -1) * Math.sqrt(dist[i]!);
-          if (depth < -(linePx + 1)) continue;
-          // How much of the pixel is inside the edge, and how much the line round it.
+          const haloW = sum[11]![i]!;
+          const haloPx = haloW > 0 ? (sum[10]![i]! / haloW) * dpr : 0;
+          if (depth < -(Math.max(linePx, haloPx) + 1)) continue;
+          // How much of the pixel is inside the edge, how much the line round it, and how much the halo past that.
           const aIn = clamp(depth + 0.5);
           const aLine = linePx > 0 ? clamp(depth + linePx + 0.5) - aIn : 0;
-          if (aIn <= 0 && aLine <= 0) continue;
+          const aHalo = haloPx > linePx ? clamp(depth + haloPx + 0.5) - clamp(depth + linePx + 0.5) : 0;
+          if (aIn <= 0 && aLine <= 0 && aHalo <= 0) continue;
           const weight = sum[4]![i]!;
           const per = weight > 0 ? 1 / weight : 0;
           // The rim (as wide as the balls here have it) and the fill inside it, anti-aliased.
@@ -261,12 +284,14 @@ export function Goo({ marks, width, height, gamut, lookOf, outline }: Props) {
           const aRim = aIn - aFill;
           const fill = (weight > 0 ? sum[9]![i]! * per : 1) * aFill;
           const line = aLine * (outline?.alpha ?? 0);
-          const cover = fill + aRim + line;
+          const glow = aHalo * (halo?.alpha ?? 0);
+          const cover = fill + aRim + line + glow;
           if (cover <= 0) continue;
           const o = i * 4;
-          // Fill, rim and line, premultiplied, then back out of their coverage.
+          // Fill, rim, line and halo, premultiplied, then back out of their coverage.
           for (let c = 0; c < 3; c++) {
-            data[o + c] = ((sum[c]![i]! * per * fill + sum[5 + c]![i]! * per * aRim + (outline?.rgb[c] ?? 0) * line) / cover) * 255;
+            const sums = sum[c]![i]! * per * fill + sum[5 + c]![i]! * per * aRim;
+            data[o + c] = ((sums + (outline?.rgb[c] ?? 0) * line + (halo?.rgb[c] ?? 0) * glow) / cover) * 255;
           }
           data[o + 3] = cover * (weight > 0 ? sum[3]![i]! * per : 1) * 255;
         }
@@ -289,6 +314,7 @@ export function Goo({ marks, width, height, gamut, lookOf, outline }: Props) {
         b.alpha += (to.alpha - b.alpha) * t;
         b.fill += (to.fill - b.fill) * t;
         b.rimPx += (to.rimPx - b.rimPx) * t;
+        b.haloPx += (to.haloPx - b.haloPx) * t;
         b.rgb = b.rgb.map((v, i) => v + (to.rgb[i]! - v) * t) as Vec3;
         b.rim = b.rim.map((v, i) => v + (to.rim[i]! - v) * t) as Vec3;
         if (to.r === 0 && b.r < 0.05) {
@@ -379,6 +405,7 @@ export function Goo({ marks, width, height, gamut, lookOf, outline }: Props) {
         fill: look?.fillAlpha ?? 1,
         rim: look?.rim ?? BLACK,
         rimPx: look?.rimPx ?? RIM,
+        haloPx: look?.haloPx ?? 0,
         alpha: g.dim ? 0.5 : 1,
         n,
         cluster,
@@ -442,6 +469,7 @@ const sameLook = (a: Look, b: Look) =>
   a.alpha === b.alpha &&
   a.fill === b.fill &&
   a.rimPx === b.rimPx &&
+  a.haloPx === b.haloPx &&
   a.n === b.n &&
   a.cluster === b.cluster &&
   a.rgb.every((v, i) => v === b.rgb[i]) &&
