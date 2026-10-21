@@ -17,7 +17,9 @@
 // to a few halvings; and from crossing to crossing across each cell, a
 // straight piece of edge (marching squares), each pixel near it knowing its
 // true distance. Three passes: the points, the crossings (each edge's), the
-// pixels.
+// pixels. Between the last two, the inner edge is read back, for its dots to
+// be spaced evenly along it (edge-dots.ts); where that can't be read, it's a
+// thin line instead.
 //
 // One WebGL context, off the page, paints for every picker, and each
 // picker's canvas copies what it paints. Its tables are fetched, and it's
@@ -26,6 +28,7 @@
 
 import cutoffsUrl from "virtual:cutoffs";
 import { SOLVERS, type Device } from "../shared/devices.ts";
+import { dotsAlong, type Piece } from "./edge-dots.ts";
 import { LMS_RGB, LUMENS_PER_BRIGHTNESS, type Gamut, type Vec3 } from "../shared/lemtone.ts";
 import { gunzip, unpack, type Cutoffs, type Table } from "./cutoffs.ts";
 import { CURVE, WHEEL_CHROMA } from "./wheel.ts";
@@ -300,7 +303,8 @@ uniform mat3 u_rgb; // OKLab's LMS -> linear RGB in the screen's gamut, a row to
 uniform vec4 u_look; // darker stripes' darkness, a pair's width (px), the border's width (px), its strength
 uniform vec3 u_border;
 uniform float u_dot; // the inner edge's dots' radius (px)
-uniform int u_dotEvery; // a dot where it crosses every this many grid lines
+uniform sampler2D u_dots; // its dots, each in its grid cell's texel (x, y in px; -1 in a cell without one)
+uniform bool u_dotted; // whether its dots were worked out (else it's a thin line)
 out vec4 color;
 ${COLOR}
 ${PLACES}
@@ -380,8 +384,7 @@ float toSegment(vec2 p, vec4 s) {
 
 bool sideOf(vec2 p, vec4 s) { return (s.z - s.x) * (p.y - s.y) - (s.w - s.y) * (p.x - s.x) > 0.0; }
 
-// How much of the pixel at px is one of the inner edge's dots: they're where it
-// crosses every u_dotEvery-th grid line, across (a row) or down (a column).
+// How much of the pixel at px is one of the inner edge's dots, from those in its cell and the cells round it.
 float dotted(vec2 px, vec2 at) {
   ivec2 cell = min(ivec2(at * (u_grid - 1.0)), ivec2(u_grid) - 2);
   float cover = 0.0;
@@ -389,9 +392,8 @@ float dotted(vec2 px, vec2 at) {
     for (int di = -2; di <= 2; di++) {
       ivec2 g = cell + ivec2(di, dj);
       if (any(lessThan(g, ivec2(0))) || any(greaterThanEqual(g, ivec2(u_grid)))) continue;
-      vec4 e = texelFetch(u_edgesAll, g, 0);
-      if (e.x >= 0.0 && g.y % u_dotEvery == 0) cover = max(cover, clamp(u_dot + 0.5 - length(px - mix(placeOf(g), placeOf(g + ivec2(1, 0)), e.x)), 0.0, 1.0));
-      if (e.y >= 0.0 && g.x % u_dotEvery == 0) cover = max(cover, clamp(u_dot + 0.5 - length(px - mix(placeOf(g), placeOf(g + ivec2(0, 1)), e.y)), 0.0, 1.0));
+      vec2 d = texelFetch(u_dots, g, 0).xy;
+      if (d.x >= 0.0) cover = max(cover, clamp(u_dot + 0.5 - length(px - d), 0.0, 1.0));
     }
   }
   return cover;
@@ -464,8 +466,11 @@ void main() {
     vec3 under = swatch(ab + s.yz) * (1.0 - u_look.x * dark);
     rgb += some * (inAny - inAll) + under * (1.0 - inAny) + (u_border - under) * u_look.w * onAny;
   }
-  // The inner edge, dotted, over whatever's there.
-  if (u_two) rgb += (u_border - rgb) * u_look.w * dotted(px, at);
+  // The inner edge, dotted, over whatever's there (or, without its dots, a thin line outside it).
+  if (u_two) {
+    float line = min(inAny - inAll, clamp(0.5 - allPx, 0.0, 1.0) - clamp(0.5 - allPx - u_dot, 0.0, 1.0));
+    rgb += (u_border - rgb) * u_look.w * (u_dotted ? dotted(px, at) : line);
+  }
   color = vec4(rgb * alpha, alpha);
 }`;
 
@@ -489,6 +494,8 @@ class Painter {
   private readonly crossedAll: Target;
   // The tables (cutoffs.ts), each kind of light's, on texture units of their own.
   private readonly cuts: WebGLTexture[];
+  // The inner edge's dots, each in its grid cell's texel.
+  private readonly dots: WebGLTexture;
   private grid = { width: 0, height: 0 };
   lost = false;
 
@@ -499,11 +506,92 @@ class Painter {
     const grid = ["u_grid", "u_bright", "u_active", "u_shown", "u_kind", "u_whites", "u_cutWheel0", "u_cutStrip0", "u_cutWheel1", "u_cutStrip1", "u_whiteCool", "u_whiteWarm"];
     this.solve = program(gl, SOLVE_FS, grid);
     this.edges = program(gl, EDGE_FS, [...grid, "u_solved", "u_least"]);
-    this.paint = program(gl, PAINT_FS, ["u_solved", "u_edgesAny", "u_edgesAll", "u_two", "u_dot", "u_dotEvery", "u_grid", "u_size", "u_rgb", "u_look", "u_border", "u_kind", "u_whites"]);
+    this.paint = program(gl, PAINT_FS, ["u_solved", "u_edgesAny", "u_edgesAll", "u_two", "u_dot", "u_dots", "u_dotted", "u_grid", "u_size", "u_rgb", "u_look", "u_border", "u_kind", "u_whites"]);
     this.solved = { texture: gl.createTexture()!, fbo: gl.createFramebuffer()! };
     this.crossedAny = { texture: gl.createTexture()!, fbo: gl.createFramebuffer()! };
     this.crossedAll = { texture: gl.createTexture()!, fbo: gl.createFramebuffer()! };
     this.cuts = [cutoffs.bulb.wheel, cutoffs.bulb.strip, cutoffs.panel.wheel, cutoffs.panel.strip].map((t) => table(gl, t));
+    // None yet: a texel saying so, so it's a whole texture from the start.
+    this.dots = gl.createTexture()!;
+    gl.bindTexture(gl.TEXTURE_2D, this.dots);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG32F, 1, 1, 0, gl.RG, gl.FLOAT, new Float32Array([-1, -1]));
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+  }
+
+  /**
+   * The inner edge's dots, evenly along it (edge-dots.ts), from the grid and its
+   * crossings read back: into the dots texture, each in its grid cell's texel.
+   * False if they can't be read back (a float buffer some GPUs won't read).
+   */
+  private placeDots(gx: number, gy: number, w: number, h: number, gap: number): boolean {
+    const gl = this.gl;
+    const read = (t: Target) => {
+      gl.bindFramebuffer(gl.FRAMEBUFFER, t.fbo);
+      const out = new Float32Array(gx * gy * 4);
+      gl.readPixels(0, 0, gx, gy, gl.RGBA, gl.FLOAT, out);
+      return out;
+    };
+    gl.getError();
+    const solved = read(this.solved);
+    const edges = read(this.crossedAll);
+    if (gl.getError() !== gl.NO_ERROR) return false;
+    // As the paint pass finds the edge's pieces in each cell (edgeIn), each by the crossings it joins.
+    const live = (g: number) => solved[4 * g + 3]! > 0.5;
+    const asked = (g: number) => solved[4 * g]! > 0.75;
+    const place = (g: number): [number, number] => [((g % gx) / (gx - 1)) * w, (Math.floor(g / gx) / (gy - 1)) * h];
+    const mix = (a: [number, number], b: [number, number], t: number): [number, number] => [a[0] + t * (b[0] - a[0]), a[1] + t * (b[1] - a[1])];
+    const at = new Map<number, [number, number]>();
+    const pieces: Piece[] = [];
+    for (let j = 0; j < gy - 1; j++) {
+      for (let i = 0; i < gx - 1; i++) {
+        // Its corners: top left, then clockwise.
+        const k = [j * gx + i, j * gx + i + 1, (j + 1) * gx + i + 1, (j + 1) * gx + i];
+        if (!k.every(live)) continue;
+        const f = k.map(asked);
+        const on = [f[0] !== f[1], f[1] !== f[2], f[3] !== f[2], f[0] !== f[3]];
+        const sides = [0, 1, 2, 3].filter((s) => on[s]);
+        if (sides.length === 0) continue;
+        // Each side's crossing: its key (2 per grid point, across then down) and where it is.
+        const keys = [2 * k[0]!, 2 * k[1]! + 1, 2 * k[3]!, 2 * k[0]! + 1];
+        const points = [
+          mix(place(k[0]!), place(k[1]!), edges[4 * k[0]!]!),
+          mix(place(k[1]!), place(k[2]!), edges[4 * k[1]! + 1]!),
+          mix(place(k[3]!), place(k[2]!), edges[4 * k[3]!]!),
+          mix(place(k[0]!), place(k[3]!), edges[4 * k[0]! + 1]!),
+        ];
+        for (const s of sides) at.set(keys[s]!, points[s]!);
+        const pairs =
+          sides.length === 2
+            ? [[sides[0]!, sides[1]!]]
+            : (edges[4 * k[0]! + 2]! > 0.5) === f[0]
+              ? [
+                  [0, 1],
+                  [2, 3],
+                ]
+              : [
+                  [3, 0],
+                  [1, 2],
+                ];
+        for (const [a, b] of pairs) pieces.push({ from: keys[a!]!, to: keys[b!]! });
+      }
+    }
+    const texels = new Float32Array(gx * gy * 2).fill(-1);
+    const along = dotsAlong(pieces, at, gap);
+    for (let d = 0; d < along.length; d += 2) {
+      const [x, y] = [along[d]!, along[d + 1]!];
+      const gi = Math.min(gx - 2, Math.max(0, Math.floor((x / w) * (gx - 1))));
+      const gj = Math.min(gy - 2, Math.max(0, Math.floor((y / h) * (gy - 1))));
+      const o = 2 * (gj * gx + gi);
+      if (texels[o]! >= 0) continue;
+      texels[o] = x;
+      texels[o + 1] = y;
+    }
+    gl.bindTexture(gl.TEXTURE_2D, this.dots);
+    gl.texImage2D(gl.TEXTURE_2D, 0, gl.RG32F, gx, gy, 0, gl.RG, gl.FLOAT, texels);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.NEAREST);
+    gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MAG_FILTER, gl.NEAREST);
+    return true;
   }
 
   /** Paint `job` into `target` (a 2D canvas, sized to it). */
@@ -562,6 +650,8 @@ class Painter {
       gl.uniform1i(this.edges.u.u_least!, least);
       gl.drawArrays(gl.TRIANGLES, 0, 3);
     }
+    // The inner edge's dots, along it.
+    const dotted = two && this.placeDots(gx, gy, w, h, job.look.dotGapPx * job.dpr);
 
     // Each pixel.
     if (this.canvas.width !== w || this.canvas.height !== h) {
@@ -585,7 +675,10 @@ class Painter {
     gl.uniform1i(p.u_edgesAll!, 6);
     gl.uniform1i(p.u_two!, two ? 1 : 0);
     gl.uniform1f(p.u_dot!, (job.look.dotPx / 2) * job.dpr);
-    gl.uniform1i(p.u_dotEvery!, Math.max(1, Math.ceil(job.look.dotGapPx / GRID_PX)));
+    gl.activeTexture(gl.TEXTURE7);
+    gl.bindTexture(gl.TEXTURE_2D, this.dots);
+    gl.uniform1i(p.u_dots!, 7);
+    gl.uniform1i(p.u_dotted!, dotted ? 1 : 0);
     gl.uniform2f(p.u_grid!, gx, gy);
     gl.uniform2f(p.u_size!, w, h);
     gl.uniformMatrix3fv(p.u_rgb!, false, LMS_RGB[job.gamut].flat());

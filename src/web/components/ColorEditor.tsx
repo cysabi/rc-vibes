@@ -48,6 +48,7 @@ import {
 } from "../../shared/lemtone.ts";
 import type { Output } from "../../shared/solver.ts";
 import { paintOnGpu } from "../backdrop.ts";
+import { dotsAlong, type Piece } from "../edge-dots.ts";
 import { useGamut } from "../display.ts";
 import { exact } from "../marks.ts";
 import { chromaAt, WHEEL_CHROMA, wheelColor, wheelSpot } from "../wheel.ts";
@@ -719,7 +720,7 @@ const STRIPE_PX = 6;
 const BORDER_PX = 2;
 const BORDER_RGB: Vec3 = [26 / 255, 22 / 255, 18 / 255];
 const BORDER_INK = 0.75;
-// The inner edge's dots: this big across, about this far apart (at the grid line it crosses nearest that).
+// The inner edge's dots: this big across, about this far apart along it (edge-dots.ts).
 const DOT_PX = 2.4;
 const DOT_GAP_PX = 6;
 // The same, and the strip of whites' shape, for the GPU.
@@ -758,7 +759,7 @@ function toSegment(x: number, y: number, x0: number, y0: number, x1: number, y1:
 /** Which side of the line through (x0, y0)–(x1, y1) (x, y) is on. */
 const sideOf = (x: number, y: number, x0: number, y0: number, x1: number, y1: number) => (x1 - x0) * (y - y0) - (y1 - y0) * (x - x0) > 0;
 
-/** An edge's pieces in each grid cell (up to two: x0, y0, x1, y1 each), in pixels; and, dotted, its dots in each (x, y each). */
+/** An edge's pieces in each grid cell (up to two: x0, y0, x1, y1 each), in pixels; and, dotted, its dots in each cell (x, y each). */
 interface Edge {
   segs: Float32Array;
   nsegs: Uint8Array;
@@ -814,14 +815,15 @@ function paintBackdrop(
     }
   }
 
-  /** The edge round what at least `least` (2: every kind of light, 1: at least one) make as asked. */
-  const edgeOf = (least: number): Edge => {
+  /** The edge round what at least `least` (2: every kind of light, 1: at least one) make as asked; dotted, with its dots. */
+  const edgeOf = (least: number, dotted: boolean): Edge => {
     const asked = (k: number) => level[k]! >= least;
     // Where the edge crosses from grid point (i, j) to the next one across
     // (or down), in pixels; each crossing worked out once.
     const crossings = new Map<number, [number, number]>();
+    const keyOf = (i: number, j: number, down: boolean) => 2 * at(i, j) + (down ? 1 : 0);
     const crossing = (i: number, j: number, down: boolean): [number, number] => {
-      const key = 2 * at(i, j) + (down ? 1 : 0);
+      const key = keyOf(i, j, down);
       const known = crossings.get(key);
       if (known) return known;
       const from = asked(at(i, j));
@@ -840,6 +842,8 @@ function paintBackdrop(
     const cells = (gx - 1) * (gy - 1);
     const segs = new Float32Array(cells * 8);
     const nsegs = new Uint8Array(cells);
+    // Each piece by the crossings it joins, for the dots.
+    const pieces: Piece[] = [];
     for (let j = 0; j < gy - 1; j++) {
       for (let i = 0; i < gx - 1; i++) {
         const corners = [at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1)];
@@ -868,27 +872,30 @@ function paintBackdrop(
                   [1, 2],
                 ];
         const cell = j * (gx - 1) + i;
+        const keys = [keyOf(i, j, false), keyOf(i + 1, j, true), keyOf(i, j + 1, false), keyOf(i, j, true)];
         for (const [s0, s1] of pairs) {
           const [p, q] = [sides[s0!] as [number, number], sides[s1!] as [number, number]];
           segs.set([p[0], p[1], q[0], q[1]], cell * 8 + nsegs[cell]! * 4);
           nsegs[cell]!++;
+          pieces.push({ from: keys[s0!]!, to: keys[s1!]! });
         }
       }
     }
-    // Its dots, if it's dotted: where it crosses every dotEvery-th grid line (a row, across; a column, down).
+    // Its dots, if it's dotted, evenly along it, each in the cell it's in.
     const dots: number[][] = Array.from({ length: cells }, () => []);
-    for (const [key, [x, y]] of crossings) {
-      const g = key >> 1;
-      const [i, j] = [g % gx, Math.floor(g / gx)];
-      if ((key & 1 ? i : j) % dotEvery !== 0) continue;
-      dots[Math.min(gy - 2, j) * (gx - 1) + Math.min(gx - 2, i)]!.push(x, y);
+    if (dotted) {
+      const along = dotsAlong(pieces, crossings, DOT_GAP_PX * dpr);
+      for (let k = 0; k < along.length; k += 2) {
+        const [x, y] = [along[k]!, along[k + 1]!];
+        const gi = Math.min(gx - 2, Math.max(0, Math.floor((x / w) * (gx - 1))));
+        const gj = Math.min(gy - 2, Math.max(0, Math.floor((y / h) * (gy - 1))));
+        dots[gj * (gx - 1) + gi]!.push(x, y);
+      }
     }
     return { segs, nsegs, dots };
   };
-  // A dot where the inner edge crosses every this many grid lines.
-  const dotEvery = Math.max(1, Math.ceil((DOT_GAP_PX * dpr) / (w / (gx - 1))));
-  const anyEdge = edgeOf(1);
-  const allEdge = two ? edgeOf(2) : anyEdge;
+  const anyEdge = edgeOf(1, false);
+  const allEdge = two ? edgeOf(2, true) : anyEdge;
   const dotR = (DOT_PX / 2) * dpr;
   /** How much of pixel (px, py), in grid cell (gi, gj), is one of the inner edge's dots. */
   const dotted = (px: number, py: number, gi: number, gj: number): number => {
