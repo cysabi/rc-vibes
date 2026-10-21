@@ -1,13 +1,15 @@
 // What each arclamp light type is, and how its channels look as light.
 //
 // Color bulbs (br30) and 4×1 panels take the Lemtone channels a, b,
-// brightness and fidelity, and solve them on the bulb. Old bulbs are relays
+// brightness and fidelity, and solve them on the light, each on its own
+// calibration (devices.ts). Old bulbs are relays
 // with one channel, on: 1 is on and 0 is off (on at ON_THRESHOLD or more),
 // and show as a 2700 K incandescent when on.
 
 import type { Channels } from "./arclamp.ts";
-import { bulbOutput, type Output } from "./bulb.ts";
+import { SOLVERS, type Device } from "./devices.ts";
 import { LUMENS_PER_BRIGHTNESS, whiteAB, type Lemtone } from "./lemtone.ts";
+import type { Output } from "./solver.ts";
 
 /** arclamp turns an old bulb on when its on channel is at least this (rclamp sink.OnThreshold). */
 export const ON_THRESHOLD = 0.5;
@@ -34,11 +36,17 @@ export function baseType(type: string): string {
 /** The other orientations a light of this type could be turned to (empty if it can't turn). */
 export const orientationsOf = (type: string): string[] => ORIENTATIONS[baseType(type)] ?? [];
 
-/** Rated output in lumens, where it isn't a color bulb's 1000 lm: a 4×1 panel makes 4000 lm. */
-const RATED_LM: Record<string, number> = { "4x1": 4000 };
+/** Which calibration a light of this type solves lemtones on: a color bulb's, a 4×1 panel's; null for an old bulb, which doesn't. */
+export function deviceOf(type: string): Device | null {
+  const base = baseType(type);
+  return base === "br30" ? "bulb" : base === "4x1" ? "panel" : null;
+}
 
-/** The brightest a light of this type is rated for, in brightness (1.0 = 1000 lm): the top of its brightness slider. */
-export const ratedBrightnessOf = (type: string) => (RATED_LM[baseType(type)] ?? 1000) / LUMENS_PER_BRIGHTNESS;
+/** The brightest a light of this type is rated for, in brightness (1.0 = 1000 lm), as its calibration says: the top of its brightness slider. */
+export function ratedBrightnessOf(type: string): number {
+  const device = deviceOf(type);
+  return (device ? SOLVERS[device].model.ratedLm : 1000) / LUMENS_PER_BRIGHTNESS;
+}
 
 /** On/off only: the old bulbs. */
 export const isBinary = (type: string) => baseType(type) === "relay";
@@ -75,18 +83,18 @@ export function lemtoneOf(channels: Channels | undefined, type: string): Lemtone
 }
 
 /**
- * What a light of this type makes of lemtone `t`: for a color bulb, what its
- * solve makes of it (bulb.ts: a color asked for brighter than it can glow
- * comes out paler, or dimmer). Panels have no model yet (their firmware
- * ignores lemtones for now), so they're taken at their word.
+ * What a light of this type makes of lemtone `t`: what its solve makes of it,
+ * on its calibration (a color asked for brighter than it can glow comes out
+ * paler, or dimmer).
  */
 export function madeOf(t: Lemtone, type: string): Output {
-  if (solvesLemtones(type)) return bulbOutput(t);
+  const device = deviceOf(type);
+  if (device) return SOLVERS[device].output(t);
   return { light: t, mode: t.brightness > 0 ? "exact" : "off", desat: 0 };
 }
 
-/** Whether a light of this type makes lemtones as the bulb model solves them (bulb.ts), rather than as asked. */
-export const solvesLemtones = (type: string) => baseType(type) === "br30";
+/** Whether a light of this type makes lemtones as its solve does (solver.ts), rather than as asked. */
+export const solvesLemtones = (type: string) => deviceOf(type) !== null;
 
 /** The light a set of channel values makes, as you'd see it, or null when it's dark. */
 export function seenOf(channels: Channels | undefined, type: string): Lemtone | null {

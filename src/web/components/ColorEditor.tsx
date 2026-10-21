@@ -17,7 +17,10 @@
 // 4000 lm for 4×1 panels (the brighter, if they're mixed).
 // Where the active lights, at their brightness, can't make colors as asked,
 // the wheel and the strip show what they make instead, striped, bordered
-// round what they can. A circle asked for there sits where its light lands,
+// round what they can. With both kinds of light among them (color bulbs and
+// panels each make their own), there are two borders: round what every one
+// of them makes as asked, and round what at least one does, the colors
+// between lightly striped. A circle asked for there sits where its light lands,
 // in its color, with a ghost of it where it's asked for, and it says how far
 // short the lights fall. Circles whose lights land in the same spot are one
 // circle there, counting them all: tapping it makes them all active, and
@@ -25,9 +28,25 @@
 // picks up just it.
 
 import { Fragment, useEffect, useId, useRef, useState, type KeyboardEvent, type PointerEvent, type ReactNode, type RefObject } from "react";
-import type { Output } from "../../shared/bulb.ts";
-import { madeOf, ratedBrightnessOf, solvesLemtones } from "../../shared/fixtures.ts";
-import { abOf, colorName, cssColor, hueChroma, kelvinOf, lemtoneCode, lookOf, lumensText, swatch, whiteAB, type Gamut, type Lemtone, type Vec3 } from "../../shared/lemtone.ts";
+import { DEVICES, SOLVERS, type Device } from "../../shared/devices.ts";
+import { deviceOf, madeOf, ratedBrightnessOf } from "../../shared/fixtures.ts";
+import {
+  abOf,
+  colorName,
+  cssColor,
+  hueChroma,
+  kelvinOf,
+  lemtoneCode,
+  lookOf,
+  LUMENS_PER_BRIGHTNESS,
+  lumensText,
+  swatch,
+  whiteAB,
+  type Gamut,
+  type Lemtone,
+  type Vec3,
+} from "../../shared/lemtone.ts";
+import type { Output } from "../../shared/solver.ts";
 import { paintOnGpu } from "../backdrop.ts";
 import { useGamut } from "../display.ts";
 import { exact } from "../marks.ts";
@@ -103,9 +122,13 @@ export function ColorEditor({ values, onChange, types }: Props) {
   // backdrops show it. They're painted again when that or the gamut changes (lightKey).
   const sample = active.members[0]!;
   const lightAt = (a: number, b: number) => made({ a, b, brightness: common.brightness, fidelity: common.fidelity }, sample);
-  const lightKey = `${common.brightness} ${common.fidelity} ${sample} ${gamut}`;
-  const light = { brightness: common.brightness, solves: !!types && solvesLemtones(types[sample]!) };
-  const limit = limitText(active.members.map((i) => ({ asked: values[i]!, out: made(values[i]!, i) })));
+  // The kinds of light among them (the backdrops' borders: round what every one makes as
+  // asked, and what at least one does), and the one whose light shows past them.
+  const devices = types ? DEVICES.filter((d) => active.members.some((i) => deviceOf(types[i]!) === d)) : [];
+  const light: Light = { brightness: common.brightness, devices, shown: (types && deviceOf(types[sample]!)) ?? devices[0] ?? null };
+  const madeAt = (a: number, b: number) => madeLevel(a, b, light, common.fidelity);
+  const lightKey = `${common.brightness} ${common.fidelity} ${sample} ${devices.join()} ${gamut}`;
+  const limit = limitText(active.members.map((i) => ({ asked: values[i]!, out: made(values[i]!, i), device: types ? deviceOf(types[i]!) : null })));
   // The top of the brightness track: the brightest the active lights are rated for.
   const top = types ? Math.max(...active.members.map((i) => ratedBrightnessOf(types[i]!))) : B_MAX;
 
@@ -126,7 +149,7 @@ export function ColorEditor({ values, onChange, types }: Props) {
     }
     moving.current = null;
   };
-  const picker = { circles, spots, active, gamut, css, lightAt, lightKey, light, onPick: pick, onMove: move, onDrop: drop };
+  const picker = { circles, spots, active, gamut, css, lightAt, madeAt, lightKey, light, onPick: pick, onMove: move, onDrop: drop };
 
   return (
     <div className="color-editor">
@@ -207,8 +230,10 @@ interface PickerProps {
   css: (a: number, b: number) => string;
   /** What the active lights make of a color, which the backdrop shows; painted again when `lightKey` changes. */
   lightAt: (a: number, b: number) => Output;
+  /** How many of the active kinds of light make a color as asked: 2 every one, 1 some, 0 none. */
+  madeAt: (a: number, b: number) => number;
   lightKey: string;
-  /** The same, for the GPU to work out: the active lights' brightness, and whether their bulbs solve lemtones. */
+  /** The same, for the GPU to work out: the active lights' brightness, and the kinds of light among them. */
   light: Light;
   /** Pick up these circles (just one light of them, `alone`), or with none, the active ones. */
   onPick: (picked: Circle[] | null, alone: boolean) => void;
@@ -219,7 +244,7 @@ interface PickerProps {
 /** The colors round a wheel, each circle at its color. */
 function Wheel(props: PickerProps) {
   const canvas = useRef<HTMLCanvasElement>(null);
-  usePaint(canvas, props.lightKey, (c) => paintWheel(c, props.lightAt, props.light, props.gamut));
+  usePaint(canvas, props.lightKey, (c) => paintWheel(c, props.lightAt, props.madeAt, props.light, props.gamut));
   // A color at a place on the wheel (fractions across and down), the other way from wheelPlace, kept inside the rim.
   const colorAt = (x: number, y: number): [number, number] => {
     const dx = x * 2 - 1;
@@ -252,7 +277,7 @@ function Wheel(props: PickerProps) {
  */
 function WhiteStrip(props: PickerProps) {
   const canvas = useRef<HTMLCanvasElement>(null);
-  usePaint(canvas, props.lightKey, (c) => paintWhites(c, props.lightAt, props.light, props.gamut));
+  usePaint(canvas, props.lightKey, (c) => paintWhites(c, props.lightAt, props.madeAt, props.light, props.gamut));
   const colorAt = (x: number, y: number) => whiteAt(round(K_MIN + x * (K_MAX - K_MIN), 50), tintAt(1 - 2 * y));
   const step = (a: number, b: number, key: string, big: boolean): [number, number] | null => {
     const { k, tint } = whiteSpot(a, b);
@@ -535,20 +560,23 @@ const asked = (t: Lemtone): Output => ({ light: t, mode: t.brightness > 0 ? "exa
  * saturation they give up (the most, if it's not the same for all), or, past
  * their brightest, how bright they get. Null when they make it all.
  */
-function limitText(lights: { asked: Lemtone; out: Output }[]): string | null {
+function limitText(lights: { asked: Lemtone; out: Output; device: Device | null }[]): string | null {
   const short = lights.filter((l) => l.out.mode === "desat" || l.out.mode === "clamp");
   if (short.length === 0) return null;
+  // What falls short: color bulbs, panels, or both.
+  const kinds = new Set(short.map((l) => l.device));
+  const what = kinds.size > 1 ? "Light" : kinds.has("panel") ? "Panel" : "Bulb";
   const clamped = short.find((l) => l.out.mode === "clamp");
   if (clamped) {
     const lm = lumensText(clamped.out.light.brightness);
     // A white past its brightest only dims (its tint shifts a touch); a color goes all the way to white.
-    if (isWhite(clamped.asked.a, clamped.asked.b)) return `Dimmed to ${lm}: Bulb cannot reach commanded brightness`;
-    return `Desaturated by 100% and dimmed to ${lm}: Bulb cannot show commanded color`;
+    if (isWhite(clamped.asked.a, clamped.asked.b)) return `Dimmed to ${lm}: ${what} cannot reach commanded brightness`;
+    return `Desaturated by 100% and dimmed to ${lm}: ${what} cannot show commanded color`;
   }
   const most = Math.max(...short.map((l) => l.out.desat));
   const some = short.length < lights.length || short.some((l) => l.out.desat !== most);
   const pct = most < 0.005 ? "<1%" : `${Math.round(most * 100)}%`;
-  return `Desaturated by ${some ? "up to " : ""}${pct}: Bulb cannot show commanded color`;
+  return `Desaturated by ${some ? "up to " : ""}${pct}: ${what} cannot show commanded color`;
 }
 
 /** The values set (exactly, at float32), most first. */
@@ -695,10 +723,24 @@ const BORDER_INK = 0.75;
 const LOOK = { stripeDark: STRIPE_DARK, stripePx: STRIPE_PX, borderPx: BORDER_PX, borderRgb: BORDER_RGB, borderInk: BORDER_INK };
 const WHITES = { kMin: K_MIN, kMax: K_MAX, tint: TINT, tintCurve: TINT_CURVE };
 
-/** What the GPU needs to know about the active lights to paint a backdrop: their brightness, and whether their bulbs solve lemtones (not their fidelity, which its tables leave out). */
+/**
+ * What the GPU needs to know about the active lights to paint a backdrop: their
+ * brightness, the kinds of light among them that solve lemtones, and the one
+ * whose light shows where none make a color as asked (not their fidelity,
+ * which its tables leave out).
+ */
 interface Light {
   brightness: number;
-  solves: boolean;
+  devices: Device[];
+  shown: Device | null;
+}
+
+/** How many of the kinds of light in `light` make (a, b) as asked at its brightness and this fidelity: 2 every one (or there are none), 1 some, 0 none. */
+function madeLevel(a: number, b: number, light: Light, fidelity: number): number {
+  const lm = light.brightness * LUMENS_PER_BRIGHTNESS;
+  if (light.devices.length === 0 || !(lm > 1e-9)) return 2;
+  const n = light.devices.filter((d) => SOLVERS[d].makesExactly(a, b, lm, fidelity)).length;
+  return n === light.devices.length ? 2 : n > 0 ? 1 : 0;
 }
 
 const clamp01 = (v: number) => (v < 0 ? 0 : v > 1 ? 1 : v);
@@ -713,12 +755,20 @@ function toSegment(x: number, y: number, x0: number, y0: number, x1: number, y1:
 /** Which side of the line through (x0, y0)–(x1, y1) (x, y) is on. */
 const sideOf = (x: number, y: number, x0: number, y0: number, x1: number, y1: number) => (x1 - x0) * (y - y0) - (y1 - y0) * (x - x0) > 0;
 
+/** An edge's pieces in each grid cell (up to two: x0, y0, x1, y1 each), in pixels. */
+interface Edge {
+  segs: Float32Array;
+  nsegs: Uint8Array;
+}
+
 /**
  * Paint a picker's backdrop into `img`: each pixel the color asked for there
- * (`colorAt`, by fractions across and down) where the lights make it as
- * asked. Past that, what they make instead (paler), striped, with a border
- * round the edge, outside it, so it never covers a color they make; a pixel
- * the edge crosses is shared out by how much of it is on either side.
+ * (`colorAt`, by fractions across and down) where every kind of light among
+ * the active ones makes it as asked (`madeAt` 2); where only some do (1), the
+ * same, lightly striped; past that, what they make instead (`lightAt`,
+ * paler), striped; with a border round each edge, outside it, so it never
+ * covers a color made as asked; a pixel an edge crosses is shared out by how
+ * much of it is on either side. With one kind of light, the edges are one.
  * `alphaAt` shapes it (0: not drawn); grid points `skip` says no drawn pixel
  * is spread from aren't worked out.
  */
@@ -728,98 +778,135 @@ function paintBackdrop(
   gamut: Gamut,
   colorAt: (x: number, y: number) => [number, number],
   lightAt: (a: number, b: number) => Output,
+  madeAt: (a: number, b: number) => number,
+  two: boolean,
   [gx, gy]: readonly [number, number],
   alphaAt: (x: number, y: number) => number = () => 1,
   skip: (x: number, y: number) => boolean = () => false,
 ) {
   const { width: w, height: h, data } = img;
   const at = (i: number, j: number) => j * gx + i;
-  const makes = (x: number, y: number) => {
-    const m = lightAt(...colorAt(x, y)).mode;
-    return m === "exact" || m === "off";
-  };
+  const made = (x: number, y: number) => madeAt(...colorAt(x, y));
 
-  // At each grid point: whether it's worked out, whether it's made as asked,
-  // and, if not, how far the lights move the color.
+  // At each grid point: whether it's worked out, how many kinds of light make it
+  // as asked, and, if none do, how far the shown one moves the color.
   const live = new Uint8Array(gx * gy);
-  const asked = new Uint8Array(gx * gy);
+  const level = new Uint8Array(gx * gy);
   const shift = new Float32Array(gx * gy * 2);
   for (let j = 0; j < gy; j++) {
     for (let i = 0; i < gx; i++) {
       const [x, y] = [i / (gx - 1), j / (gy - 1)];
       if (skip(x, y)) continue;
       const [a, b] = colorAt(x, y);
-      const out = lightAt(a, b);
       const k = at(i, j);
       live[k] = 1;
-      if (out.mode === "exact" || out.mode === "off") {
-        asked[k] = 1;
-      } else {
+      level[k] = madeAt(a, b);
+      if (level[k] === 0) {
+        const out = lightAt(a, b);
         shift[2 * k] = out.light.a - a;
         shift[2 * k + 1] = out.light.b - b;
       }
     }
   }
 
-  // Where the edge crosses from grid point (i, j) to the next one across
-  // (or down), in pixels; each crossing worked out once.
-  const crossings = new Map<number, [number, number]>();
-  const crossing = (i: number, j: number, down: boolean): [number, number] => {
-    const key = 2 * at(i, j) + (down ? 1 : 0);
-    const known = crossings.get(key);
-    if (known) return known;
-    const from = asked[at(i, j)] === 1;
-    const along = (t: number): [number, number] => (down ? [i / (gx - 1), (j + t) / (gy - 1)] : [(i + t) / (gx - 1), j / (gy - 1)]);
-    let [lo, hi] = [0, 1];
-    for (let s = 0; s < EDGE_STEPS; s++) {
-      const t = (lo + hi) / 2;
-      if (makes(...along(t)) === from) lo = t;
-      else hi = t;
-    }
-    const [x, y] = along((lo + hi) / 2);
-    const p: [number, number] = [x * w, y * h];
-    crossings.set(key, p);
-    return p;
-  };
-  // The edge's segments in each cell (up to two: x0, y0, x1, y1 each).
-  const cells = (gx - 1) * (gy - 1);
-  const segs = new Float32Array(cells * 8);
-  const nsegs = new Uint8Array(cells);
-  for (let j = 0; j < gy - 1; j++) {
-    for (let i = 0; i < gx - 1; i++) {
-      const corners = [at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1)];
-      if (!corners.every((k) => live[k])) continue;
-      const f = corners.map((k) => asked[k]!);
-      // Crossings on the top, right, bottom and left sides.
-      const sides = [
-        f[0] !== f[1] && crossing(i, j, false),
-        f[1] !== f[2] && crossing(i + 1, j, true),
-        f[3] !== f[2] && crossing(i, j + 1, false),
-        f[0] !== f[3] && crossing(i, j, true),
-      ];
-      const on = [0, 1, 2, 3].filter((s) => sides[s]);
-      if (on.length === 0) continue;
-      // Crossed on all four sides: whether the middle is made as asked says which corners are cut off.
-      const pairs =
-        on.length === 2
-          ? [[on[0]!, on[1]!]]
-          : (makes((i + 0.5) / (gx - 1), (j + 0.5) / (gy - 1)) ? 1 : 0) === f[0]
-            ? [
-                [0, 1],
-                [2, 3],
-              ]
-            : [
-                [3, 0],
-                [1, 2],
-              ];
-      const cell = j * (gx - 1) + i;
-      for (const [s0, s1] of pairs) {
-        const [p, q] = [sides[s0!] as [number, number], sides[s1!] as [number, number]];
-        segs.set([p[0], p[1], q[0], q[1]], cell * 8 + nsegs[cell]! * 4);
-        nsegs[cell]!++;
+  /** The edge round what at least `least` (2: every kind of light, 1: at least one) make as asked. */
+  const edgeOf = (least: number): Edge => {
+    const asked = (k: number) => level[k]! >= least;
+    // Where the edge crosses from grid point (i, j) to the next one across
+    // (or down), in pixels; each crossing worked out once.
+    const crossings = new Map<number, [number, number]>();
+    const crossing = (i: number, j: number, down: boolean): [number, number] => {
+      const key = 2 * at(i, j) + (down ? 1 : 0);
+      const known = crossings.get(key);
+      if (known) return known;
+      const from = asked(at(i, j));
+      const along = (t: number): [number, number] => (down ? [i / (gx - 1), (j + t) / (gy - 1)] : [(i + t) / (gx - 1), j / (gy - 1)]);
+      let [lo, hi] = [0, 1];
+      for (let s = 0; s < EDGE_STEPS; s++) {
+        const t = (lo + hi) / 2;
+        if (made(...along(t)) >= least === from) lo = t;
+        else hi = t;
+      }
+      const [x, y] = along((lo + hi) / 2);
+      const p: [number, number] = [x * w, y * h];
+      crossings.set(key, p);
+      return p;
+    };
+    const cells = (gx - 1) * (gy - 1);
+    const segs = new Float32Array(cells * 8);
+    const nsegs = new Uint8Array(cells);
+    for (let j = 0; j < gy - 1; j++) {
+      for (let i = 0; i < gx - 1; i++) {
+        const corners = [at(i, j), at(i + 1, j), at(i + 1, j + 1), at(i, j + 1)];
+        if (!corners.every((k) => live[k])) continue;
+        const f = corners.map(asked);
+        // Crossings on the top, right, bottom and left sides.
+        const sides = [
+          f[0] !== f[1] && crossing(i, j, false),
+          f[1] !== f[2] && crossing(i + 1, j, true),
+          f[3] !== f[2] && crossing(i, j + 1, false),
+          f[0] !== f[3] && crossing(i, j, true),
+        ];
+        const on = [0, 1, 2, 3].filter((s) => sides[s]);
+        if (on.length === 0) continue;
+        // Crossed on all four sides: whether the middle is made as asked says which corners are cut off.
+        const pairs =
+          on.length === 2
+            ? [[on[0]!, on[1]!]]
+            : made((i + 0.5) / (gx - 1), (j + 0.5) / (gy - 1)) >= least === f[0]
+              ? [
+                  [0, 1],
+                  [2, 3],
+                ]
+              : [
+                  [3, 0],
+                  [1, 2],
+                ];
+        const cell = j * (gx - 1) + i;
+        for (const [s0, s1] of pairs) {
+          const [p, q] = [sides[s0!] as [number, number], sides[s1!] as [number, number]];
+          segs.set([p[0], p[1], q[0], q[1]], cell * 8 + nsegs[cell]! * 4);
+          nsegs[cell]!++;
+        }
       }
     }
-  }
+    return { segs, nsegs };
+  };
+  const anyEdge = edgeOf(1);
+  const allEdge = two ? edgeOf(2) : anyEdge;
+
+  /** How far pixel (px, py), in grid cell (gi, gj), is inside an edge (pixels; negative outside it). */
+  const signedTo = ({ segs, nsegs }: Edge, least: number, px: number, py: number, gi: number, gj: number): number => {
+    // Made as asked: as its cell's first corner that no segment in the cell parts it from.
+    const cell = gj * (gx - 1) + gi;
+    let inside = false;
+    for (let c = 0; c < 4; c++) {
+      const [ci, cj] = [gi + (c === 1 || c === 2 ? 1 : 0), gj + (c >= 2 ? 1 : 0)];
+      const [cx, cy] = [(ci / (gx - 1)) * w, (cj / (gy - 1)) * h];
+      let parted = false;
+      for (let s = 0; s < nsegs[cell]! && !parted; s++) {
+        const o = cell * 8 + s * 4;
+        const [x0, y0, x1, y1] = [segs[o]!, segs[o + 1]!, segs[o + 2]!, segs[o + 3]!];
+        parted = sideOf(px, py, x0, y0, x1, y1) !== sideOf(cx, cy, x0, y0, x1, y1);
+      }
+      if (!parted) {
+        inside = level[at(ci, cj)]! >= least;
+        break;
+      }
+    }
+    // How far from the edge (in this cell and those round it; further is past the border).
+    let dist = Infinity;
+    for (let nj = Math.max(0, gj - 1); nj <= Math.min(gy - 2, gj + 1); nj++) {
+      for (let ni = Math.max(0, gi - 1); ni <= Math.min(gx - 2, gi + 1); ni++) {
+        const nc = nj * (gx - 1) + ni;
+        for (let s = 0; s < nsegs[nc]!; s++) {
+          const o = nc * 8 + s * 4;
+          dist = Math.min(dist, toSegment(px, py, segs[o]!, segs[o + 1]!, segs[o + 2]!, segs[o + 3]!));
+        }
+      }
+    }
+    return inside ? dist : -dist;
+  };
 
   const shiftAt = (x: number, y: number): [number, number] => {
     const fx = Math.min(gx - 1 - 1e-9, Math.max(0, x * (gx - 1)));
@@ -846,50 +933,28 @@ function paintBackdrop(
       const [px, py] = [x + 0.5, y + 0.5];
       const gi = Math.min(gx - 2, Math.floor(fx * (gx - 1)));
       const gj = Math.min(gy - 2, Math.floor(fy * (gy - 1)));
-      // Made as asked: as its cell's first corner that no segment in the cell parts it from.
-      const cell = gj * (gx - 1) + gi;
-      let inside = false;
-      for (let c = 0; c < 4; c++) {
-        const [ci, cj] = [gi + (c === 1 || c === 2 ? 1 : 0), gj + (c >= 2 ? 1 : 0)];
-        const [cx, cy] = [(ci / (gx - 1)) * w, (cj / (gy - 1)) * h];
-        let parted = false;
-        for (let s = 0; s < nsegs[cell]! && !parted; s++) {
-          const o = cell * 8 + s * 4;
-          const [x0, y0, x1, y1] = [segs[o]!, segs[o + 1]!, segs[o + 2]!, segs[o + 3]!];
-          parted = sideOf(px, py, x0, y0, x1, y1) !== sideOf(cx, cy, x0, y0, x1, y1);
-        }
-        if (!parted) {
-          inside = asked[at(ci, cj)] === 1;
-          break;
-        }
-      }
-      // How far from the edge (in this cell and those round it; further is past the border).
-      let dist = Infinity;
-      for (let nj = Math.max(0, gj - 1); nj <= Math.min(gy - 2, gj + 1); nj++) {
-        for (let ni = Math.max(0, gi - 1); ni <= Math.min(gx - 2, gi + 1); ni++) {
-          const nc = nj * (gx - 1) + ni;
-          for (let s = 0; s < nsegs[nc]!; s++) {
-            const o = nc * 8 + s * 4;
-            dist = Math.min(dist, toSegment(px, py, segs[o]!, segs[o + 1]!, segs[o + 2]!, segs[o + 3]!));
-          }
-        }
-      }
-      // How much of the pixel is a color made as asked, the border, and past it.
-      const signed = inside ? dist : -dist;
-      const own = clamp01(0.5 + signed);
-      const past = clamp01(0.5 - signed - border);
-      const onBorder = 1 - own - past;
-      let rgb: number[] = own > 0 ? swatch(a, b, gamut).map((c) => c * own) : [0, 0, 0];
-      if (own < 1) {
+      const anyPx = signedTo(anyEdge, 1, px, py, gi, gj);
+      const allPx = two ? signedTo(allEdge, 2, px, py, gi, gj) : anyPx;
+      // How much of the pixel every kind of light makes as asked, how much at least one
+      // does, and how much is each edge's border (outside it: the inner one's, inside the outer).
+      const inAny = clamp01(0.5 + anyPx);
+      const inAll = Math.min(inAny, clamp01(0.5 + allPx));
+      const onAny = clamp01(0.5 - anyPx) - clamp01(0.5 - anyPx - border);
+      const onAll = two ? Math.min(inAny - inAll, clamp01(0.5 - allPx) - clamp01(0.5 - allPx - border)) : 0;
+      const asked = swatch(a, b, gamut);
+      let rgb: number[] = asked.map((c) => c * inAll);
+      if (inAll < 1) {
         const [sa, sb] = shiftAt(fx, fy);
         // Striped at 45°: how much of the pixel is in a darker stripe.
         const u = ((((x + y) / Math.SQRT2) % stripe) + stripe) % stripe;
         const into = u < stripe / 2 ? Math.min(u, stripe / 2 - u) : -Math.min(u - stripe / 2, stripe - u);
-        const shade = 1 - STRIPE_DARK * clamp01(0.5 + into);
+        const dark = clamp01(0.5 + into);
+        // Made by some: as asked, lightly striped. By none: what the shown kind makes instead, striped.
         const made = swatch(a + sa, b + sb, gamut);
         rgb = rgb.map((c, i) => {
-          const under = made[i]! * shade;
-          return c + under * past + (under + (BORDER_RGB[i]! - under) * BORDER_INK) * onBorder;
+          const some = asked[i]! * (1 - 0.5 * STRIPE_DARK * dark);
+          const under = made[i]! * (1 - STRIPE_DARK * dark);
+          return c + some * (inAny - inAll) + under * (1 - inAny) + (BORDER_RGB[i]! - some) * BORDER_INK * onAll + (BORDER_RGB[i]! - under) * BORDER_INK * onAny;
         });
       }
       const i = k * 4;
@@ -906,7 +971,7 @@ function paintBackdrop(
  * height) up and down, at the strip's size (so the stripes stay at 45°); as
  * the lights make them past what they make as asked. On the GPU if it can.
  */
-function paintWhites(c: HTMLCanvasElement, lightAt: (a: number, b: number) => Output, light: Light, gamut: Gamut) {
+function paintWhites(c: HTMLCanvasElement, lightAt: (a: number, b: number) => Output, madeAt: (a: number, b: number) => number, light: Light, gamut: Gamut) {
   const [w, h] = [c.clientWidth || 320, STRIP_H];
   const dpr = Math.min(2, window.devicePixelRatio || 1);
   if (paintOnGpu(c, { kind: "whites", width: w, height: h, dpr, gamut, ...light, whites: WHITES, look: LOOK })) return;
@@ -927,7 +992,7 @@ function paintWhites(c: HTMLCanvasElement, lightAt: (a: number, b: number) => Ou
     const tint = tintAt(1 - 2 * y);
     return [wa + na * tint, wb + nb * tint];
   };
-  paintBackdrop(img, dpr, gamut, colorAt, lightAt, STRIP_GRID);
+  paintBackdrop(img, dpr, gamut, colorAt, lightAt, madeAt, light.devices.length > 1, STRIP_GRID);
   ctx.putImageData(img, 0, 0);
 }
 
@@ -935,7 +1000,7 @@ function paintWhites(c: HTMLCanvasElement, lightAt: (a: number, b: number) => Ou
  * The wheel's colors, softened at the rim so it doesn't look clipped; as the
  * lights make them past what they make as asked. On the GPU if it can.
  */
-function paintWheel(c: HTMLCanvasElement, lightAt: (a: number, b: number) => Output, light: Light, gamut: Gamut) {
+function paintWheel(c: HTMLCanvasElement, lightAt: (a: number, b: number) => Output, madeAt: (a: number, b: number) => number, light: Light, gamut: Gamut) {
   const dpr = Math.min(2, window.devicePixelRatio || 1);
   if (paintOnGpu(c, { kind: "wheel", width: WHEEL, height: WHEEL, dpr, gamut, ...light, whites: WHITES, look: LOOK })) return;
   const size = Math.round(WHEEL * dpr);
@@ -952,6 +1017,8 @@ function paintWheel(c: HTMLCanvasElement, lightAt: (a: number, b: number) => Out
     gamut,
     (x, y) => wheelColor(x * 2 - 1, 1 - y * 2),
     lightAt,
+    madeAt,
+    light.devices.length > 1,
     [WHEEL_GRID, WHEEL_GRID],
     (x, y) => (out(x, y) > 1 ? 0 : Math.min(1, (1 - out(x, y)) * r * 0.9 + 0.1)),
     // Past the rim, but for the points its pixels are spread from.

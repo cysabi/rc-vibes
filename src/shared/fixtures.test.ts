@@ -64,15 +64,25 @@ describe("fixture channels", () => {
     expect(requestedOf({ on: 1 }, "relay")).toBeNull();
   });
 
-  it("shows color bulbs as their solve makes them, and the rest as asked", () => {
+  it("shows color bulbs and panels as their solves make them, each on its own calibration, and old bulbs as asked", () => {
     const red = { a: 0.2, b: 0.1, brightness: 0.4, fidelity: 0 };
-    const seen = seenOf(red, "br30")!;
-    expect(hueChroma(seen.a, seen.b).chroma).toBeLessThan(hueChroma(red.a, red.b).chroma);
-    expect(seen.brightness).toBeCloseTo(0.4, 2);
+    const chroma = (l: { a: number; b: number }) => hueChroma(l.a, l.b).chroma;
+    const bulb = seenOf(red, "br30")!;
+    expect(chroma(bulb)).toBeLessThan(chroma(red));
+    expect(bulb.brightness).toBeCloseTo(0.4, 2);
+    // A panel pales it too, though less: it's brighter.
+    const panel = seenOf(red, "4x1-horizontal")!;
+    expect(chroma(panel)).toBeLessThan(chroma(red));
+    expect(chroma(panel)).toBeGreaterThan(chroma(bulb));
+    // At 2000 lm a bulb gives what it can (700 lm or so); a panel keeps the lumens.
+    expect(seenOf({ ...red, brightness: 2 }, "br30")!.brightness).toBeLessThan(1);
+    expect(seenOf({ ...red, brightness: 2 }, "4x1")!.brightness).toBeCloseTo(2, 2);
     // A color it can make is made as asked.
     expect(seenOf(t, "br30")).toEqual(lemtoneOf(t, "br30"));
-    // Panels have no model yet; old bulbs only switch.
-    expect(seenOf(red, "4x1-horizontal")).toEqual(red);
+    const [wa, wb] = whiteAB(3000);
+    const white = { a: wa, b: wb, brightness: 2.5, fidelity: 1 };
+    expect(seenOf(white, "4x1")).toEqual(lemtoneOf(white, "4x1"));
+    // Old bulbs only switch.
     expect(seenOf({ on: 1 }, "relay")).toEqual(lemtoneOf({ on: 1 }, "relay"));
     expect(seenOf({ ...red, brightness: 0 }, "br30")).toBeNull();
   });

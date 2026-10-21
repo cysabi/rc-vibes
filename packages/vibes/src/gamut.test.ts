@@ -1,7 +1,9 @@
 import { describe, expect, it } from "vitest";
-import { bulbOutput, solve } from "../../../src/shared/bulb.ts";
+import { SOLVERS } from "../../../src/shared/devices.ts";
 import { br30, lemtone, palettes, white } from "./color.ts";
 import { abOf } from "./lemtone.ts";
+
+const { output: bulbOutput, solve } = SOLVERS.bulb;
 
 const exact = (a: number, b: number, lm: number) => solve(a, b, lm, 1).mode === "exact";
 

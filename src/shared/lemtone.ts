@@ -4,9 +4,9 @@
 // A lemtone is a color as OKLab a and b at L = 1 (so color doesn't depend on
 // brightness), a brightness where 1.0 is 1000 lm (a fixed unit, not any
 // light's maximum), and a fidelity: 0 builds pale colors and whites from the
-// RGB LEDs, 1 from the white ones. Each bulb solves this into its own PWM;
-// this converts it for picking and display, and bulb.ts says what light a
-// bulb actually makes of it. The color-space core (OKLab, whites, hue and
+// RGB LEDs, 1 from the white ones. Each light solves this into its own PWM;
+// this converts it for picking and display, and solver.ts says what light a
+// color bulb or a panel actually makes of it (devices.ts). The color-space core (OKLab, whites, hue and
 // chroma) is the sketch library's (packages/vibes), so sketches and vibes
 // agree on every color.
 

@@ -1,5 +1,6 @@
 // Makes src/gamut.table.ts: what a color bulb (br30) makes of each color
-// without paling it, from vibes' port of Walter's solve (src/shared/bulb.ts).
+// without paling it, from vibes' port of Walter's solve (src/shared/solver.ts)
+// on the bulbs' calibration.
 // Run it again if the bulb model changes:
 //   node packages/vibes/scripts/gamut.ts
 //
@@ -10,7 +11,7 @@
 
 import { writeFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
-import { solve } from "../../../src/shared/bulb.ts";
+import { SOLVERS } from "../../../src/shared/devices.ts";
 import { abOf } from "../src/lemtone.ts";
 
 const HUE_STEP = 2.5;
@@ -20,7 +21,7 @@ const LEAST_LM = 1;
 
 const exact = (h: number, c: number, lm: number) => {
   const [a, b] = abOf(h, c);
-  return solve(a, b, lm, 1).mode === "exact";
+  return SOLVERS.bulb.solve(a, b, lm, 1).mode === "exact";
 };
 
 /** The most lumens of hue h and chroma c the bulb makes exactly, by bisection (it's exact below that, not above). */
