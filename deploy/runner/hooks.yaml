@@ -1,0 +1,17 @@
+# What vibes' runner (values.yaml) runs before each job. The runner is
+# privileged and keeps its Nix store across jobs, so it only takes code that's
+# been merged: a push to main. Anything else, such as a fork's pull request
+# with a workflow of its own naming this runner, fails before its first step.
+# GITHUB_* come from GitHub; a workflow can't set them.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: vibes-runner-hooks
+  namespace: arc-runners
+data:
+  job-started.sh: |
+    if [[ $GITHUB_REPOSITORY == "roobscoob/rc-vibes" && $GITHUB_EVENT_NAME == "push" && $GITHUB_REF == "refs/heads/main" ]]; then
+      exit 0
+    fi
+    echo "vibes-runner-set only runs pushes to roobscoob/rc-vibes's main, not $GITHUB_EVENT_NAME on $GITHUB_REPOSITORY $GITHUB_REF" >&2
+    exit 1

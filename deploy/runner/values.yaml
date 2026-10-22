@@ -1,0 +1,47 @@
+# vibes' runner on kokuzo (the deploy workflow's vibes-runner-set): the
+# gha-runner-scale-set chart, installed by hand, as for eepy-runner-set.
+#   kubectl apply -f deploy/runner/hooks.yaml
+#   helm upgrade vibes-runner-set -n arc-runners -f deploy/runner/values.yaml \
+#     oci://ghcr.io/actions/actions-runner-controller-charts/gha-runner-scale-set --version 0.13.0
+# It registers with the token in the vibes-runner-secret Secret, made by hand.
+githubConfigUrl: https://github.com/roobscoob/rc-vibes
+githubConfigSecret: vibes-runner-secret
+maxRunners: 1
+template:
+  spec:
+    containers:
+    - name: runner
+      image: kokuzo.tailc38f.ts.net/actions-runner:2.338.0
+      imagePullPolicy: Always
+      # The image's Nix store, overlaid with one kept on the store volume.
+      command: [/bin/nu, -c]
+      args:
+      - mkdir /nix_lower /cache/upper /cache/work /cache/merged/nix/store; mount -o bind /nix/store /nix_lower; mount -t overlay overlay -o lowerdir=/nix_lower,upperdir=/cache/upper,workdir=/cache/work /cache/merged/nix/store; mount -o bind /cache/merged/nix/store /nix/store; bash /bin/run.sh
+      env:
+      # Refuses every job but a push to main (hooks.yaml). The repo is public:
+      # without it, anyone's pull request could run here.
+      - name: ACTIONS_RUNNER_HOOK_JOB_STARTED
+        value: /hooks/job-started.sh
+      lifecycle:
+        preStop:
+          exec:
+            command: [umount, /cache/merged]
+      securityContext:
+        privileged: true
+      volumeMounts:
+      - name: store
+        mountPath: /cache
+      - name: updog
+        mountPath: /updir
+      - name: hooks
+        mountPath: /hooks
+        readOnly: true
+    volumes:
+    - name: store
+      persistentVolumeClaim:
+        claimName: vibes-runner-nix-store
+    - name: updog
+      emptyDir: {}
+    - name: hooks
+      configMap:
+        name: vibes-runner-hooks
