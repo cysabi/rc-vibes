@@ -46,10 +46,11 @@ import { FLOORS, planExtent, type Floor } from "../floors.ts";
 import { screenGamut, setHdrCanvas, useDisplay, useGamut } from "../display.ts";
 import { CheckIcon, DownloadIcon, FitIcon, MinusIcon, PencilIcon, PlusIcon, RailIcon, TrashIcon, TurnIcon, UndoIcon } from "../icons.tsx";
 import { currentRails, layoutLights, placeLights, type PlacedLight } from "../layout.ts";
+import { ExactLighting } from "../lighting-exact.ts";
 import { HdrLighting } from "../lighting-hdr.ts";
 import { Lighting, REACH_MM, type Renderer, type Source } from "../lighting.ts";
 import { useFrames } from "../live.ts";
-import { useAdminMode } from "../settings.ts";
+import { useAdminMode, useExactLight } from "../settings.ts";
 import { visibility, type Segment } from "../shadows.ts";
 import {
   fitView,
@@ -185,7 +186,12 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
   // The simulated light, if this browser can run it (past white, where the
   // screen and browser show that), with each light's view of the floor
   // (worked out once per spot) and the spots it last drew from.
-  const { gamut, hdr } = useDisplay();
+  // The exact light (lighting-exact.ts), while it's being tried out, is
+  // WebGL only, so it takes over from the light past white.
+  const exact = useExactLight();
+  const display = useDisplay();
+  const { gamut } = display;
+  const hdr = display.hdr && !exact;
   const lighting = useRef<Renderer | null>(null);
   // While the light past white is being set up: no glows meanwhile, it's moments away.
   const lightPending = useRef(false);
@@ -441,7 +447,7 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
     const s = sizeRef.current;
     if (s) sizeCanvases(s.width, s.height);
     dirty.current = true;
-  }, [gamut, hdr]);
+  }, [gamut, hdr, exact]);
 
   useEffect(() => {
     const c = lightCanvas.current!;
@@ -460,7 +466,7 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
         setHdrCanvas(!!made);
       });
     } else {
-      lighting.current = Lighting.create(c);
+      lighting.current = (exact ? ExactLighting : Lighting).create(c);
     }
     return () => {
       gone = true;
@@ -468,7 +474,7 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
       lighting.current?.dispose();
       lighting.current = null;
     };
-  }, [hdr]);
+  }, [hdr, exact]);
 
   // Each frame: move the view along if it's gliding or flying, then (if
   // anything changed) place the plan and grid and draw the lights, together.
@@ -1160,7 +1166,7 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
   const plan = layout.plan;
   return (
     <div ref={wrap} className="map">
-      <canvas key={hdr ? "hdr" : "sdr"} ref={lightCanvas} className={hdr ? "map-light hdr" : "map-light"} aria-hidden="true" />
+      <canvas key={hdr ? "hdr" : exact ? "exact" : "sdr"} ref={lightCanvas} className={hdr ? "map-light hdr" : "map-light"} aria-hidden="true" />
       <div ref={gridEl} className="map-grid" aria-hidden="true" />
       {/* Placed by the draw loop, in step with the canvas. */}
       {plan && <div key={plan.id} ref={planEl} className="floorplan" aria-hidden="true" dangerouslySetInnerHTML={{ __html: plan.svg }} />}

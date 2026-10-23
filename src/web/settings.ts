@@ -36,6 +36,8 @@ function flag(key: string) {
 
 export const [setAdminMode, useAdminMode] = flag("vibes.adminMode");
 export const [setLiveMode, useLiveMode] = flag("vibes.liveMode");
+// The map's light worked out a pixel at a time (lighting-exact.ts), while it's tried out.
+export const [setExactLight, useExactLight] = flag("vibes.exactLight");
 
 const FLOOR_KEY = "vibes.floor";
 

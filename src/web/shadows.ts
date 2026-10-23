@@ -150,7 +150,7 @@ export function bucketsOf(walls: Segment[], grid: Grid, reach: number): { cells:
 }
 
 /** Whether any of `s` is inside the box (Liang–Barsky clipping). */
-function crossesBox(s: Segment, x0: number, y0: number, x1: number, y1: number): boolean {
+export function crossesBox(s: Segment, x0: number, y0: number, x1: number, y1: number): boolean {
   let [lo, hi] = [0, 1];
   const dx = s.x2 - s.x1;
   const dy = s.y2 - s.y1;

@@ -43,7 +43,7 @@ export const STRIDES = [1, 2, 3, 4, 6, 8, 12, 16, 20];
 export const CLEARANCE_MM = 1.5 * CELL_MM;
 const BUCKET_MM = 250;
 // Lists (the walls, and which are in each bucket) go in textures this wide.
-const ROW = 1024;
+export const ROW = 1024;
 
 /** One light (or a third of a panel) as the floor sees it. */
 export interface Source {
@@ -142,7 +142,7 @@ void main() {
   color = vec4(u_flux * e * fade * fade, 1.0);
 }`;
 
-const FULL_VS = `#version 300 es
+export const FULL_VS = `#version 300 es
 out vec2 v_uv;
 void main() {
   vec2 p = vec2(gl_VertexID == 1 ? 3.0 : -1.0, gl_VertexID == 2 ? 3.0 : -1.0);
@@ -153,7 +153,7 @@ void main() {
 // One pass of spreading the bounce: each cell takes a quarter from the cells
 // `u_step` ahead and behind, if no wall is in the way (see reachOf), and
 // otherwise keeps that quarter itself, so no light is lost at a wall.
-const SPREAD_FS = `#version 300 es
+export const SPREAD_FS = `#version 300 es
 precision highp float;
 uniform sampler2D u_light;
 uniform sampler2D u_reach;
@@ -231,7 +231,7 @@ void main() {
   color = vec4(encode(c) + (noise - 0.5) / 255.0, 1.0);
 }`;
 
-interface Target {
+export interface Target {
   texture: WebGLTexture;
   fbo: WebGLFramebuffer;
 }
@@ -458,11 +458,11 @@ export class Lighting implements Renderer {
   }
 }
 
-type Uniforms = Record<string, WebGLUniformLocation | null>;
+export type Uniforms = Record<string, WebGLUniformLocation | null>;
 
-const same = (a: Float32Array, b: Float32Array) => a.length === b.length && a.every((v, i) => v === b[i]);
+export const same = (a: Float32Array, b: Float32Array) => a.length === b.length && a.every((v, i) => v === b[i]);
 
-function program(gl: WebGL2RenderingContext, vs: string, fs: string, uniforms: string[]): { program: WebGLProgram; u: Uniforms } {
+export function program(gl: WebGL2RenderingContext, vs: string, fs: string, uniforms: string[]): { program: WebGLProgram; u: Uniforms } {
   const p = gl.createProgram()!;
   for (const [type, src] of [
     [gl.VERTEX_SHADER, vs],
@@ -480,11 +480,11 @@ function program(gl: WebGL2RenderingContext, vs: string, fs: string, uniforms: s
 }
 
 /** A float buffer to draw light into and read it back from. */
-function target(gl: WebGL2RenderingContext): Target {
+export function target(gl: WebGL2RenderingContext): Target {
   return { texture: gl.createTexture()!, fbo: gl.createFramebuffer()! };
 }
 
-function size(gl: WebGL2RenderingContext, t: Target, width: number, height: number) {
+export function size(gl: WebGL2RenderingContext, t: Target, width: number, height: number) {
   gl.bindTexture(gl.TEXTURE_2D, t.texture);
   gl.texImage2D(gl.TEXTURE_2D, 0, gl.RGBA16F, width, height, 0, gl.RGBA, gl.HALF_FLOAT, null);
   gl.texParameteri(gl.TEXTURE_2D, gl.TEXTURE_MIN_FILTER, gl.LINEAR);
@@ -496,9 +496,9 @@ function size(gl: WebGL2RenderingContext, t: Target, width: number, height: numb
 }
 
 /** The walls (u_segs), the buckets (u_cells, w × h) and their lists (u_list), as textures for the screen pass. */
-type WallTextures = [WebGLTexture, WebGLTexture, WebGLTexture];
+export type WallTextures = [WebGLTexture, WebGLTexture, WebGLTexture];
 
-function wallTextures(gl: WebGL2RenderingContext, segs: Float32Array, cells: Int32Array, w: number, h: number, list: Int32Array): WallTextures {
+export function wallTextures(gl: WebGL2RenderingContext, segs: Float32Array, cells: Int32Array, w: number, h: number, list: Int32Array): WallTextures {
   const rows = (n: number) => Math.max(1, Math.ceil(n / ROW));
   // Whole rows of `per` numbers to an item.
   const padded = <T extends Float32Array | Int32Array>(a: T, per: number): T => {
@@ -521,7 +521,7 @@ function wallTextures(gl: WebGL2RenderingContext, segs: Float32Array, cells: Int
   ];
 }
 
-function drop(gl: WebGL2RenderingContext, t: Target) {
+export function drop(gl: WebGL2RenderingContext, t: Target) {
   gl.deleteTexture(t.texture);
   gl.deleteFramebuffer(t.fbo);
 }
