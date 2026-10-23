@@ -10,10 +10,37 @@
 // rest keeps its state), and update() is taken from the entry each time it's
 // updated (the box's Vite has the entry accept its updates, and hand them
 // here as __vibesNext).
+//
+// arclamp's udp is here too, as far as the preview can have it: the socket a
+// sketch binds gets what the panel posts (its params, as packets, as vibes
+// sends them in the room), and sends go nowhere. What the sketch declares as
+// params (the library keeps them on globalThis) is told after each load.
 
 import { ESModulesEvaluator, ModuleRunner } from "vite/module-runner";
+import type { ParamSpec } from "../../shared/params.ts";
 
 const scope = self as unknown as DedicatedWorkerGlobalScope & Record<string, unknown>;
+
+const inbox: string[] = [];
+scope.udp = {
+  bind(opts: { port?: number } = {}) {
+    return {
+      key: 0,
+      local: `0.0.0.0:${opts.port ?? 0}`,
+      recv: () => inbox.shift() ?? null,
+      drain: () => inbox.splice(0),
+      send() {},
+      stats: () => ({ recv: 0, dropped: 0, queued: inbox.length }),
+      close() {},
+    };
+  },
+};
+
+/** What the sketch declares as params, as the library has registered them. */
+function declared(): ParamSpec[] {
+  const r = scope.__vibesParams as { declared?: Record<string, ParamSpec> } | undefined;
+  return r?.declared ? Object.values(r.declared) : [];
+}
 
 /** Longer than this, an update() stops the preview: arclamp would kill it too. */
 const UPDATE_LIMIT_MS = 250;
@@ -25,15 +52,20 @@ export type ToSketch =
   | { type: "load"; script: string }
   | { type: "load-modules"; entry: string }
   | { type: "hmr"; payload: Payload }
-  | { type: "tick"; seq: number; prev: unknown; now: number; initial: number };
+  | { type: "tick"; seq: number; prev: unknown; now: number; initial: number }
+  /** Packets for the sketch's udp, as vibes sends them in the room. */
+  | { type: "udp"; packets: string[] };
 export type FromSketch =
   | { type: "loaded" }
+  /** What the sketch declares as params, after each load or update. */
+  | { type: "params"; specs: ParamSpec[] }
   | { type: "out"; seq: number; out: unknown }
   | { type: "log"; level: "log" | "warn" | "error"; text: string }
   | { type: "hmr"; payload: unknown }
   | { type: "error"; seq?: number; message: string };
 
 const reply = (m: FromSketch) => scope.postMessage(m);
+const tellParams = () => reply({ type: "params", specs: declared() });
 
 const show = (v: unknown) => {
   if (typeof v === "string") return v;
@@ -67,6 +99,7 @@ async function loadModules(from: string) {
   scope.__vibesNext = (next: { update?: unknown }) => {
     try {
       update = updateOf(next);
+      tellParams();
     } catch (err) {
       reply({ type: "log", level: "error", text: `Couldn't update: ${message(err)}` });
     }
@@ -95,6 +128,7 @@ async function loadModules(from: string) {
     new ESModulesEvaluator(),
   );
   update = updateOf(await runner.import(entry));
+  tellParams();
 }
 
 /** Everything run again from the entry (what Vite asks for when an update can't be applied in place). */
@@ -103,6 +137,7 @@ async function reloadModules() {
   runner.clearCache();
   try {
     update = updateOf(await runner.import(entry));
+    tellParams();
   } catch (err) {
     reply({ type: "log", level: "error", text: `Couldn't reload: ${message(err)}` });
   }
@@ -110,6 +145,10 @@ async function reloadModules() {
 
 scope.onmessage = (e: MessageEvent<ToSketch>) => {
   const m = e.data;
+  if (m.type === "udp") {
+    inbox.push(...m.packets);
+    return;
+  }
   if (m.type === "load") {
     try {
       // Indirect eval: global scope, not strict, like a script tag.
@@ -117,6 +156,7 @@ scope.onmessage = (e: MessageEvent<ToSketch>) => {
       if (typeof scope.update !== "function") throw new Error("the script doesn't define an update() function");
       update = scope.update as Update;
       reply({ type: "loaded" });
+      tellParams();
     } catch (err) {
       reply({ type: "error", message: message(err) });
     }

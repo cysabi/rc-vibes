@@ -571,6 +571,11 @@ nix build .#boxImageLocal && docker load < result   # then: docker tag <loaded i
 pnpm build:box   # just the extension and its preview, into box/dist
 ```
 
+Without a box or arclamp, the editor's Sketch panel runs as a page at
+http://localhost:5173/preview/ (`pnpm dev:web`): `dev/sketch/main.ts`, built
+as the builder builds it, on the real room if `dev/lights.json` has been
+saved from vibes' `/api/lights` (src/web/preview/dev.tsx).
+
 ## To confirm
 
 - RC OAuth endpoints: `https://www.recurse.com/oauth/authorize`,

@@ -1,6 +1,9 @@
+import { statSync } from "node:fs";
+import path from "node:path";
 import { gzipSync } from "node:zlib";
 import react from "@vitejs/plugin-react";
-import { defineConfig, type Plugin } from "vite";
+import { build, defineConfig, type Plugin } from "vite";
+import { UPDATE_FOOTER } from "./src/shared/sketch-plan.ts";
 import { makeCutoffs, pack } from "./src/web/cutoffs.ts";
 
 const server = `http://127.0.0.1:${process.env.PORT ?? "8787"}`;
@@ -37,9 +40,59 @@ function cutoffs(): Plugin {
   };
 }
 
+/**
+ * The preview panel outside VS Code (src/web/preview/index.html), served what
+ * the extension would send it: a room at /dev/layout (dev/room.ts: the real
+ * one from dev/lights.json, else a made-up one), and dev/sketch/main.ts at
+ * /dev/sketch.js, built as the builder builds it (one script, its update()
+ * made global), again when it has changed. Served only.
+ */
+function previewPage(): Plugin {
+  const sketch = path.resolve("dev/sketch/main.ts");
+  let built: { at: number; script: string } | null = null;
+  async function script(): Promise<string> {
+    const at = statSync(sketch).mtimeMs;
+    if (built?.at === at) return built.script;
+    const out = await build({
+      configFile: false,
+      root: path.dirname(sketch),
+      logLevel: "warn",
+      build: { write: false, minify: false, target: "es2022", lib: { entry: sketch, formats: ["iife"], name: "__sketch", fileName: () => "sketch.js" }, rolldownOptions: { output: { footer: UPDATE_FOOTER } } },
+    });
+    const chunk = (Array.isArray(out) ? out : [out]).flatMap((o) => (o as { output: { type: string; code?: string }[] }).output).find((o) => o.type === "chunk");
+    if (!chunk?.code) throw new Error("Vite made no script");
+    built = { at, script: chunk.code };
+    return built.script;
+  }
+  return {
+    name: "vibes:preview-page",
+    async configureServer(dev) {
+      // Only when serving, and by a path the bundler can't follow: dev/ isn't
+      // among the image's sources (flake.nix), so a build must never look for it.
+      const { loadRoom } = (await import(/* @vite-ignore */ new URL("./dev/room.ts", import.meta.url).href)) as typeof import("./dev/room.ts");
+      dev.middlewares.use("/dev/layout", (_req, res) => {
+        res.setHeader("Content-Type", "application/json");
+        res.end(JSON.stringify({ ...loadRoom(), changed: 0 }));
+      });
+      dev.middlewares.use("/dev/sketch.js", (_req, res) => {
+        script().then(
+          (code) => {
+            res.setHeader("Content-Type", "text/javascript");
+            res.end(code);
+          },
+          (err: Error) => {
+            res.statusCode = 500;
+            res.end(err.message);
+          },
+        );
+      });
+    },
+  };
+}
+
 export default defineConfig({
   root: "src/web",
-  plugins: [react(), cutoffs()],
+  plugins: [react(), cutoffs(), previewPage()],
   build: { outDir: "../../dist/web", emptyOutDir: true },
   server: {
     port: 5173,

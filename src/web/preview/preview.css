@@ -43,3 +43,36 @@ body {
 .preview-map.selecting .map-scrim {
   opacity: 1;
 }
+
+/* The sketch's params, as knobs in the top right, over the map. */
+.preview-knobs {
+  position: fixed;
+  top: var(--inset-top, 10px);
+  right: var(--inset-right, 10px);
+  z-index: 50;
+  display: grid;
+  gap: 10px;
+  width: 240px;
+  max-height: calc(100% - 60px);
+  overflow: auto;
+  padding: 12px 14px;
+  background: var(--glass);
+  border: 1px solid var(--edge);
+  border-radius: 12px;
+  backdrop-filter: blur(12px);
+}
+
+/* Easier to catch than the room's sliders: a taller track, and room around each. */
+.preview-knobs .slider {
+  padding: 4px 0;
+}
+
+.preview-knobs .slider-track {
+  height: 18px;
+}
+
+.preview-knobs .slider-thumb {
+  width: 24px;
+  height: 24px;
+  margin: -12px 0 0 -12px;
+}

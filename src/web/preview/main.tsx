@@ -7,9 +7,11 @@
 //   pnpm build:box
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
+import { paramText } from "../../shared/params.ts";
 import type { Lights } from "../../shared/vibes.ts";
+import { Slider } from "../components/Slider.tsx";
 import { FramesProvider, type FrameSource } from "../live.ts";
 import { PreviewMap } from "./PreviewMap.tsx";
 import type { FromPreview, SketchSource, ToPreview } from "./protocol.ts";
@@ -85,8 +87,43 @@ function Preview() {
     <QueryClientProvider client={queryClient}>
       <FramesProvider value={runner ?? NO_FRAMES}>
         <PreviewMap layout={layout} />
+        {runner && <Knobs runner={runner} />}
       </FramesProvider>
     </QueryClientProvider>
+  );
+}
+
+/**
+ * The sketch's params as knobs over the map, one slider each, setting the
+ * value for every light: the preview's own values, not the room's, sent to
+ * the sketch the way vibes sends them in the room.
+ */
+function Knobs({ runner }: { runner: SketchRunner }) {
+  useSyncExternalStore(runner.watch, () => runner.version);
+  if (runner.params.length === 0) return null;
+  return (
+    // Its own pointer events: a drag that misses a track mustn't pan or select on the map under it.
+    <div className="preview-knobs" onPointerDown={(e) => e.stopPropagation()}>
+      {runner.params.map((spec) => {
+        const value = runner.values[spec.name]?.all ?? spec.default;
+        const set = (v: number) => runner.setParam(spec.name, { all: v });
+        return (
+          <Slider
+            key={spec.name}
+            label={spec.label}
+            value={value}
+            min={spec.min}
+            max={spec.max}
+            step={spec.step}
+            track="linear-gradient(90deg, rgb(255 255 255 / 0.06), rgb(255 255 255 / 0.22))"
+            display={paramText(value, spec.step)}
+            onChange={set}
+            onCommit={set}
+            marks={[{ at: spec.default, title: `Default: ${paramText(spec.default, spec.step)}` }]}
+          />
+        );
+      })}
+    </div>
   );
 }
 
