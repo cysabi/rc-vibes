@@ -185,6 +185,24 @@ export interface Lights extends LightsResponse {
 /** Where a light is: free on a floor, or hanging on a rail (its coords follow from the rail). */
 export type Spot = { coords: Coords } | { rail: RailSpot };
 
+/** Where a streetview camera stood on the plan, and which way it looked. */
+export interface CameraView {
+  floor: number;
+  mm_x: number;
+  mm_y: number;
+  /** The way it looks, in degrees clockwise from the plan's +x (the plan's y runs down, as on screen). */
+  yaw: number;
+  /** How wide it sees, in degrees. */
+  hfov: number;
+}
+
+/** A place you can see the room from, photographed one bulb channel at a time. */
+export interface StreetView extends CameraView {
+  id: string;
+  /** Who last moved it in vibes; null while it's where its photographs put it. */
+  by: Person | null;
+}
+
 /** A light put somewhere. Coords null takes it off the map. */
 export type Placement = { id: number; coords: Coords | null } | { id: number; rail: RailSpot };
 
@@ -294,7 +312,8 @@ export type ActivityAction =
   | "lights.move"
   | "lights.turn"
   | "lights.tag"
-  | "rails.change";
+  | "rails.change"
+  | "streetview.move";
 
 export interface ActivityEntry {
   id: number;

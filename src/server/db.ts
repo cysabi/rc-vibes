@@ -5,7 +5,7 @@
 import type { ParamSpec, ParamTable } from "../shared/params.ts";
 import { DatabaseSync } from "node:sqlite";
 import type { RailShape } from "../shared/rails.ts";
-import type { ActivityAction, ActivityEntry, Me, Person, Spot } from "../shared/vibes.ts";
+import type { ActivityAction, ActivityEntry, CameraView, Me, Person, Spot } from "../shared/vibes.ts";
 
 interface ActivityRow {
   id: number;
@@ -148,6 +148,19 @@ export function openDb(path: string) {
       script_hash TEXT NOT NULL,
       lights TEXT NOT NULL
     );
+    -- Streetview cameras moved in vibes, over where their photographs put
+    -- them (streetview.ts): yaw clockwise from the plan's +x, both in degrees.
+    CREATE TABLE IF NOT EXISTS camera_views (
+      id TEXT PRIMARY KEY,
+      floor INTEGER NOT NULL,
+      mm_x REAL NOT NULL,
+      mm_y REAL NOT NULL,
+      yaw REAL NOT NULL,
+      hfov REAL NOT NULL,
+      by_id TEXT NOT NULL,
+      by_name TEXT NOT NULL,
+      at TEXT NOT NULL
+    );
   `);
 
   const placementColumns = db.prepare("PRAGMA table_info(placements)").all() as { name: string }[];
@@ -195,6 +208,13 @@ export function openDb(path: string) {
   const upsertType = db.prepare(`
     INSERT INTO light_types (light_id, type, by_id, by_name, at) VALUES (?, ?, ?, ?, ?)
     ON CONFLICT (light_id) DO UPDATE SET type = excluded.type, by_id = excluded.by_id, by_name = excluded.by_name, at = excluded.at
+  `);
+  const selectCameraViews = db.prepare("SELECT * FROM camera_views");
+  const upsertCameraView = db.prepare(`
+    INSERT INTO camera_views (id, floor, mm_x, mm_y, yaw, hfov, by_id, by_name, at) VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT (id) DO UPDATE SET
+      floor = excluded.floor, mm_x = excluded.mm_x, mm_y = excluded.mm_y, yaw = excluded.yaw, hfov = excluded.hfov,
+      by_id = excluded.by_id, by_name = excluded.by_name, at = excluded.at
   `);
   const selectTags = db.prepare("SELECT light_id, tags FROM light_tags");
   const upsertTags = db.prepare(`
@@ -256,6 +276,27 @@ export function openDb(path: string) {
   }
 
   return {
+    /** Streetview cameras moved in vibes, by id, and who moved each last. */
+    cameraViews(): Map<string, { view: CameraView; by: Person }> {
+      const rows = selectCameraViews.all() as {
+        id: string;
+        floor: number;
+        mm_x: number;
+        mm_y: number;
+        yaw: number;
+        hfov: number;
+        by_id: string;
+        by_name: string;
+      }[];
+      return new Map(
+        rows.map((r) => [r.id, { view: { floor: r.floor, mm_x: r.mm_x, mm_y: r.mm_y, yaw: r.yaw, hfov: r.hfov }, by: { id: r.by_id, name: r.by_name } }]),
+      );
+    },
+
+    setCameraView(id: string, v: CameraView, by: Person) {
+      upsertCameraView.run(id, v.floor, v.mm_x, v.mm_y, v.yaw, v.hfov, by.id, by.name, new Date().toISOString());
+    },
+
     /** Positions set in vibes, by light id. Null means deliberately unplaced. */
     placements(): Map<number, Spot | null> {
       const rows = selectPlacements.all() as {

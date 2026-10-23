@@ -24,6 +24,7 @@ import { applyEdits, lightsFile } from "./lights.ts";
 import type { SceneFeedSource } from "./scene-feed.ts";
 import { createShaders, Refused, shaderRoutes } from "./shaders.ts";
 import type { StreamRelay } from "./stream.ts";
+import { streetviewRoutes } from "./streetview.ts";
 
 // A browser this far behind on the light stream skips frames until it
 // catches up, rather than queueing them in memory.
@@ -188,6 +189,8 @@ export function apiRoutes({ config, arclamp, db, relay, origins, lights, feed, s
   // Shaders, by vibes' keys: muted, masked, reordered, taken out.
   const shaders = createShaders({ config, arclamp, db, instances });
   api.route("/", shaderRoutes(shaders));
+  // The room photographed from a few places, to see it lit as it is now.
+  if (config.roomstageDir) api.route("/streetview", streetviewRoutes(config.roomstageDir, db));
 
   /** Room tone, merged into arclamp's, and noted in the history (a drag's run of changes as one). */
   async function setRoomtone(lights: Record<string, Record<string, number>>, user: Me, code?: string, undo?: boolean) {

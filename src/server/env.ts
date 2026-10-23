@@ -35,6 +35,8 @@ const schema = z.object({
   BOX_POOL: z.coerce.number().int().min(0).default(2),
   BOX_HOMES: z.string().min(1).optional(),
   BOX_HOMES_MOUNT: z.string().min(1).optional(),
+  // Streetview's photographs: <dir>/<camera>/build (see streetview.ts). Unset, there's no streetview.
+  ROOMSTAGE_DIR: z.string().min(1).optional(),
 });
 
 export interface SketchesConfig {
@@ -87,6 +89,8 @@ export interface Config {
   shaderUrl: string | null;
   /** Sketches and their boxes, or null while they're off (SKETCHES=0). */
   sketches: SketchesConfig | null;
+  /** Where streetview's photographs are (ROOMSTAGE_DIR), or null for no streetview. */
+  roomstageDir: string | null;
 }
 
 /** Where shaders reach vibes: as given; else the main public address, in production; else this machine, if arclamp's on it too; else nowhere. */
@@ -165,5 +169,6 @@ export function loadConfig(source: Record<string, string | undefined> = process.
     production,
     shaderUrl: shaderUrlOf(env.VIBES_SHADER_URL, production ? env.PUBLIC_URL[0]! : null, env.ARCLAMP_BASE_URL, env.PORT),
     sketches,
+    roomstageDir: env.ROOMSTAGE_DIR ? path.resolve(env.ROOMSTAGE_DIR) : null,
   };
 }
