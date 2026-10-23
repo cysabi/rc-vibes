@@ -7,7 +7,7 @@ import type { Me, StreetView } from "../shared/vibes.ts";
 import { handleError } from "./api.ts";
 import type { AuthEnv } from "./auth.ts";
 import { openDb, type Db } from "./db.ts";
-import { streetviewRoutes } from "./streetview.ts";
+import { streetviewPublicFiles, streetviewRoutes } from "./streetview.ts";
 
 const ada: Me = { id: "rc:1", name: "Ada", dev: false };
 const PHOTOS = { floor: 4, mm_x: 1000, mm_y: 2000, yaw: 90, hfov: 70 };
@@ -33,8 +33,11 @@ beforeEach(() => {
   build("44", { "manifest.json": "{}" });
   fs.mkdirSync(path.join(dir, "raw-only", "raw"), { recursive: true });
   fs.writeFileSync(path.join(dir, "secret.txt"), "not served");
+  // As in api.ts: the public maps, then the login (here, anyone but "anon"), then the rest.
   app = new Hono<AuthEnv>()
+    .use("/streetview/*", streetviewPublicFiles(dir))
     .use("*", async (c, next) => {
+      if (c.req.header("x-anon")) return c.json({ error: "log in", code: "unauthenticated" }, 401);
       c.set("user", ada);
       await next();
     })
@@ -71,10 +74,23 @@ describe("streetview", () => {
 
   it("keeps a map for good when it's asked for by its build, and checks it otherwise", async () => {
     const cache = async (q: string) => (await send("GET", `/streetview/30/2040/av1-WW.obu${q}`)).headers.get("cache-control");
-    expect(await cache(`?v=${encodeURIComponent(MADE)}`)).toBe("private, max-age=31536000, immutable");
+    expect(await cache(`?v=${encodeURIComponent(MADE)}`)).toBe("public, max-age=31536000, immutable");
     expect(await cache("?v=an-older-build")).toBe("private, no-cache");
     expect(await cache("")).toBe("private, no-cache");
     expect((await send("GET", "/streetview/30/manifest.json")).headers.get("cache-control")).toBe("private, no-cache");
+  });
+
+  it("gives a map to anyone when it's asked for by its build, and nothing else without a login", async () => {
+    const anon = (p: string) => app.request(p, { headers: { "x-anon": "1" } });
+    const map = await anon(`/streetview/30/2040/av1-WW.obu?v=${encodeURIComponent(MADE)}`);
+    expect(map.status).toBe(200);
+    expect(await map.text()).toBe("frames");
+    for (const p of ["/streetview", "/streetview/30/manifest.json", "/streetview/30/2040/av1-WW.obu?v=an-older-build", "/streetview/30/2040/av1-WW.obu"]) {
+      expect((await anon(p)).status, p).toBe(401);
+    }
+    // A build's id opens only that build's files.
+    expect((await anon(`/streetview/30/..%2F..%2Fsecret.txt?v=${encodeURIComponent(MADE)}`)).status).toBe(404);
+    expect((await anon(`/streetview/44/manifest.json?v=${encodeURIComponent(MADE)}`)).status).toBe(401);
   });
 
   it("serves nothing outside a build", async () => {

@@ -24,7 +24,7 @@ import { applyEdits, lightsFile } from "./lights.ts";
 import type { SceneFeedSource } from "./scene-feed.ts";
 import { createShaders, Refused, shaderRoutes } from "./shaders.ts";
 import type { StreamRelay } from "./stream.ts";
-import { streetviewRoutes } from "./streetview.ts";
+import { streetviewPublicFiles, streetviewRoutes } from "./streetview.ts";
 
 // A browser this far behind on the light stream skips frames until it
 // catches up, rather than queueing them in memory.
@@ -161,6 +161,10 @@ export function apiRoutes({ config, arclamp, db, relay, origins, lights, feed, s
     }
     await next();
   });
+  // Streetview's maps, by their build's id, to anyone, so Cloudflare can keep
+  // them: before CORS, whose Vary: Origin a shared cache shouldn't see (the
+  // page fetches them from its own address).
+  if (config.roomstageDir) api.use("/streetview/*", streetviewPublicFiles(config.roomstageDir));
   // A page at another of vibes' addresses reaches the API at this one
   // (LoginOptions.api), with a token in place of a cookie: its browser may.
   api.use("*", cors({ origin: (o) => (origins.includes(o) ? o : null), allowHeaders: ["Authorization", "Content-Type"], allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE"], maxAge: 7200 }));

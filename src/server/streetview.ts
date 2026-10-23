@@ -13,7 +13,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
 import { zValidator } from "@hono/zod-validator";
-import { Hono, type Context } from "hono";
+import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { z } from "zod";
 import type { CameraView, StreetView } from "../shared/vibes.ts";
 import type { AuthEnv } from "./auth.ts";
@@ -85,7 +85,8 @@ async function buildIdOf(dir: string, id: string): Promise<string | null> {
 
 /**
  * One file of a build. Asked for by the build's id (?v=, as the browser does
- * for the maps), it's kept for good: a new build is a new id, so a new URL.
+ * for the maps), it's public and kept for good, by browsers and by
+ * Cloudflare's cache in front of vibes: a new build is a new id, so a new URL.
  * Otherwise (the manifest, which says the id) it's checked each time.
  */
 async function sendFile(c: Context, dir: string, id: string, file: string) {
@@ -103,12 +104,37 @@ async function sendFile(c: Context, dir: string, id: string, file: string) {
   const etag = `W/"${st.size.toString(36)}-${Math.floor(st.mtimeMs).toString(36)}"`;
   const v = c.req.query("v");
   const current = v !== undefined && v === (await buildIdOf(dir, id));
-  const headers = { ETag: etag, "Cache-Control": current ? "private, max-age=31536000, immutable" : "private, no-cache" };
+  const headers = { ETag: etag, "Cache-Control": current ? "public, max-age=31536000, immutable" : "private, no-cache" };
   if (c.req.header("if-none-match") === etag) return c.body(null, 304, headers);
   const body = Readable.toWeb(fs.createReadStream(p)) as ReadableStream;
   return new Response(body, {
     headers: { ...headers, "Content-Type": TYPES[path.extname(p)] ?? "application/octet-stream", "Content-Length": String(st.size) },
   });
+}
+
+/** A request's camera and file, from /streetview/<id>/<file>; null if it isn't one, or can't be read. */
+function fileOf(c: Context): { id: string; file: string } | null {
+  const m = /\/streetview\/([^/]+)\/(.+)$/.exec(c.req.path);
+  if (!m) return null;
+  try {
+    return { id: decodeURIComponent(m[1]!), file: decodeURIComponent(m[2]!) };
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * The maps, to anyone, when asked for by their build's id (so Cloudflare can
+ * keep them); goes before the login. Anything else, the manifest or an old
+ * build's file, goes on to it.
+ */
+export function streetviewPublicFiles(dir: string): MiddlewareHandler {
+  return async (c, next) => {
+    const f = c.req.method === "GET" ? fileOf(c) : null;
+    const v = c.req.query("v");
+    if (!f || v === undefined || !ID.test(f.id) || v !== (await buildIdOf(dir, f.id))) return next();
+    return sendFile(c, dir, f.id, f.file);
+  };
 }
 
 export function streetviewRoutes(dir: string, db: Db) {
@@ -125,10 +151,8 @@ export function streetviewRoutes(dir: string, db: Db) {
       return c.body(null, 204);
     })
 
-    .get("/:id/*", (c) => {
-      const id = c.req.param("id");
-      const prefix = `/streetview/${id}/`;
-      const at = c.req.path.indexOf(prefix);
-      return sendFile(c, dir, id, at < 0 ? "" : decodeURIComponent(c.req.path.slice(at + prefix.length)));
+    .get("/:id/*", async (c) => {
+      const f = fileOf(c);
+      return f ? sendFile(c, dir, f.id, f.file) : c.json({ error: "no such file", code: "not_found" }, 404);
     });
 }
