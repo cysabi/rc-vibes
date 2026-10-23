@@ -325,9 +325,11 @@ export async function loadBasis(
   const { encoding: e, hw } = pick;
   const names = Object.keys(e.streams);
   const data = new Map<string, Uint8Array>();
+  // Named by the build they're from, so the browser keeps them without asking again (streetview.ts).
+  const version = `?v=${encodeURIComponent(m.made)}`;
   await Promise.all(
     names.map(async (n) => {
-      const res = await fetch(base + e.streams[n]!.file, { signal });
+      const res = await fetch(base + e.streams[n]!.file + version, { signal });
       if (!res.ok) throw new Error(`couldn't fetch ${e.streams[n]!.file} (${res.status})`);
       data.set(n, new Uint8Array(await res.arrayBuffer()));
     }),

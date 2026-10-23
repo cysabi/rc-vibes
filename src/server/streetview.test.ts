@@ -11,6 +11,7 @@ import { streetviewRoutes } from "./streetview.ts";
 
 const ada: Me = { id: "rc:1", name: "Ada", dev: false };
 const PHOTOS = { floor: 4, mm_x: 1000, mm_y: 2000, yaw: 90, hfov: 70 };
+const MADE = "2026-10-23T00:40:00-0400";
 
 let dir: string;
 let db: Db;
@@ -27,7 +28,7 @@ function build(id: string, files: Record<string, string>) {
 beforeEach(() => {
   dir = fs.mkdtempSync(path.join(os.tmpdir(), "roomstage-"));
   db = openDb(":memory:");
-  build("30", { "manifest.json": "{}", "view.json": JSON.stringify(PHOTOS), "2040/av1-WW.obu": "frames" });
+  build("30", { "manifest.json": JSON.stringify({ made: MADE }), "view.json": JSON.stringify(PHOTOS), "2040/av1-WW.obu": "frames" });
   // A build with no view.json yet, and a folder that isn't a build.
   build("44", { "manifest.json": "{}" });
   fs.mkdirSync(path.join(dir, "raw-only", "raw"), { recursive: true });
@@ -66,6 +67,14 @@ describe("streetview", () => {
     expect(await res.text()).toBe("frames");
     const again = await app.request("/streetview/30/2040/av1-WW.obu", { headers: { "if-none-match": res.headers.get("etag")! } });
     expect(again.status).toBe(304);
+  });
+
+  it("keeps a map for good when it's asked for by its build, and checks it otherwise", async () => {
+    const cache = async (q: string) => (await send("GET", `/streetview/30/2040/av1-WW.obu${q}`)).headers.get("cache-control");
+    expect(await cache(`?v=${encodeURIComponent(MADE)}`)).toBe("private, max-age=31536000, immutable");
+    expect(await cache("?v=an-older-build")).toBe("private, no-cache");
+    expect(await cache("")).toBe("private, no-cache");
+    expect((await send("GET", "/streetview/30/manifest.json")).headers.get("cache-control")).toBe("private, no-cache");
   });
 
   it("serves nothing outside a build", async () => {

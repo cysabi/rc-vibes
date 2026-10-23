@@ -66,7 +66,28 @@ export function streetViews(dir: string, db: Db): StreetView[] {
 
 const TYPES: Record<string, string> = { ".json": "application/json" };
 
-/** One file of a build, revalidated each time (a build can be redone in place). */
+/** A build's id (its manifest's "made"), so its maps' URLs can name it; worked out again when the manifest changes. */
+const builds = new Map<string, { mtimeMs: number; made: string | null }>();
+async function buildIdOf(dir: string, id: string): Promise<string | null> {
+  const p = path.join(buildOf(dir, id), "manifest.json");
+  try {
+    const st = await fs.promises.stat(p);
+    const known = builds.get(p);
+    if (known && known.mtimeMs === st.mtimeMs) return known.made;
+    const made = (JSON.parse(await fs.promises.readFile(p, "utf8")) as { made?: unknown }).made;
+    const value = typeof made === "string" ? made : null;
+    builds.set(p, { mtimeMs: st.mtimeMs, made: value });
+    return value;
+  } catch {
+    return null;
+  }
+}
+
+/**
+ * One file of a build. Asked for by the build's id (?v=, as the browser does
+ * for the maps), it's kept for good: a new build is a new id, so a new URL.
+ * Otherwise (the manifest, which says the id) it's checked each time.
+ */
 async function sendFile(c: Context, dir: string, id: string, file: string) {
   if (!ID.test(id) || !FILE.test(file)) return c.json({ error: "no such file", code: "not_found" }, 404);
   const root = buildOf(dir, id);
@@ -80,7 +101,9 @@ async function sendFile(c: Context, dir: string, id: string, file: string) {
   }
   if (!st.isFile()) return c.json({ error: "no such file", code: "not_found" }, 404);
   const etag = `W/"${st.size.toString(36)}-${Math.floor(st.mtimeMs).toString(36)}"`;
-  const headers = { ETag: etag, "Cache-Control": "private, no-cache" };
+  const v = c.req.query("v");
+  const current = v !== undefined && v === (await buildIdOf(dir, id));
+  const headers = { ETag: etag, "Cache-Control": current ? "private, max-age=31536000, immutable" : "private, no-cache" };
   if (c.req.header("if-none-match") === etag) return c.body(null, 304, headers);
   const body = Readable.toWeb(fs.createReadStream(p)) as ReadableStream;
   return new Response(body, {
