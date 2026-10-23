@@ -2,6 +2,7 @@ import { Hono } from "hono";
 import { beforeEach, describe, expect, it } from "vitest";
 import type { ShaderDescriptor } from "../shared/arclamp.ts";
 import type { Build, Instance, Me } from "../shared/vibes.ts";
+import { handleError } from "./api.ts";
 import type { AuthEnv } from "./auth.ts";
 import { openDb, type Db } from "./db.ts";
 import { loadConfig } from "./env.ts";
@@ -21,6 +22,8 @@ let instances: Instances;
 let app: Hono<AuthEnv>;
 let finish: (id: string) => void;
 let changes: number;
+// The instances whose params were sent on, in order.
+let sent: string[];
 // What builds.start answers next: built at once, or still building.
 let nextBuild: { id: string; commit: string; built: boolean };
 // What builds.start was asked to build: a branch, or a commit.
@@ -98,7 +101,8 @@ beforeEach(() => {
       return () => {};
     },
   };
-  instances = createInstances({ config, db, arclamp, builds, lightIds: async () => LIGHTS, changed: () => changes++ });
+  sent = [];
+  instances = createInstances({ config, db, arclamp, builds, lightIds: async () => LIGHTS, changed: () => changes++, sendParams: (id) => sent.push(id) });
   app = new Hono<AuthEnv>()
     .use("*", async (c, next) => {
       c.set("user", ada);
@@ -106,6 +110,8 @@ beforeEach(() => {
     })
     .route("/", instanceRoutes(instances))
     .route("/", shaderRoutes(createShaders({ config, arclamp, db, instances })));
+  // A refusal thrown by a shader route is answered as the API answers it.
+  app.onError(handleError);
 });
 
 const send = (method: string, path: string, body?: unknown) =>
@@ -297,5 +303,46 @@ describe("an instance", () => {
     const inst = (await (await send("POST", "/instances", { sketch: SKETCH, home: [1, 2, 3], mask: [2] })).json()) as Instance;
     await send("PUT", `/instances/${inst.id}/home`, { home: [2, 3, 4] });
     expect(db.instance(inst.id)!.mask).toEqual([1, 2, 5, 6]);
+  });
+});
+
+describe("an instance's params", () => {
+  const speed = { name: "speed", default: 7, min: 0, max: 20, step: 0.1, label: "Speed", perLight: true };
+  const bands = { name: "bands", default: 3, min: 1, max: 8, step: 1, label: "Bands", perLight: false };
+
+  /** A built build whose script declares `speed` and `bands`, and an instance of it, live. */
+  async function liveWithParams(): Promise<Instance> {
+    db.addBuild({ id: "bp", sketch_id: SKETCH, commit_sha: "deadbeef".repeat(5), builder: "1", by_id: ada.id, by_name: ada.name, at: 0 });
+    db.finishBuild("bp", { state: "built", finished_at: 1, plan: "vite main.ts", error: null, log: "", script: scriptOf("deadbeef".repeat(5)), params: [speed, bands] });
+    nextBuild = { id: "bp", commit: "deadbeef".repeat(5), built: true };
+    return (await (await send("POST", "/instances", { sketch: SKETCH, home: [1, 2, 3] })).json()) as Instance;
+  }
+
+  it("start unset, and are set for everywhere or for some lights, the rest kept; each change is sent on", async () => {
+    const inst = await liveWithParams();
+    expect(inst.params).toEqual({});
+    expect((await send("PUT", `/shaders/${inst.id}/params/speed`, { all: 9 })).status).toBe(204);
+    expect(db.instance(inst.id)!.params).toEqual({ speed: { all: 9 } });
+    expect((await send("PUT", `/shaders/${inst.id}/params/speed`, { lights: { "2": 3, "3": 30 } })).status).toBe(204);
+    expect(db.instance(inst.id)!.params).toEqual({ speed: { all: 9, lights: { "2": 3, "3": 20 } } });
+    expect((await send("PUT", `/shaders/${inst.id}/params/speed`, { all: null, lights: { "2": null } })).status).toBe(204);
+    expect(db.instance(inst.id)!.params).toEqual({ speed: { lights: { "3": 20 } } });
+    expect(sent).toEqual([inst.id, inst.id, inst.id]);
+    expect(instances.view(db.instance(inst.id)!).params).toEqual({ speed: { lights: { "3": 20 } } });
+    expect(db.activity(1)[0]).toMatchObject({ action: "shader.param", shaderName: "Warm wave", detail: { param: "speed", lights: 1 } });
+    // A run of changes to one param (a slider dragged) is one entry in the history; another param's is its own.
+    expect(db.activity(10).filter((a) => a.action === "shader.param")).toHaveLength(1);
+    expect((await send("PUT", `/shaders/${inst.id}/params/bands`, { all: 5 })).status).toBe(204);
+    expect(db.activity(10).filter((a) => a.action === "shader.param").map((a) => a.detail?.param)).toEqual(["bands", "speed"]);
+  });
+
+  it("are only what its sketch declares, and only an instance has any", async () => {
+    const inst = await liveWithParams();
+    expect((await send("PUT", `/shaders/${inst.id}/params/nope`, { all: 1 })).status).toBe(404);
+    expect((await send("PUT", `/shaders/${inst.id}/params/two words`, { all: 1 })).status).toBe(400);
+    expect((await send("PUT", `/shaders/${inst.id}/params/speed`, { all: "fast" })).status).toBe(400);
+    shaders.set(77, { id: 77, type: "js", position: 9, script: "", state: "running", muted: false, created_by: "x", modified_by: "x" });
+    expect((await send("PUT", "/shaders/rclamp-77/params/speed", { all: 1 })).status).toBe(404);
+    expect(sent).toEqual([]);
   });
 });

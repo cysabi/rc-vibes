@@ -21,6 +21,7 @@ import type { Build, Me } from "../shared/vibes.ts";
 import type { BuildRow, Db } from "./db.ts";
 import type { Config, SketchesConfig } from "./env.ts";
 import { archive, resolveCommit } from "./git.ts";
+import { specsOf } from "./params.ts";
 import { stamp } from "./stamp.ts";
 
 /** The most a script can be: rclamp's limit. */
@@ -96,6 +97,7 @@ export function view(row: BuildRow, withLog = false): Build {
     finishedAt: row.finished_at,
     plan: row.plan,
     error: row.error,
+    params: row.params,
     ...(withLog ? { log: row.log ?? "" } : {}),
   };
 }
@@ -177,7 +179,7 @@ export function createBuilds(config: Config, sketches: SketchesConfig, db: Db, r
     },
 
     /** What a build sent back: checked, and stamped if it's a script vibes will use. False if it had already ended. */
-    finish(id: string, result: { ok: boolean; script?: string; error?: string; log?: string; plan?: string | null }): boolean {
+    finish(id: string, result: { ok: boolean; script?: string; error?: string; log?: string; plan?: string | null; params?: unknown[] }): boolean {
       const row = db.build(id);
       if (row?.state !== "building") return false;
       const log = (result.log ?? "").slice(0, MAX_LOG);
@@ -189,7 +191,7 @@ export function createBuilds(config: Config, sketches: SketchesConfig, db: Db, r
         if (problem) fail(id, `vibes won't use what it built: ${problem}`, log, plan);
         else {
           const script = stamp(result.script, { sketch: row.sketch_id, commit: row.commit_sha, builder: row.builder }, config.signingKey!);
-          db.finishBuild(id, { state: "built", finished_at: Date.now(), plan, error: null, log, script });
+          db.finishBuild(id, { state: "built", finished_at: Date.now(), plan, error: null, log, script, params: specsOf(result.params) });
           ended(id);
           // Its request still on its way back to it.
           removePod(id, 5_000);
@@ -220,6 +222,7 @@ export function buildApiRoutes(config: Config, builds: Builds) {
     error: z.string().optional(),
     log: z.string().optional(),
     plan: z.string().nullable().optional(),
+    params: z.array(z.unknown()).max(1000).optional(),
   });
   const buildOf = (header: string | undefined) => {
     const [scheme, token = ""] = (header ?? "").split(" ");

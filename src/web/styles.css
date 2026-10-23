@@ -1540,6 +1540,14 @@ kbd {
   font-size: 12px;
 }
 
+.shader-params {
+  display: grid;
+  gap: 14px;
+  margin: 4px 0 16px;
+  /* In from the panel's sides, as its facts and actions are. */
+  padding: 0 18px;
+}
+
 .shader-actions {
   display: flex;
   flex-wrap: wrap;

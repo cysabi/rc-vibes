@@ -29,7 +29,8 @@
 // says there's no such shader (rather than one too new to be in it).
 
 import { createHash } from "node:crypto";
-import { decodeTouched, lightsOf, type LightsResponse, type RoomTemplate, type ShaderDescriptor } from "../shared/arclamp.ts";
+import { decodeTouched, lightsOf, type LightsResponse, type PortInfo, type RoomTemplate, type ShaderDescriptor } from "../shared/arclamp.ts";
+import type { ShaderParams } from "../shared/params.ts";
 import type { SceneFeed, Shader, ShaderSketch } from "../shared/vibes.ts";
 import { ArclampError, type Arclamp } from "./arclamp.ts";
 import type { Db, InstanceRow } from "./db.ts";
@@ -60,6 +61,8 @@ export interface FeedDeps {
   layout: () => Promise<LightsResponse>;
   /** Instances, while sketches are on. */
   instances?: () => Instances | null;
+  /** Told where each shader in the scene takes udp (its ports), as the scene's made: for sending params (params.ts). */
+  onPorts?: (shaderId: number, ports: PortInfo[] | undefined) => void;
   confirmMs?: number;
 }
 
@@ -74,7 +77,12 @@ const keep = ({ script: _script, changing: _changing, ...rest }: ShaderDescripto
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 const sorted = (ids: Iterable<number>) => [...ids].sort((a, b) => a - b);
 
-export function createSceneFeed({ config, db, arclamp, follow, layout, instances = () => null, confirmMs = CONFIRM_MS }: FeedDeps) {
+export function createSceneFeed({ config, db, arclamp, follow, layout, instances = () => null, onPorts, confirmMs = CONFIRM_MS }: FeedDeps) {
+  /** An instance's params: what its build says its sketch declares, with its values; null for a build from before vibes read them. */
+  const paramsOf = (row: InstanceRow): ShaderParams | null => {
+    const specs = db.build(row.build_id)?.params;
+    return specs ? { specs, values: row.params } : null;
+  };
   const shaders = new Map<number, Kept>();
   // Whether it's been told the whole scene yet.
   let whole = false;
@@ -137,6 +145,8 @@ export function createSceneFeed({ config, db, arclamp, follow, layout, instances
     if (footprints.delete(id)) db.deleteFootprint(id);
     unwritten.delete(id);
     instances()?.forget(id);
+    // Nowhere to send to any more.
+    onPorts?.(id, undefined);
   }
 
   /** Shaders vibes keeps something of that the scene doesn't have: gone, if arclamp says there's no such shader. */
@@ -174,6 +184,7 @@ export function createSceneFeed({ config, db, arclamp, follow, layout, instances
       const sketch = sketches.get(hash) ?? null;
       const inst = byShader.get(n.id);
       const instance = inst && live ? live.view(inst) : null;
+      onPorts?.(n.id, n.ports);
       inRoom.push({
         key: inst ? inst.id : rclampKey(n.id),
         stage: "live",
@@ -188,6 +199,7 @@ export function createSceneFeed({ config, db, arclamp, follow, layout, instances
         by: n.created_by,
         footprint: sorted(footprintOf(n.id, hash || null).lights),
         scriptHash: hash || null,
+        params: inst ? paramsOf(inst) : null,
       });
     }
     for (const hash of [...scripts.keys()]) {
@@ -252,6 +264,7 @@ export function createSceneFeed({ config, db, arclamp, follow, layout, instances
       by: i.by.name,
       footprint: [],
       scriptHash: null,
+      params: paramsOf(row),
     };
   }
 

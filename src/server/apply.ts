@@ -7,10 +7,12 @@
 // the room as it's reached.
 
 import { z } from "zod";
+import { PARAM_NAME } from "../shared/params.ts";
 import type { Change, Me, ShaderKey } from "../shared/vibes.ts";
 import { ArclampError } from "./arclamp.ts";
 import { isBranchName } from "./git.ts";
 import type { Instances } from "./instances.ts";
+import { paramPatchBody } from "./params.ts";
 import { Refused, type Shaders } from "./shaders.ts";
 
 const key = z.string().min(1).max(100);
@@ -32,6 +34,7 @@ export const change: z.ZodType<Change> = z.discriminatedUnion("op", [
   }),
   z.object({ op: z.literal("muted"), key, muted: z.boolean() }),
   z.object({ op: z.literal("mask"), key, mask: ids }),
+  z.object({ op: z.literal("params"), key, name: z.string().regex(PARAM_NAME), patch: paramPatchBody }),
   z.object({ op: z.literal("stack"), order: z.array(key).max(500) }),
 ]);
 
@@ -59,8 +62,8 @@ export interface ApplyDeps {
   setRoomtone: (lights: Record<string, Record<string, number>>, user: Me, code?: string) => Promise<unknown>;
 }
 
-/** Gone already: nothing left to change. */
-const gone = (err: unknown) => (err instanceof Refused || err instanceof ArclampError) && err.status === 404;
+/** Gone already: nothing left to change. (A param its sketch doesn't have isn't that: it's refused.) */
+const gone = (err: unknown) => (err instanceof Refused || err instanceof ArclampError) && err.status === 404 && err.code !== "no_param";
 
 export function createApply({ shaders, instances, setRoomtone }: ApplyDeps) {
   async function make(c: Change, user: Me, made: Record<string, ShaderKey>) {
@@ -73,6 +76,8 @@ export function createApply({ shaders, instances, setRoomtone }: ApplyDeps) {
         return shaders.setMuted(c.key, c.muted, user);
       case "mask":
         return shaders.setMask(c.key, c.mask, user);
+      case "params":
+        return shaders.setParam(c.key, c.name, c.patch, user);
       case "stack":
         return shaders.reorder(c.order, user);
       case "add": {

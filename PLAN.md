@@ -471,6 +471,55 @@ of the mediating, ids and positions included, is the server's.
   answered, not left hanging. The routes by key stay, for the panel's own
   actions and anything else.
 
+## Params
+
+A sketch can declare numbers for vibes to change while it runs, with
+`param()` in the library (`packages/vibes/src/param.ts`):
+`const speed = param("speed", 7, { min: 1, max: 20 })` is a field, each
+light's value, so it goes wherever a number can depend on `here`. A param
+has a default, a range and a step (the slider's), a label, and whether it
+can be set per light (`perLight: false` makes it one knob, for a tempo).
+
+- **Declared by the build.** The builder loads the built script, in a
+  context with what arclamp's prelude gives a sandbox, and reads what it
+  declared (the library keeps declarations on `globalThis`); vibes checks
+  them (`src/server/params.ts`) and keeps them on the build
+  (`builds.params`). A script that can't load there declares nothing, with
+  why in the build's log.
+- **Values are the instance's** (`instances.params`, by name): one for the
+  whole instance (and so for its home: a sketch put in on two selections is
+  two instances, each with its own values), and one per light, so a param
+  can vary within one instance's home without splitting it into copies; a
+  light nobody's set reads the instance's value, and without one the
+  default, always within the range.
+  `PUT /api/shaders/<key>/params/<name>` takes a patch (`all`, and
+  `lights` merged with those set; null unsets), and so does a `params`
+  change in an apply. Each change is logged, a run of changes to one param
+  (a slider dragged) as one entry.
+- **Over udp.** arclamp has no way to hand a running shader anything but
+  its lights, so values go as packets to the socket the sketch binds (the
+  library does, on its first tick), at the port arclamp reports in the
+  shader's descriptor (`ports`): each param's whole state as one JSON
+  packet (`shared/params.ts`), when it changes and every second
+  regardless, so a lost packet, or a sandbox started over, is behind for a
+  second at most. A packet's `seq` is the time in ms (or one more than the
+  last), so it only ever goes up, across vibes restarting too: a sketch
+  ignores a seq below the last it took for that param.
+- **Shown and set.** The scene feed carries each instance's params (what
+  its build declares, with its values); the shader panel shows a slider
+  per param, for everywhere at once. Moving one is a pending edit, like a
+  mute or a mask: the preview posts the same packets into the shader's
+  worker, where `udp` is a socket that only ever carries them, so the
+  simulation shows the value before it's applied (a `params` change in
+  the apply), and live mode applies it as it moves. The editor's Sketch
+  panel has knobs of its own, straight into its worker.
+
+Still to come: the per-light values have no control yet (the panel's
+slider sets the whole instance's): setting a param for some of the lights
+within an instance's home, from a selection on the map. And a sketch the
+builder couldn't load to read its params says so only in the build's log,
+not in the panel.
+
 ## Gaps in arclamp (PRs to rclamp)
 
 1. **Shader logs.** `console.log` from a running shader only reaches arclamp's
@@ -497,6 +546,9 @@ of the mediating, ids and positions included, is the server's.
    shader passing its input through until its sandbox's first frame, instead
    of freezing the room while it starts (#22). vibes doesn't wait on any of
    them.
+8. **Handing a running shader anything but its lights.** A sketch's params
+   reach it over `udp`, as packets vibes sends again every second; a way to
+   set a shader's values through the API would make that exact, and at once.
 
 ## Local development
 

@@ -103,7 +103,7 @@ describe("the scene feed", () => {
     await settle();
     // Its script fetched once, by its hash, for the preview; left out of the feed.
     expect(now().shaders).toEqual([
-      { key: "rclamp-3", stage: "live", name: "Shader #3", state: "running", error: null, muted: false, mask: [], sketch: null, instance: null, by: "x", footprint: [], scriptHash: sha("function update(p) { return p; }") },
+      { key: "rclamp-3", stage: "live", name: "Shader #3", state: "running", error: null, muted: false, mask: [], sketch: null, instance: null, by: "x", footprint: [], scriptHash: sha("function update(p) { return p; }"), params: null },
     ]);
     expect(feed.scripts().get(sha("function update(p) { return p; }"))).toBe("function update(p) { return p; }");
     expect(now().roomtone).toEqual({ lights: {} });
@@ -190,6 +190,36 @@ describe("the scene feed", () => {
     await settle();
     expect(forgot).toEqual([3, 4]);
     expect(db.instances().map((i) => i.id)).toEqual(["i2", "i4"]);
+  });
+
+  it("carries each instance's params (what its build declares, with its values), and says where each shader takes udp", async () => {
+    const speed = { name: "speed", default: 7, min: 0, max: 20, step: 0.1, label: "Speed", perLight: true };
+    db.addSketch({ id: "s1", name: "Warm wave", by_id: "rc:1", by_name: "Ada", at: 0 });
+    db.addBuild({ id: "b1", sketch_id: "s1", commit_sha: "a".repeat(40), builder: "1", by_id: "rc:1", by_name: "Ada", at: 0 });
+    db.finishBuild("b1", { state: "built", finished_at: 1, plan: "vite main.ts", error: null, log: "", script: "one", params: [speed] });
+    db.addInstance({ id: "i1", sketch_id: "s1", build_id: "b1", home: [1], by_id: "rc:1", by_name: "Ada", at: 1 });
+    db.updateInstance("i1", { shader_id: 3, state: "live", params: { speed: { all: 9 } } });
+    db.addInstance({ id: "i2", sketch_id: "s1", build_id: "b1", home: [2], by_id: "rc:1", by_name: "Ada", at: 2 });
+    const fake = { view: (row: InstanceRow) => ({ id: row.id, sketchId: row.sketch_id, sketchName: "Warm wave", commit: "a".repeat(40), home: row.home, state: row.state, error: row.error, by: { id: row.by_id, name: row.by_name }, at: row.at, params: row.params }), forget: () => {} } as unknown as Instances;
+    const ports: [number, unknown][] = [];
+    scene = [roomtone, shader(3, "one", { ports: [{ proto: "udp", host: "0.0.0.0", port: 4001 }] }), shader(4, "two")];
+    feed = createSceneFeed({ config, db, arclamp, follow: (handlers) => ((on = handlers), { stop() {} }), layout: async () => layout, instances: () => fake, onPorts: (id, p) => ports.push([id, p]), confirmMs: 30 });
+    snapshot();
+    await settle();
+    expect(byKey(now(), "i1")!.params).toEqual({ specs: [speed], values: { speed: { all: 9 } } });
+    expect(byKey(now(), "i2")!.params).toEqual({ specs: [speed], values: {} });
+    expect(byKey(now(), "rclamp-4")!.params).toBeNull();
+    expect(ports).toEqual([
+      [4, undefined],
+      [3, [{ proto: "udp", host: "0.0.0.0", port: 4001 }]],
+    ]);
+    // Gone, it takes nothing: said so, before the rest are said again.
+    removed(3);
+    await settle();
+    expect(ports.slice(2)).toEqual([
+      [3, undefined],
+      [4, undefined],
+    ]);
   });
 
   it("shows those on their way in where they're to go in, as they're wanted", async () => {

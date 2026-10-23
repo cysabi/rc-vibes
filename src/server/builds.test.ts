@@ -29,7 +29,7 @@ const boxRunner = fakeBoxRunner();
 // What the next build's "pod" does: fetches its source and sends back
 // `result` (a function of what it fetched). null: it ends without sending
 // anything; "hang": it never ends.
-type Result = { ok: boolean; script?: string; error?: string; log?: string; plan?: string };
+type Result = { ok: boolean; script?: string; error?: string; log?: string; plan?: string; params?: unknown[] };
 let result: (source: string) => Result | null | "hang" = () => ({ ok: true, script: GOOD, log: "built it", plan: "vite main.ts" });
 const pods = new Map<string, "running" | "ended">();
 const runner: BuildRunner = {
@@ -102,6 +102,18 @@ async function built(sketch: string, body: unknown = {}): Promise<Build> {
 }
 
 describe("a build", () => {
+  it("keeps what the builder read of the script's params, the ones that read as params", async () => {
+    const s = await make("With params");
+    const speed = { name: "speed", default: 7, min: 0, max: 20, step: 0.1, label: "Speed", perLight: true };
+    result = () => ({ ok: true, script: GOOD, log: "built it", plan: "vite main.ts", params: [speed, { name: "nope" }, speed] });
+    const b = await built(s.id);
+    expect(b).toMatchObject({ state: "built", params: [speed] });
+    // A builder that sends no list declares none: an empty list. (Null is only a row from before builds read params.)
+    result = () => ({ ok: true, script: GOOD, log: "built it", plan: "vite main.ts" });
+    const other = await built((await make("Without")).id);
+    expect(other.params).toEqual([]);
+  });
+
   it("gets its commit's files, and its script is stamped with that commit", async () => {
     const s = await make("Built");
     let source = "";

@@ -11,12 +11,14 @@ import { zValidator } from "@hono/zod-validator";
 import { Hono, type Context } from "hono";
 import { z } from "zod";
 import type { ShaderDescriptor } from "../shared/arclamp.ts";
+import { PARAM_NAME, type ParamPatch } from "../shared/params.ts";
 import type { Person } from "../shared/vibes.ts";
 import type { Arclamp } from "./arclamp.ts";
 import type { AuthEnv } from "./auth.ts";
 import type { Db, InstanceRow } from "./db.ts";
 import type { Config } from "./env.ts";
 import type { Instances } from "./instances.ts";
+import { paramPatchBody } from "./params.ts";
 import { sketchOf } from "./stamp.ts";
 
 const RCLAMP = /^rclamp-([1-9][0-9]{0,14})$/;
@@ -142,6 +144,15 @@ export function createShaders({ config, arclamp, db, instances }: ShaderDeps) {
       db.log({ user, action: "shader.delete", shaderId: there.d.id, shaderName: nameOf(there.d, there.instance) });
     },
 
+    /** A param of a shader put in from a sketch: its values changed (ParamPatch), and sent to it. Only an instance has params. */
+    setParam(key: string, name: string, patch: ParamPatch, user: Person) {
+      const it = resolve(key, user);
+      if (!it) throw new Refused(404, "not_found", "no such shader");
+      if (!it.instance || !instances) throw new Refused(404, "no_param", "it wasn't put in from a sketch, so it has no params");
+      const made = instances.setParam(it.instance.id, name, patch, user);
+      if ("refused" in made) throw new Refused(made.status, made.code, made.refused);
+    },
+
     /**
      * The stack in this order, top first. Those in the room are moved; each
      * not in yet is to go in just above the one under it here (or at the
@@ -191,6 +202,13 @@ export function shaderRoutes(shaders: Shaders) {
       })
       .post("/shaders/:key/mask", zValidator("json", z.object({ mask: z.array(z.number().int()).max(2000) }), badBody), async (c) => {
         await shaders.setMask(c.req.param("key"), c.req.valid("json").mask, c.get("user"));
+        return c.body(null, 204);
+      })
+      // A param's values (its sketch declares which): for everywhere (all), or for some lights, the rest kept; null unsets.
+      .put("/shaders/:key/params/:name", zValidator("json", paramPatchBody, badBody), (c) => {
+        const name = c.req.param("name");
+        if (!PARAM_NAME.test(name)) throw new Refused(400, "bad_param", "a param's name is a word");
+        shaders.setParam(c.req.param("key"), name, c.req.valid("json"), c.get("user"));
         return c.body(null, 204);
       })
       .delete("/shaders/:key", async (c) => {

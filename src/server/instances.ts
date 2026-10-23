@@ -23,6 +23,7 @@ import { Hono, type Context } from "hono";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { ShaderDescriptor } from "../shared/arclamp.ts";
+import { patchValues, type ParamPatch } from "../shared/params.ts";
 import type { Instance, Me, Person } from "../shared/vibes.ts";
 import type { Arclamp } from "./arclamp.ts";
 import type { AuthEnv } from "./auth.ts";
@@ -35,6 +36,8 @@ import { readStamp, stampAs } from "./stamp.ts";
 
 const home = z.array(z.number().int()).min(1).max(2000);
 const branch = z.string().refine(isBranchName).default("main");
+// A run of changes to one param (a slider dragged) logs as one entry.
+const PARAM_LOG_WINDOW_MS = 15_000;
 
 type Status = 400 | 404 | 409 | 410 | 503;
 const refuse = (c: Context, status: Status, error: string, code: string) => c.json({ error, code }, status);
@@ -53,11 +56,13 @@ export interface InstanceDeps {
   lightIds: () => Promise<number[]>;
   /** Told when an instance changes, to show it (the scene feed). */
   changed?: () => void;
+  /** Told when an instance's params change, to send them to its shader (params.ts). */
+  sendParams?: (id: string) => void;
 }
 
 type Refusal = { refused: string; status: Status; code: string };
 
-export function createInstances({ config, db, arclamp, builds, lightIds, changed = () => {} }: InstanceDeps) {
+export function createInstances({ config, db, arclamp, builds, lightIds, changed = () => {}, sendParams = () => {} }: InstanceDeps) {
   const refusal = (refused: string, status: Status, code: string): Refusal => ({ refused, status, code });
 
   function view(row: InstanceRow): Instance {
@@ -78,6 +83,7 @@ export function createInstances({ config, db, arclamp, builds, lightIds, changed
       next: next && next.state !== "built" ? { commit: next.commit_sha, buildId: next.id, state: next.state, error: next.error && plainText(next.error) } : null,
       by: { id: row.by_id, name: row.by_name },
       at: row.at,
+      params: row.params,
     };
   }
 
@@ -344,6 +350,34 @@ export function createInstances({ config, db, arclamp, builds, lightIds, changed
       changed();
       // Gone in meanwhile, after place looked at what's wanted: caught up now.
       return db.instance(id)?.shader_id === null || (await catchUp(id));
+    },
+
+    /**
+     * A param of an instance changed (ParamPatch: for everywhere, or for some
+     * lights, the rest kept), as its sketch declares it (its build says
+     * what); kept, and sent to its shader at once.
+     */
+    setParam(id: string, name: string, patch: ParamPatch, user: Person): { instance: Instance } | Refusal {
+      const inst = db.instance(id);
+      if (!inst) return refusal("no such instance", 404, "not_found");
+      const spec = db.build(inst.build_id)?.params?.find((p) => p.name === name);
+      if (!spec) return refusal(`its sketch has no param ${name}`, 404, "no_param");
+      const values = patchValues(spec, inst.params[name], patch);
+      db.updateInstance(id, { params: { ...inst.params, [name]: values } });
+      db.logCoalesced(
+        {
+          user,
+          action: "shader.param",
+          ...(inst.shader_id !== null ? { shaderId: inst.shader_id } : {}),
+          shaderName: db.sketch(inst.sketch_id)?.name ?? null,
+          detail: { instance: id, param: name, ...(values.all !== undefined ? { all: values.all } : {}), lights: Object.keys(values.lights ?? {}).length },
+        },
+        PARAM_LOG_WINDOW_MS,
+        (last) => last?.instance === id && last?.param === name,
+      );
+      changed();
+      sendParams(id);
+      return { instance: view(db.instance(id)!) };
     },
 
     /** An instance that isn't in yet, to go just above the shader with this key ("" the bottom; null the top). */

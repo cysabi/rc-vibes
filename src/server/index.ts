@@ -17,6 +17,7 @@ import { loadConfig } from "./env.ts";
 import { followEvents } from "./event-stream.ts";
 import { createHealthWatch } from "./health.ts";
 import { createInstances, type Instances } from "./instances.ts";
+import { createParamsSender } from "./params.ts";
 import { createSceneFeed } from "./scene-feed.ts";
 import { boxApiRoutes, sketchRoutes } from "./sketches.ts";
 import { createStreamRelay } from "./stream.ts";
@@ -42,6 +43,8 @@ const proxy = boxes ? createBoxProxy(config, db, boxes) : null;
 // the light stream; arclamp's health, likewise; and sketches put in the room
 // (instances).
 let instances: Instances | null = null;
+// Instances' params, to their shaders over udp, where the scene says each takes it.
+const params = createParamsSender({ db, arclampHost: new URL(config.arclamp.baseUrl).hostname });
 const feed = createSceneFeed({
   config,
   db,
@@ -49,6 +52,7 @@ const feed = createSceneFeed({
   follow: (on) => followEvents(arclamp.url("/v1/scene/events"), arclamp.key, on),
   layout: () => lights.arclampLights(),
   instances: () => instances,
+  onPorts: (id, ports) => params.learn(id, ports),
 });
 relay.subscribe((frame) => feed.touched(frame));
 // What vibes changes in the scene, it changes through this, so the feed shows it at once.
@@ -56,7 +60,7 @@ const noted = feed.noting(arclamp);
 const health = createHealthWatch((on) => followEvents(arclamp.url("/v1/scene/health/events"), arclamp.key, on));
 if (builds) {
   const lightIds = async () => (await lights.arclampLights()).lights.map((l) => l.id);
-  instances = createInstances({ config, db, arclamp: noted, builds, lightIds, changed: () => feed.poke() });
+  instances = createInstances({ config, db, arclamp: noted, builds, lightIds, changed: () => feed.poke(), sendParams: (id) => params.send(id) });
 }
 
 const app = new Hono();
@@ -115,6 +119,7 @@ server.on("upgrade", (req: http.IncomingMessage, socket: Duplex, head: Buffer) =
 function shutdown() {
   relay.stop();
   feed.stop();
+  params.stop();
   health.stop();
   boxes?.stop();
   builds?.stop();

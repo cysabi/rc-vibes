@@ -143,3 +143,32 @@ describe("an apply", () => {
     expect(request.safeParse({ type: "apply", id: "1", changes: [{ op: "mask", key: "rclamp-11", mask: ["1"] }] }).success).toBe(false);
   });
 });
+
+describe("a param in an apply", () => {
+  const speed = { name: "speed", default: 7, min: 0, max: 20, step: 0.1, label: "Speed", perLight: true };
+
+  /** A live instance of a build whose script declares `speed`. */
+  function liveInstance(): string {
+    db.addBuild({ id: "bp", sketch_id: SKETCH, commit_sha: "b".repeat(40), builder: "1", by_id: ada.id, by_name: ada.name, at: 0 });
+    db.finishBuild("bp", { state: "built", finished_at: 1, plan: "vite main.ts", error: null, log: "", script: "function update(p) { return p; }", params: [speed] });
+    db.addInstance({ id: "0f4527e5-4faf-4691-b789-e4c389175402", sketch_id: SKETCH, build_id: "bp", home: [1, 2], by_id: ada.id, by_name: ada.name, at: 0 });
+    db.updateInstance("0f4527e5-4faf-4691-b789-e4c389175402", { shader_id: 11, state: "live" });
+    return "0f4527e5-4faf-4691-b789-e4c389175402";
+  }
+
+  it("changes the instance's values, for everywhere or for some lights", async () => {
+    const id = liveInstance();
+    await apply([{ op: "params", key: id, name: "speed", patch: { all: 9, lights: { "2": 3 } } }], ada);
+    expect(db.instance(id)!.params).toEqual({ speed: { all: 9, lights: { "2": 3 } } });
+  });
+
+  it("is refused for a param the sketch doesn't declare, not passed over as gone", async () => {
+    const id = liveInstance();
+    await expect(apply([{ op: "params", key: id, name: "nope", patch: { all: 1 } }], ada)).rejects.toMatchObject({ at: 0, code: "no_param" });
+  });
+
+  it("isn't taken from a browser for a param with a name that isn't a word", () => {
+    expect(request.safeParse({ type: "apply", id: "a", changes: [{ op: "params", key: "k", name: "two words", patch: {} }] }).success).toBe(false);
+    expect(request.safeParse({ type: "apply", id: "a", changes: [{ op: "params", key: "k", name: "speed", patch: { all: null, lights: { "1": null } } }] }).success).toBe(true);
+  });
+});

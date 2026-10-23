@@ -59,6 +59,7 @@ function shader(id: number, extra: Partial<SceneShader> = {}): SceneShader {
     footprint: [],
     scriptHash: `h${id}`,
     script: `function update() { return { lights: [] }; } // ${id}`,
+    params: null,
     ...extra,
   };
 }
@@ -67,7 +68,7 @@ const roomtone = { lights: { "1": { a: 0.0600728851, b: 0.134711643, brightness:
 /** The room: its shaders, top first. */
 const room = (...shaders: SceneShader[]): Scene => ({ shaders, roomtone });
 
-const instance: Instance = { id: "i", sketchId: "s", sketchName: "Wave", commit: "c", buildId: "b", branch: "main", head: "c", home: [1, 2, 3], state: "live", error: null, next: null, by: { id: "u", name: "U" }, at: 0 };
+const instance: Instance = { id: "i", sketchId: "s", sketchName: "Wave", commit: "c", buildId: "b", branch: "main", head: "c", home: [1, 2, 3], state: "live", error: null, next: null, by: { id: "u", name: "U" }, at: 0, params: {} };
 /** One put in from a sketch in vibes, still building: its key its instance's. */
 const coming = (extra: Partial<SceneShader> = {}) =>
   shader(0, { key: "i1", stage: "building", name: "Wave", state: null, script: undefined, scriptHash: null, by: "U", instance: { ...instance, id: "i1", home: [1], state: "building" }, ...extra });
@@ -218,6 +219,26 @@ describe("apply", () => {
       { op: "stack", order: ["rclamp-11", "rclamp-12"] },
     ]);
     expect(currentDraft()).toBe(EMPTY);
+  });
+
+  it("keeps a param's change as a pending edit, previews it, and sends what actually changes", async () => {
+    const speed = { name: "speed", default: 7, min: 0, max: 20, step: 0.1, label: "Speed", perLight: true };
+    const withParams = room(shader(12, { params: { specs: [speed], values: { speed: { all: 7, lights: { "1": 2 } } } } }), shader(11));
+    drafts.setParam("rclamp-12", "speed", { all: 9 });
+    expect(pendingCount(withParams, currentDraft())).toBe(1);
+    expect(layerOf(withParams, currentDraft(), "rclamp-12")!.params).toEqual({ specs: [speed], values: { speed: { all: 9, lights: { "1": 2 } } } });
+    // A later change for some lights goes over the first.
+    drafts.setParam("rclamp-12", "speed", { lights: { "2": 3 } });
+    expect(layerOf(withParams, currentDraft(), "rclamp-12")!.params!.values).toEqual({ speed: { all: 9, lights: { "1": 2, "2": 3 } } });
+    await applyDraft(withParams);
+    expect(sent).toEqual([{ op: "params", key: "rclamp-12", name: "speed", patch: { all: 9, lights: { "2": 3 } } }]);
+    expect(currentDraft()).toBe(EMPTY);
+    // Back to what's live: nothing to send.
+    sent.length = 0;
+    drafts.setParam("rclamp-12", "speed", { all: 7 });
+    expect(pendingCount(withParams, currentDraft())).toBe(0);
+    await applyDraft(withParams);
+    expect(sent).toEqual([]);
   });
 
   it("masks before unmuting, so a shader switched on for some lights never runs on the rest", async () => {

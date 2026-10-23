@@ -2,6 +2,7 @@
 // in vibes, plus an activity log. arclamp sees every vibes action as the
 // single "vibes" token.
 
+import type { ParamSpec, ParamTable } from "../shared/params.ts";
 import { DatabaseSync } from "node:sqlite";
 import type { RailShape } from "../shared/rails.ts";
 import type { ActivityAction, ActivityEntry, Me, Person, Spot } from "../shared/vibes.ts";
@@ -168,7 +169,12 @@ export function openDb(path: string) {
   if (!instanceColumns.some((c) => c.name === "muted")) {
     db.exec("ALTER TABLE instances ADD COLUMN muted INTEGER NOT NULL DEFAULT 0; ALTER TABLE instances ADD COLUMN mask TEXT; ALTER TABLE instances ADD COLUMN above TEXT");
   }
+  // Each instance's param values, by name (JSON; instances.ts).
+  if (!instanceColumns.some((c) => c.name === "params")) db.exec("ALTER TABLE instances ADD COLUMN params TEXT");
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS instances_by_client_key ON instances (by_id, client_key)");
+  // What a build's script declares as params, as the builder read them (a JSON array; builds.ts).
+  const buildColumns = db.prepare("PRAGMA table_info(builds)").all() as { name: string }[];
+  if (!buildColumns.some((c) => c.name === "params")) db.exec("ALTER TABLE builds ADD COLUMN params TEXT");
 
   const selectPlacements = db.prepare("SELECT light_id, mm_x, mm_y, floor, rail_id, mm_along FROM placements");
   const upsertPlacement = db.prepare(`
@@ -220,7 +226,7 @@ export function openDb(path: string) {
   const selectBuildsOf = db.prepare("SELECT * FROM builds WHERE sketch_id = ? ORDER BY at DESC LIMIT ?");
   const selectBuildOfCommit = db.prepare("SELECT * FROM builds WHERE sketch_id = ? AND commit_sha = ? AND builder = ? AND state IN ('building', 'built') ORDER BY at DESC LIMIT 1");
   const selectBuilding = db.prepare("SELECT * FROM builds WHERE state = 'building'");
-  const updateBuild = db.prepare("UPDATE builds SET state = ?, finished_at = ?, plan = ?, error = ?, log = ?, script = ? WHERE id = ? AND state = 'building'");
+  const updateBuild = db.prepare("UPDATE builds SET state = ?, finished_at = ?, plan = ?, error = ?, log = ?, script = ?, params = ? WHERE id = ? AND state = 'building'");
   const insertInstance = db.prepare(
     "INSERT INTO instances (id, sketch_id, branch, build_id, home, shader_id, state, error, next_build_id, by_id, by_name, at, client_key, muted, mask, above) VALUES (?, ?, ?, ?, ?, NULL, 'building', NULL, NULL, ?, ?, ?, ?, ?, ?, ?)",
   );
@@ -354,16 +360,19 @@ export function openDb(path: string) {
     /**
      * Log an entry, or fold it into the previous one when the same person did
      * the same thing moments ago (dragging a color picker sends a stream of
-     * room tone changes; the history should show one).
+     * room tone changes; the history should show one). With `same`, only
+     * when the previous entry was about the same thing too, by its detail
+     * (the same param of the same shader, say).
      */
-    logCoalesced(entry: LogInput, windowMs: number) {
+    logCoalesced(entry: LogInput, windowMs: number, same?: (lastDetail: Record<string, unknown> | null) => boolean) {
       const last = lastActivity.get() as ActivityRow | undefined;
       const now = new Date();
       if (
         last &&
         last.user_id === entry.user.id &&
         last.action === entry.action &&
-        now.getTime() - new Date(last.ts).getTime() < windowMs
+        now.getTime() - new Date(last.ts).getTime() < windowMs &&
+        (!same || same(last.detail ? (JSON.parse(last.detail) as Record<string, unknown>) : null))
       ) {
         updateActivity.run(now.toISOString(), entry.detail ? JSON.stringify(entry.detail) : null, last.id);
         return;
@@ -427,20 +436,20 @@ export function openDb(path: string) {
       insertBuild.run(b.id, b.sketch_id, b.commit_sha, b.builder, b.by_id, b.by_name, b.at);
     },
 
-    build: (id: string) => selectBuild.get(id) as BuildRow | undefined,
+    build: (id: string) => buildOf(selectBuild.get(id)),
 
     /** A sketch's latest builds, newest first. */
-    buildsOf: (sketchId: string, limit = 20) => selectBuildsOf.all(sketchId, limit) as unknown as BuildRow[],
+    buildsOf: (sketchId: string, limit = 20) => (selectBuildsOf.all(sketchId, limit) as unknown[]).map((r) => buildOf(r)!),
 
     /** A build of this commit by this builder that's built, or still building. */
-    buildOfCommit: (sketchId: string, commit: string, builder: string) => selectBuildOfCommit.get(sketchId, commit, builder) as BuildRow | undefined,
+    buildOfCommit: (sketchId: string, commit: string, builder: string) => buildOf(selectBuildOfCommit.get(sketchId, commit, builder)),
 
     /** The builds still going. */
-    building: () => selectBuilding.all() as unknown as BuildRow[],
+    building: () => (selectBuilding.all() as unknown[]).map((r) => buildOf(r)!),
 
-    /** How a build ended; false if it had already. */
-    finishBuild(id: string, end: Pick<BuildRow, "state" | "finished_at" | "plan" | "error" | "log" | "script">): boolean {
-      return updateBuild.run(end.state, end.finished_at, end.plan, end.error, end.log, end.script, id).changes > 0;
+    /** How a build ended (with what its script declares as params, if it built); false if it had already. */
+    finishBuild(id: string, end: Pick<BuildRow, "state" | "finished_at" | "plan" | "error" | "log" | "script"> & { params?: ParamSpec[] | null }): boolean {
+      return updateBuild.run(end.state, end.finished_at, end.plan, end.error, end.log, end.script, end.params ? JSON.stringify(end.params) : null, id).changes > 0;
     },
 
     /** A new instance, building: from main, unless it says otherwise. */
@@ -476,11 +485,11 @@ export function openDb(path: string) {
     instanceOfShader: (shaderId: number) => instanceOf(selectInstanceOfShader.get(shaderId)),
 
     /** Changes some of an instance. */
-    updateInstance(id: string, patch: Partial<Pick<InstanceRow, "build_id" | "home" | "shader_id" | "state" | "error" | "next_build_id" | "muted" | "mask" | "above">>) {
+    updateInstance(id: string, patch: Partial<Pick<InstanceRow, "build_id" | "home" | "shader_id" | "state" | "error" | "next_build_id" | "muted" | "mask" | "above" | "params">>) {
       const cols = Object.keys(patch) as (keyof typeof patch)[];
       if (cols.length === 0) return;
       const values = cols.map((c) =>
-        c === "home" || c === "mask" ? (patch[c] ? JSON.stringify(patch[c]) : null) : c === "muted" ? (patch.muted ? 1 : 0) : (patch[c] ?? null),
+        c === "home" || c === "mask" || c === "params" ? (patch[c] ? JSON.stringify(patch[c]) : null) : c === "muted" ? (patch.muted ? 1 : 0) : (patch[c] ?? null),
       );
       db.prepare(`UPDATE instances SET ${cols.map((c) => `${c} = ?`).join(", ")} WHERE id = ?`).run(...(values as (string | number | null)[]), id);
     },
@@ -552,6 +561,16 @@ export interface BuildRow {
   log: string | null;
   /** The script, stamped, if it built. */
   script: string | null;
+  /** What the script declares as params (param() in the library), as the builder read them; null before builds read them. */
+  params: ParamSpec[] | null;
+}
+
+type RawBuild = Omit<BuildRow, "params"> & { params: string | null };
+
+function buildOf(raw: unknown): BuildRow | undefined {
+  if (!raw) return undefined;
+  const r = raw as RawBuild;
+  return { ...r, params: r.params ? (JSON.parse(r.params) as ParamSpec[]) : null };
 }
 
 export interface InstanceRow {
@@ -582,14 +601,22 @@ export interface InstanceRow {
   muted: boolean;
   mask: number[] | null;
   above: string | null;
+  /** Its params' values, by name (what its sketch declares, its build says). */
+  params: ParamTable;
 }
 
-type RawInstance = Omit<InstanceRow, "home" | "muted" | "mask"> & { home: string; muted: number; mask: string | null };
+type RawInstance = Omit<InstanceRow, "home" | "muted" | "mask" | "params"> & { home: string; muted: number; mask: string | null; params: string | null };
 
 function instanceOf(raw: unknown): InstanceRow | undefined {
   if (!raw) return undefined;
   const r = raw as RawInstance;
-  return { ...r, home: JSON.parse(r.home) as number[], muted: r.muted === 1, mask: r.mask ? (JSON.parse(r.mask) as number[]) : null };
+  return {
+    ...r,
+    home: JSON.parse(r.home) as number[],
+    muted: r.muted === 1,
+    mask: r.mask ? (JSON.parse(r.mask) as number[]) : null,
+    params: r.params ? (JSON.parse(r.params) as ParamTable) : {},
+  };
 }
 
 export type Db = ReturnType<typeof openDb>;

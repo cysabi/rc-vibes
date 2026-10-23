@@ -14,6 +14,7 @@
 
 import { useSyncExternalStore } from "react";
 import type { Channels } from "../shared/arclamp.ts";
+import { cleanValues, patchValues, type ParamPatch, type ShaderParams } from "../shared/params.ts";
 import type { Change, Instance, ShaderKey, ShaderSketch } from "../shared/vibes.ts";
 import { ApplyError, applyChanges, invalidateScene, type Scene, type SceneShader } from "./scene.ts";
 
@@ -24,6 +25,8 @@ export interface ShaderPatch {
   muted?: boolean;
   /** The lights it may not change: its whole mask. */
   mask?: number[];
+  /** Its params' values, by name: each a patch over the live values (for everywhere, or for some lights). */
+  params?: Record<string, ParamPatch>;
 }
 
 export interface Draft {
@@ -101,6 +104,8 @@ export interface Layer {
   footprint: number[];
   /** If it's a sketch being added (not in the room yet): which. */
   adding: Adding | null;
+  /** Its params, if it was put in from a sketch: what the sketch declares, and the instance's values (live, not pending edits). */
+  params: ShaderParams | null;
 }
 
 /** A sketch being added, as a layer on top of the stack: for the preview (once built), and the list. */
@@ -121,10 +126,11 @@ function layerOfAdding(a: Adding, d: Draft): Layer {
     next: null,
     by: { id: "", name: "" },
     at: 0,
+    params: {},
   };
   const sketch: ShaderSketch = { id: a.sketchId, name: a.sketchName, commit, edited: false, deleted: false };
   const patch = d.edits[a.key] ?? {};
-  return { key: a.key, stage: "adding", shader: null, name: a.sketchName, sketch, script, muted: patch.muted ?? false, mask: patch.mask ?? a.mask, by: "", instance, footprint: [], adding: a };
+  return { key: a.key, stage: "adding", shader: null, name: a.sketchName, sketch, script, muted: patch.muted ?? false, mask: patch.mask ?? a.mask, by: "", instance, footprint: [], adding: a, params: null };
 }
 
 /** Whether a shader can be switched and moved: any but one that couldn't go in. */
@@ -207,6 +213,34 @@ export function templateOf(scene: Scene, d: Draft): Record<string, Channels> {
   return out;
 }
 
+/** A shader's params with the draft's patches over its live values. */
+function paramsWith(params: ShaderParams | null, patches: Record<string, ParamPatch> | undefined): ShaderParams | null {
+  if (!params || !patches) return params;
+  const values = { ...params.values };
+  for (const spec of params.specs) {
+    const p = patches[spec.name];
+    if (p) values[spec.name] = patchValues(spec, values[spec.name], p);
+  }
+  return { specs: params.specs, values };
+}
+
+/** Whether the draft's patches change a shader's params at all. */
+function paramsDiffer(shader: SceneShader, patches: Record<string, ParamPatch> | undefined): boolean {
+  return paramChanges(shader, patches).length > 0;
+}
+
+/** The params the draft's patches actually change, as changes to send. */
+function paramChanges(shader: SceneShader, patches: Record<string, ParamPatch> | undefined): Change[] {
+  const params = shader.params;
+  if (!params || !patches) return [];
+  return Object.entries(patches).flatMap(([name, patch]) => {
+    const spec = params.specs.find((s) => s.name === name);
+    if (!spec) return [];
+    const was = cleanValues(spec, params.values[name] ?? {});
+    return JSON.stringify(patchValues(spec, was, patch)) === JSON.stringify(was) ? [] : [{ op: "params", key: shader.key, name, patch } as Change];
+  });
+}
+
 function layerOfShader(shader: SceneShader, d: Draft): Layer {
   const patch = changeable(shader) ? (d.edits[shader.key] ?? {}) : {};
   return {
@@ -222,6 +256,7 @@ function layerOfShader(shader: SceneShader, d: Draft): Layer {
     instance: shader.instance,
     footprint: shader.footprint,
     adding: null,
+    params: paramsWith(shader.params, patch.params),
   };
 }
 
@@ -269,7 +304,7 @@ export function pendingCount(scene: Scene, d: Draft): number {
   n += removedOf(scene, d).length;
   n += d.added.length;
   for (const l of layers) {
-    if (l.muted !== l.shader!.muted || !sameMask(l.mask, l.shader!.mask)) n++;
+    if (l.muted !== l.shader!.muted || !sameMask(l.mask, l.shader!.mask) || paramsDiffer(l.shader!, d.edits[l.key]?.params)) n++;
   }
   if (layers.map((l) => l.key).join() !== sceneKeys(scene, d).join()) n++;
   return n;
@@ -353,6 +388,13 @@ export const drafts = {
   /** Change a shader's mute or mask. */
   patchShader(key: LayerKey, patch: ShaderPatch) {
     set({ ...draft, edits: { ...draft.edits, [key]: { ...draft.edits[key], ...patch } } });
+  },
+  /** Change a param of a shader: for everywhere (all), or for some lights, over whatever's pending for it already. */
+  setParam(key: LayerKey, name: string, patch: ParamPatch) {
+    const was = draft.edits[key]?.params?.[name] ?? {};
+    const lights = patch.lights === null ? null : patch.lights ? { ...(was.lights ?? {}), ...patch.lights } : was.lights;
+    const merged: ParamPatch = { ...was, ...patch, ...(lights !== undefined ? { lights } : {}) };
+    set({ ...draft, edits: { ...draft.edits, [key]: { ...draft.edits[key], params: { ...draft.edits[key]?.params, [name]: merged } } } });
   },
   reorder(keysTopFirst: LayerKey[]) {
     set({ ...draft, order: keysTopFirst });
@@ -489,8 +531,8 @@ async function sendDraft(scene: Scene, d: Draft): Promise<{ rest: Draft; error: 
     const mute: Change | null = target && patch.muted !== undefined && patch.muted !== target.muted ? { op: "muted", key, muted: patch.muted } : null;
     const mask: Change | null = target && patch.mask !== undefined && !sameMask(patch.mask, target.mask) ? { op: "mask", key, mask: patch.mask } : null;
     // Unmuting, the mask goes first, so the shader never runs on lights it's
-    // meant to stay off; muting, the mute does.
-    const sends = (patch.muted === false ? [mask, mute] : [mute, mask]).filter((c) => c !== null);
+    // meant to stay off; muting, the mute does. Its params after.
+    const sends = [...(patch.muted === false ? [mask, mute] : [mute, mask]).filter((c) => c !== null), ...(target ? paramChanges(target, patch.params) : [])];
     for (const [i, change] of sends.entries()) then(i === sends.length - 1 ? { ...rest, edits: omit(rest.edits, key) } : rest, change);
     if (sends.length === 0) then({ ...rest, edits: omit(rest.edits, key) });
   }
