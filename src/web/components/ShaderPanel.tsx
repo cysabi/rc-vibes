@@ -14,7 +14,6 @@
 
 import { useState } from "react";
 import type { LightInfo } from "../../shared/arclamp.ts";
-import { appliesTo, valuesAt } from "../../shared/params.ts";
 import { tagLabel } from "../../shared/tags.ts";
 import type { Instance, ShaderSketch } from "../../shared/vibes.ts";
 import { request, useBranchHead } from "../api.ts";
@@ -24,8 +23,6 @@ import { navigate } from "../route.ts";
 import { invalidateScene } from "../scene.ts";
 import { useLiveMode } from "../settings.ts";
 import { commitName, count, listOf, ordinal } from "../words.ts";
-import { ColorParam } from "./ColorParam.tsx";
-import { ParamControl } from "./ParamControl.tsx";
 
 /** Its head: back to the selection, its name, and where it's from. */
 export function ShaderTitle({ layer, onBack }: { layer: Layer; onBack: () => void }) {
@@ -133,51 +130,11 @@ export function ShaderBody({ layer, stack, removing, lights, selected, onGone }:
           </li>
         )}
       </ul>
-      <Params layer={layer} lights={lights} selected={selected} />
       <div className="shader-actions">
         {sketch?.name != null && <OpenCode sketch={sketch} />}
         {instance && <Update instance={instance} />}
         {!removing && <RemoveShader layer={layer} onGone={onGone} />}
       </div>
-    </div>
-  );
-}
-
-/**
- * Its params, once it's in the room and has said what they are: a control
- * each, for the selected lights it lights that the param is for (its kinds,
- * tags and ids). A change is a pending edit like any other (the simulation
- * shows it; Apply sends it, or live mode at once). Every light selected sets
- * it everywhere.
- */
-function Params({ layer, lights, selected }: { layer: Layer; lights: LightInfo[]; selected: number[] }) {
-  const params = layer.params;
-  if (!params?.declared || layer.stage !== "live") return null;
-  const reach = new Set(reachOf(layer));
-  const chosen = new Set(selected);
-  const here = lights.filter((l) => chosen.has(l.id) && reach.has(l.id));
-  const rows = params.declared.flatMap((spec) => {
-    const theirs = here.filter((l) => appliesTo(spec, l));
-    return theirs.length > 0 ? [{ spec, theirs }] : [];
-  });
-  if (rows.length === 0) return null;
-  return (
-    <div className="shader-params">
-      {rows.map(({ spec, theirs }) => (
-        <ParamControl
-          key={spec.name}
-          spec={spec}
-          lights={theirs}
-          values={valuesAt(
-            spec,
-            params.values[spec.name],
-            theirs.map((l) => l.id),
-          )}
-          onChange={(changes) => drafts.setParam(layer.key, spec.name, changes)}
-          colorPicker={ColorParam}
-          note={count(theirs.length, "light")}
-        />
-      ))}
     </div>
   );
 }

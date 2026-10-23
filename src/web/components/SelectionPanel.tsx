@@ -65,6 +65,7 @@ import { AddSketch } from "./AddSketch.tsx";
 import { Reveal } from "./Reveal.tsx";
 import { RoomToneEditor } from "./RoomToneEditor.tsx";
 import { AddingBody, AddingTitle, ComingBody, ComingTitle, ShaderBody, ShaderTitle } from "./ShaderPanel.tsx";
+import { paramRowsOf, ShaderParams } from "./ShaderParams.tsx";
 
 const NO_SCENE: Scene = { shaders: [], roomtone: null };
 
@@ -349,7 +350,7 @@ export function SelectionPanel({ floor, here, selected, shader, onShader, onClos
                           row={row}
                           onSwitch={(on) => setOn(row, on)}
                           onOpen={() => onShader(row.layer.key)}
-                          details={detailsOf(row.layer)}
+                          details={detailsOf(row.layer, chosen)}
                           opened={opened === row.layer.key}
                           onToggle={() => setOpened(opened === row.layer.key ? null : row.layer.key)}
                         />
@@ -402,10 +403,12 @@ interface RowProps {
 
 /**
  * What a shader shows under its row, opened, as room tone shows its color:
- * its parameters, once shaders have any. Nothing yet, for any of them.
+ * its params, for these lights (ShaderParams.tsx); nothing, if it has none
+ * for them.
  */
-function detailsOf(_layer: Layer): ReactNode | null {
-  return null;
+function detailsOf(layer: Layer, chosen: LightInfo[]): ReactNode | null {
+  const params = paramRowsOf(layer, chosen);
+  return params.length > 0 ? <ShaderParams layer={layer} rows={params} /> : null;
 }
 
 /**

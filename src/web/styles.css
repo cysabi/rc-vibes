@@ -1540,12 +1540,10 @@ kbd {
   font-size: 12px;
 }
 
-.shader-params {
+/* A shader's params under its row (ShaderParams), spaced as room tone's editor is. */
+.param-list {
   display: grid;
-  gap: 14px;
-  margin: 4px 0 16px;
-  /* In from the panel's sides, as its facts and actions are. */
-  padding: 0 18px;
+  gap: 20px;
 }
 
 /* A param's control (ParamControl), and its way back to the default under it. */
