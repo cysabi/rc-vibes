@@ -6,6 +6,7 @@ import type {
   ApiError,
   ApiToken,
   BoxState,
+  CameraView,
   Lights,
   LoginOptions,
   Me,
@@ -14,6 +15,7 @@ import type {
   RoomRequest,
   Sketch,
   Status,
+  StreetView,
   TagChange,
   TypeChange,
 } from "../shared/vibes.ts";
@@ -145,6 +147,32 @@ export const useStatus = () =>
 
 export const useLights = () =>
   useQuery({ queryKey: ["lights"], queryFn: () => request<Lights>("GET", "/api/lights"), staleTime: 60_000 });
+
+/** The streetview cameras; none where vibes has no photographs (ROOMSTAGE_DIR unset). */
+export const useStreetViews = () =>
+  useQuery({
+    queryKey: ["streetview"],
+    queryFn: async () => {
+      try {
+        return await request<StreetView[]>("GET", "/api/streetview");
+      } catch (err) {
+        if (err instanceof RequestError && err.status === 404) return [];
+        throw err;
+      }
+    },
+    staleTime: 60_000,
+  });
+
+/** Move a streetview camera (or turn it), shown at once. */
+export function useMoveCamera() {
+  return useMutation({
+    mutationFn: ({ id, view }: { id: string; view: CameraView }) => request<void>("PUT", `/api/streetview/${id}`, view),
+    onMutate: ({ id, view }) => {
+      queryClient.setQueryData<StreetView[]>(["streetview"], (old) => old?.map((v) => (v.id === id ? { ...v, ...view } : v)));
+    },
+    onSettled: () => queryClient.invalidateQueries({ queryKey: ["streetview"] }),
+  });
+}
 
 // The scene: scene.ts (pushed by vibes, not polled).
 

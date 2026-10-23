@@ -41,7 +41,7 @@ import {
   type RailShape,
 } from "../../shared/rails.ts";
 import type { Placement, Spot, TagChange, TypeChange } from "../../shared/vibes.ts";
-import { useChangeLayout, type LayoutChange } from "../api.ts";
+import { useChangeLayout, useMoveCamera, useStreetViews, type LayoutChange } from "../api.ts";
 import { FLOORS, planExtent, type Floor } from "../floors.ts";
 import { screenGamut, setHdrCanvas, useDisplay, useGamut } from "../display.ts";
 import { CheckIcon, DownloadIcon, FitIcon, MinusIcon, PencilIcon, PlusIcon, RailIcon, TrashIcon, TurnIcon, UndoIcon } from "../icons.tsx";
@@ -72,6 +72,7 @@ import {
 import { Drawer } from "./Drawer.tsx";
 import { Latency } from "./Latency.tsx";
 import { Segmented } from "./Segmented.tsx";
+import { cameraAt, Pegman, StreetViewSpots } from "./StreetViewMarks.tsx";
 import { TagEditor } from "./TagEditor.tsx";
 
 const TYPE_NAMES: Record<string, string> = { br30: "color bulb", "4x1": "4×1 panel", relay: "old bulb" };
@@ -126,7 +127,15 @@ interface Props {
   corner?: ReactNode;
   /** Fit the building again whenever the map's size changes, rather than keeping the view (for a pane that's resized). */
   fitOnResize?: boolean;
+  /** Open streetview from a camera (the figure dropped on it); without it, there's no figure. */
+  onStreetView?: (id: string) => void;
+  /** Covered by something drawn over all of it (streetview): it paints nothing until it's uncovered. */
+  covered?: boolean;
 }
+
+const NO_CAMERAS: never[] = [];
+// How long a click on the figure shows the cameras for.
+const POKE_MS = 2500;
 
 interface Size {
   width: number;
@@ -177,7 +186,9 @@ interface GestureEvent extends UIEvent {
   clientY: number;
 }
 
-export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSelect, dock, framing, corner, fitOnResize }: Props) {
+export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSelect, dock, framing, corner, fitOnResize, onStreetView, covered = false }: Props) {
+  const coveredRef = useRef(covered);
+  coveredRef.current = covered;
   const wrap = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const planEl = useRef<HTMLDivElement>(null);
@@ -217,6 +228,17 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
   // While a box is being dragged out: the lights it would select (with the
   // selection it adds to), summed up in a card until it's let go.
   const [boxing, setBoxing] = useState<number[] | null>(null);
+  // Streetview: its cameras, the figure while it's dragged (map px), and a
+  // click on it showing the cameras for a moment.
+  const cameras = useStreetViews().data ?? NO_CAMERAS;
+  const moveCamera = useMoveCamera();
+  const [peg, setPeg] = useState<{ x: number; y: number } | null>(null);
+  const [poked, setPoked] = useState(false);
+  useEffect(() => {
+    if (!poked) return;
+    const t = window.setTimeout(() => setPoked(false), POKE_MS);
+    return () => window.clearTimeout(t);
+  }, [poked]);
   const change = useChangeLayout();
   const admin = useAdminMode();
   const [undo, setUndo] = useState<LayoutChange[]>([]);
@@ -529,7 +551,8 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
         if (done) motion.current = null;
         setView(view);
       }
-      if (dirty.current) paint();
+      // Covered, it stays dirty, and paints once it's shown again.
+      if (dirty.current && !coveredRef.current) paint();
       raf = requestAnimationFrame(tick);
     };
     paintNow.current = paint;
@@ -1193,6 +1216,17 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
       {view && boxing && boxing.length > 0 && (
         <SelectionCard lights={shown.filter((l) => boxing.includes(l.id))} at={(l) => positionOf(l, drag.current)} view={view} width={size?.width ?? 0} />
       )}
+      {view && onStreetView && cameras.length > 0 && (
+        <StreetViewSpots
+          cameras={cameras}
+          floor={floor}
+          view={view}
+          peg={peg}
+          shown={poked}
+          editing={moving}
+          onMove={(id, v) => moveCamera.mutate({ id, view: v })}
+        />
+      )}
 
       <div className="map-top">
         <div className="map-tools">
@@ -1245,6 +1279,18 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
             {admin && <Latency />}
             <ScaleBar scale={view.scale} />
             <div className="zoom">
+              {onStreetView && cameras.length > 0 && (
+                <Pegman
+                  map={wrap}
+                  onDrag={setPeg}
+                  onDrop={(p) => {
+                    setPeg(null);
+                    const hit = cameraAt(cameras, floor, view, p);
+                    if (hit) onStreetView(hit.id);
+                  }}
+                  onPoke={() => setPoked(true)}
+                />
+              )}
               {/* Floors stacked as they are in the building, the top one first. */}
               <Segmented
                 className="floor-switch"
