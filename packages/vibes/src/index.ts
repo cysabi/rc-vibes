@@ -48,5 +48,6 @@ export {
   type Param,
 } from "./field.ts";
 export { clock, type Clock, type Every } from "./signal.ts";
+export { declaredParams, param, setParamValues, takePacket, type ParamOptions, type ParamPacket, type ParamSpec, type ParamValues } from "./param.ts";
 export { chance, clamp, decay, ease, fract, hash, lerp, noiseAt, remap, saw, smoothstep, square, tri, wave } from "./shape.ts";
 export { sketch, type Look, type LookResult, type Looks, type SketchOptions, type SwitchLook, type SwitchResult } from "./sketch.ts";

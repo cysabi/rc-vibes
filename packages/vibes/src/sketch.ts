@@ -24,6 +24,7 @@
 import { Color, color, isPalette, type ColorInput } from "./color.ts";
 import type { Out, Prev, Update } from "./arclamp.ts";
 import { colorOf, Here, roomOf, sameLayout, type Room } from "./here.ts";
+import { receiveParams } from "./param.ts";
 
 // Plain V8 (arclamp's sandbox) has only what arclamp's prelude gives it.
 declare const console: { warn(...data: unknown[]): void };
@@ -95,6 +96,8 @@ export function sketch(given: Looks | Look, options: SketchOptions = {}): Update
   };
 
   return (prev: Prev, nowMs: number, initialMs: number): Out => {
+    // Whatever vibes has sent of the params since last tick, first.
+    receiveParams();
     const list = Array.isArray(prev?.lights) ? prev.lights : [];
     if (!room || !sameLayout(prev, room)) room = roomOf(prev, room);
     const frame = Number.isFinite(initialMs) ? initialMs : nowMs;

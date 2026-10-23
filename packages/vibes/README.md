@@ -259,6 +259,33 @@ export const update = sketch(osc(4, 0.1).rotate(turn).kaleid(6).color(look).boos
 
 `every(n)` also gives `count`, `ramp` (0 to 1 between marks) and `since`.
 
+## Params
+
+A param is a number vibes can change while the sketch runs: a knob on the
+sketch's panel in vibes, and a value per light, so a selection on the map can
+set it for a section. Declare it with a default and a range, and use it
+wherever a number can depend on `here`:
+
+```ts
+import { sketch, osc, palettes, param } from "@roobscoob/vibes";
+
+const speed = param("speed", 0.05, { min: 0, max: 0.5 });
+const bands = param("bands", 3, { min: 1, max: 8, step: 1, perLight: false });
+
+export const update = sketch(osc(bands, speed).color(palettes.dusk));
+```
+
+`param(name, default, { min, max, step, label, perLight })` gives a field:
+`speed(here)` is this light's value (its own, if vibes has set one; else the
+value set for everywhere; else the default). `perLight: false` makes it one
+knob for the whole instance, for things like a tempo. The range is the
+slider's; a value is always kept within it.
+
+vibes learns what a sketch declares when it builds it, and sends each
+instance's values to its shader over arclamp's udp, as the values change and
+once a second regardless; the preview gets the same packets. Nothing is
+needed in the sketch beyond the declaration.
+
 ## Without sketch()
 
 `sketch()` makes arclamp's `update(prev, nowMs, initialMs)`, which you can
