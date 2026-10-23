@@ -129,8 +129,8 @@ interface Props {
   fitOnResize?: boolean;
   /** Open streetview from a camera (the figure dropped on it); without it, there's no figure. */
   onStreetView?: (id: string) => void;
-  /** Covered by something drawn over all of it (streetview): it paints nothing until it's uncovered. */
-  covered?: boolean;
+  /** The camera streetview's showing, if it's open: the map shows every camera, that one picked out, and another click switches. */
+  streetView?: string | null;
 }
 
 const NO_CAMERAS: never[] = [];
@@ -186,9 +186,7 @@ interface GestureEvent extends UIEvent {
   clientY: number;
 }
 
-export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSelect, dock, framing, corner, fitOnResize, onStreetView, covered = false }: Props) {
-  const coveredRef = useRef(covered);
-  coveredRef.current = covered;
+export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSelect, dock, framing, corner, fitOnResize, onStreetView, streetView = null }: Props) {
   const wrap = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const planEl = useRef<HTMLDivElement>(null);
@@ -551,8 +549,7 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
         if (done) motion.current = null;
         setView(view);
       }
-      // Covered, it stays dirty, and paints once it's shown again.
-      if (dirty.current && !coveredRef.current) paint();
+      if (dirty.current) paint();
       raf = requestAnimationFrame(tick);
     };
     paintNow.current = paint;
@@ -1223,7 +1220,9 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
           view={view}
           peg={peg}
           shown={poked}
+          active={streetView}
           editing={moving}
+          onPick={onStreetView}
           onMove={(id, v) => moveCamera.mutate({ id, view: v })}
         />
       )}

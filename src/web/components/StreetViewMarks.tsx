@@ -93,7 +93,9 @@ export function StreetViewSpots({
   view,
   peg,
   shown,
+  active = null,
   editing,
+  onPick,
   onMove,
 }: {
   cameras: readonly StreetView[];
@@ -103,7 +105,10 @@ export function StreetViewSpots({
   peg: Point | null;
   /** Show the cameras even without a drag (after a click on the figure). */
   shown: boolean;
+  /** The camera streetview's showing, beside the map: every camera stays out, that one picked out, a click on another switches. */
+  active?: string | null;
   editing: boolean;
+  onPick?: (id: string) => void;
   onMove: (id: string, v: CameraView) => void;
 }) {
   // A camera being moved or turned, shown where it's going until it's let go.
@@ -117,10 +122,16 @@ export function StreetViewSpots({
   const grab = useRef<{ id: string; part: "body" | "tip"; from: Point; start: CameraView } | null>(null);
   const here = cameras.filter((c) => c.floor === floor);
   const others = cameras.length - here.length;
-  if (!peg && !shown && !editing) return null;
+  if (!peg && !shown && !editing && !active) return null;
   const hot = peg ? cameraAt(cameras, floor, view, peg) : null;
+  const picking = !!active && !editing;
 
   const press = (c: StreetView, part: "body" | "tip") => (e: ReactPointerEvent) => {
+    if (picking) {
+      e.stopPropagation();
+      if (c.id !== active) onPick?.(c.id);
+      return;
+    }
     if (!editing) return;
     e.stopPropagation();
     e.currentTarget.setPointerCapture(e.pointerId);
@@ -149,7 +160,7 @@ export function StreetViewSpots({
   };
 
   return (
-    <div className={editing ? "streetview-spots editing" : "streetview-spots"} aria-hidden={!editing}>
+    <div className={`streetview-spots${editing ? " editing" : picking ? " picking" : ""}`} aria-hidden={!editing && !picking}>
       {here.map((c) => {
         const v = moving?.id === c.id ? moving.v : c;
         const s = toScreen(view, v.mm_x, v.mm_y);
@@ -160,7 +171,7 @@ export function StreetViewSpots({
         return (
           <svg
             key={c.id}
-            className={hot?.id === c.id ? "camera hot" : "camera"}
+            className={`camera${hot?.id === c.id ? " hot" : ""}${active === c.id ? " active" : ""}`}
             style={{ left: s.x, top: s.y }}
             width={CONE_PX * 2 + 24}
             height={CONE_PX * 2 + 24}
@@ -168,7 +179,10 @@ export function StreetViewSpots({
           >
             <path className="camera-cone" d={cone} />
             <circle className="camera-dot" r="7" onPointerDown={press(c, "body")} onPointerMove={drag} onPointerUp={release} onPointerCancel={release}>
-              <title>Camera {c.id}{editing ? ": drag to move it" : ""}</title>
+              <title>
+                Camera {c.id}
+                {editing ? ": drag to move it" : picking && c.id !== active ? ": see the room from here" : ""}
+              </title>
             </circle>
             {editing && (
               <circle className="camera-tip" cx={tip.x} cy={tip.y} r="6" onPointerDown={press(c, "tip")} onPointerMove={drag} onPointerUp={release} onPointerCancel={release}>

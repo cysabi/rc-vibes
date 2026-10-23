@@ -1,11 +1,12 @@
 // Streetview: the room as a camera saw it, relit with the lights as they are
-// now, over everything else. It shows a size the device can redraw every
-// frame while the lights change (720p- or 1080p-class), and once they've held
-// still a moment, the next size up, if the device can hold that too.
+// now, beside the map (side by side, or above it on a tall screen). It shows
+// a size the device can redraw every frame while the lights change (720p- or
+// 1080p-class), and once they've held still a moment, the next size up, if
+// the device can hold that too.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useRef, useState, type RefObject } from "react";
 import { useLights, useStreetViews } from "../api.ts";
-import { ChevronLeftIcon } from "../icons.tsx";
+import { CloseIcon } from "../icons.tsx";
 import { useFrames } from "../live.ts";
 import { loadBasis, pickEncoding, pickTiers, type Basis, type Manifest, type Tier } from "../streetview/basis.ts";
 import { Relighter, type Look } from "../streetview/render.ts";
@@ -130,12 +131,12 @@ export function StreetView({ id, onClose }: { id: string; onClose: () => void })
     <div className="streetview" role="dialog" aria-label={`The room from camera ${id}`}>
       <canvas ref={canvas} className="streetview-canvas" />
       <div className="streetview-top">
-        <button className="glass-button" onClick={onClose} title="Back to the map (Esc)">
-          <ChevronLeftIcon /> Map
-        </button>
         <p className="streetview-title">
           From camera <span className="mono">{id}</span>
         </p>
+        <button className="glass-button streetview-close" onClick={onClose} title="Close streetview (Esc)" aria-label="Close streetview">
+          <CloseIcon />
+        </button>
       </div>
       <div className="streetview-bottom">
         {error || (views.data && !known) ? (
@@ -150,5 +151,85 @@ export function StreetView({ id, onClose }: { id: string; onClose: () => void })
         </label>
       </div>
     </div>
+  );
+}
+
+const SPLIT_MIN = 0.25;
+const SPLIT_MAX = 0.8;
+const tall = () => matchMedia("(orientation: portrait)").matches;
+// Remembered for each way round. Side by side the photograph gets a bit more
+// than half; above the map, about what a 3:2 photograph needs across a phone.
+const SPLIT_KEY = () => (tall() ? "vibes.streetviewSplitTall" : "vibes.streetviewSplit");
+const SPLIT_DEFAULT = () => (tall() ? 0.4 : 0.56);
+
+/**
+ * The line between streetview and the map: drag it to give either more room
+ * (remembered here), double-click it for the usual split. It sets the app's
+ * --split straight away, so the map just resizes, without React redrawing it.
+ */
+export function SplitHandle({ app }: { app: RefObject<HTMLDivElement | null> }) {
+  const set = (f: number) => app.current?.style.setProperty("--split", `${(Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, f)) * 100).toFixed(2)}%`);
+  const saved = () => {
+    try {
+      const f = Number(localStorage.getItem(SPLIT_KEY()));
+      return f >= SPLIT_MIN && f <= SPLIT_MAX ? f : SPLIT_DEFAULT();
+    } catch {
+      return SPLIT_DEFAULT();
+    }
+  };
+  const save = (f: number | null) => {
+    try {
+      if (f === null) localStorage.removeItem(SPLIT_KEY());
+      else localStorage.setItem(SPLIT_KEY(), String(f));
+    } catch {
+      // Not remembered, then.
+    }
+  };
+  const at = useRef<number | null>(null);
+  useEffect(() => {
+    set(saved());
+    const el = app.current;
+    return () => {
+      el?.style.removeProperty("--split");
+    };
+    // Once, for the app it splits.
+  }, [app]);
+  const fraction = (e: { clientX: number; clientY: number }) => {
+    const r = app.current!.getBoundingClientRect();
+    return tall() ? (e.clientY - r.top) / r.height : (e.clientX - r.left) / r.width;
+  };
+  return (
+    <div
+      className="split-handle"
+      role="separator"
+      aria-orientation={tall() ? "horizontal" : "vertical"}
+      aria-label="Resize streetview"
+      tabIndex={0}
+      onPointerDown={(e) => {
+        e.currentTarget.setPointerCapture(e.pointerId);
+        at.current = fraction(e);
+      }}
+      onPointerMove={(e) => {
+        if (at.current === null) return;
+        at.current = fraction(e);
+        set(at.current);
+      }}
+      onPointerUp={() => {
+        if (at.current !== null) save(Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, at.current)));
+        at.current = null;
+      }}
+      onDoubleClick={() => {
+        set(SPLIT_DEFAULT());
+        save(null);
+      }}
+      onKeyDown={(e) => {
+        const step = e.key === "ArrowLeft" || e.key === "ArrowUp" ? -0.04 : e.key === "ArrowRight" || e.key === "ArrowDown" ? 0.04 : 0;
+        if (!step) return;
+        e.preventDefault();
+        const f = Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, saved() + step));
+        set(f);
+        save(f);
+      }}
+    />
   );
 }

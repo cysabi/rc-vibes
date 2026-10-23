@@ -1,7 +1,7 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Rail } from "../shared/arclamp.ts";
 import { useAddingBuilds } from "./adding.ts";
-import { useLights, useMe } from "./api.ts";
+import { useLights, useMe, useStreetViews } from "./api.ts";
 import { useScene, type Scene } from "./scene.ts";
 import { applyDraft, keyNow, layerOf, layersOf, pendingCount, reachOf, templateOf, useDraft, type Draft, type LayerKey } from "./draft.ts";
 import { Banners } from "./components/Banners.tsx";
@@ -19,7 +19,7 @@ import { usePeek } from "./peek.ts";
 import { savedFloor, saveFloor, useLiveMode } from "./settings.ts";
 import { useSimulation } from "./sim.ts";
 import { navigate, usePath, useQueryParam } from "./route.ts";
-import { StreetView } from "./components/StreetView.tsx";
+import { SplitHandle, StreetView } from "./components/StreetView.tsx";
 import { SketchesLink, SketchPages } from "./sketches/SketchPages.tsx";
 
 const NO_RAILS: Rail[] = [];
@@ -50,10 +50,15 @@ function Shell() {
   const lights = useLights();
   const scene = useScene();
   useLiveStream(lights.data);
-  // Streetview, from the camera in the address (?view=), over everything.
+  // Streetview, from the camera in the address (?view=), beside the map.
   const streetView = useQueryParam("view");
+  const cameras = useStreetViews().data;
   const openStreetView = useCallback((id: string) => navigate(`${location.pathname}?view=${encodeURIComponent(id)}`), []);
-  const closeStreetView = useCallback(() => navigate(location.pathname), []);
+  const closeStreetView = useCallback(() => {
+    navigate(location.pathname);
+    // The map has its whole width back: show the floor (or what's selected) again.
+    setFraming((n) => n + 1);
+  }, []);
   const [selected, setSelected] = useState<ReadonlySet<number>>(new Set());
   const [floor, setFloor] = useState<number>(initialFloor);
   const all = useMemo(() => lights.data?.lights ?? [], [lights.data]);
@@ -149,6 +154,13 @@ function Shell() {
 
   // Picking by tag also flies the map to what's picked.
   const [framing, setFraming] = useState(0);
+
+  // A camera on another floor shows that floor.
+  const cameraFloor = cameras?.find((c) => c.id === streetView)?.floor;
+  useEffect(() => {
+    if (cameraFloor !== undefined && cameraFloor !== floor) showFloor(cameraFloor);
+    // Only when the camera (or where it is) changes, not whenever the floor does.
+  }, [streetView, cameraFloor]);
   const selectByTag = useCallback(
     (ids: number[], mode: SelectMode) => {
       select(ids, mode);
@@ -201,8 +213,13 @@ function Shell() {
   // what it looks like floats in the map's bottom left (not on a phone).
   const hasSelection = selectedHere.size > 0;
   const narrow = useNarrow();
+  // With streetview open, the room from its camera takes one side and the map
+  // (everything above, in its pane) the other, split as last dragged.
   return (
     <div className={`app${hasSelection ? " has-selection" : ""}${streetView ? " in-streetview" : ""}`} ref={app}>
+      {streetView && <StreetView id={streetView} onClose={closeStreetView} />}
+      {streetView && <SplitHandle app={app} />}
+      <div className="map-pane">
       <main className="stage">
         {lights.error ? (
           <p className="map-error">Couldn't load the lights: {lights.error.message}</p>
@@ -219,7 +236,8 @@ function Shell() {
             framing={framing}
             corner={hasSelection && !open && !narrow && <ColorPreview lights={here.filter((l) => selectedHere.has(l.id))} />}
             onStreetView={openStreetView}
-            covered={streetView !== null}
+            streetView={streetView}
+            fitOnResize={streetView !== null}
           />
         )}
       </main>
@@ -250,7 +268,7 @@ function Shell() {
           <UserMenu />
         </div>
       </div>
-      {streetView && <StreetView id={streetView} onClose={closeStreetView} />}
+      </div>
     </div>
   );
 }

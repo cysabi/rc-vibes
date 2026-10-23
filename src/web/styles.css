@@ -3713,13 +3713,90 @@ html {
   background: var(--glass-strong);
 }
 
-.streetview {
-  position: fixed;
+/* The map's own pane (the map, the HUD, the selection panel): all of the app,
+   or, with streetview open, its side of the split: streetview, the line
+   between (dragged to resize), the map. Side by side; on a tall screen,
+   streetview above. */
+.map-pane {
+  position: absolute;
   inset: 0;
-  z-index: 40;
+}
+
+.app.in-streetview {
+  display: grid;
+  grid-template-columns: var(--split, 56%) 9px minmax(0, 1fr);
+}
+
+.app.in-streetview .map-pane {
+  position: relative;
+  inset: auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.streetview {
+  position: relative;
   display: grid;
   place-items: center;
+  min-width: 0;
+  min-height: 0;
+  overflow: hidden;
   background: var(--void);
+}
+
+.split-handle {
+  position: relative;
+  background: var(--solid);
+  cursor: col-resize;
+  touch-action: none;
+}
+
+.split-handle::after {
+  position: absolute;
+  top: 50%;
+  left: 50%;
+  width: 3px;
+  height: 36px;
+  border-radius: 2px;
+  background: var(--line-2);
+  content: "";
+  transform: translate(-50%, -50%);
+}
+
+.split-handle:hover::after,
+.split-handle:focus-visible::after {
+  background: var(--ink-2);
+}
+
+@media (orientation: portrait) {
+  .app.in-streetview {
+    grid-template-columns: none;
+    grid-template-rows: var(--split, 40%) 9px minmax(0, 1fr);
+  }
+
+  .split-handle {
+    cursor: row-resize;
+  }
+
+  .split-handle::after {
+    width: 36px;
+    height: 3px;
+  }
+}
+
+.streetview-spots.picking .camera-dot {
+  pointer-events: auto;
+  cursor: pointer;
+}
+
+.camera.active .camera-cone {
+  fill: rgb(245 192 102 / 0.4);
+  stroke: var(--warn);
+}
+
+.camera.active .camera-dot {
+  stroke: var(--ink);
+  stroke-width: 2.5;
 }
 
 .streetview-canvas {
@@ -3740,6 +3817,11 @@ html {
 
 .streetview-top {
   top: var(--gap);
+  justify-content: space-between;
+}
+
+.streetview-close {
+  padding: 0 11px;
 }
 
 .streetview-bottom {
@@ -3770,10 +3852,4 @@ html {
 
 .streetview-exposure input {
   width: 140px;
-}
-
-/* Under streetview the map isn't painted, but keeps its size and view. */
-.app.in-streetview .stage,
-.app.in-streetview .hud {
-  visibility: hidden;
 }
