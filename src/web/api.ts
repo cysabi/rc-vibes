@@ -4,12 +4,14 @@ import { QueryCache, QueryClient, useMutation, useQuery } from "@tanstack/react-
 import type { HealthResponse } from "../shared/arclamp.ts";
 import type {
   ApiError,
+  ApiToken,
   BoxState,
   Lights,
   LoginOptions,
   Me,
   Placement,
   RailChange,
+  RoomRequest,
   Sketch,
   Status,
   TagChange,
@@ -27,8 +29,54 @@ export class RequestError extends Error {
   }
 }
 
+// Where the API is (LoginOptions.api): this page's own address, or, from
+// another of vibes' addresses, the main one (no proxy between), reached with
+// a short-lived token from this page's own (/auth/token) in place of the
+// cookie, which doesn't go from one site to another. Asked once; without an
+// answer, this page's own will do.
+let apiBase: Promise<string | null> | null = null;
+const apiBaseOf = () =>
+  (apiBase ??= fetch(`/auth/options?origin=${encodeURIComponent(location.origin)}`)
+    .then(async (r) => (r.ok ? ((await r.json()) as LoginOptions).api : null))
+    .catch(() => null));
+
+// The token, fetched again with this long to spare.
+const TOKEN_SPARE_MS = 60_000;
+let token: ApiToken | null = null;
+let fetchingToken: Promise<ApiToken | null> | null = null;
+async function tokenFor(fresh = false): Promise<string | null> {
+  if (!fresh && token && token.exp - Date.now() > TOKEN_SPARE_MS) return token.token;
+  fetchingToken ??= fetch("/auth/token", { cache: "no-store" })
+    .then(async (r) => (r.ok ? ((await r.json()) as ApiToken) : null))
+    .catch(() => null)
+    .finally(() => (fetchingToken = null));
+  token = await fetchingToken;
+  return token?.token ?? null;
+}
+
+/** A request to vibes: under /api, at its API's address (with the token there, tried once more with a fresh one if it's turned down); else this page's. */
+export async function apiFetch(path: string, init: RequestInit = {}): Promise<Response> {
+  const at = path.startsWith("/api/") ? await apiBaseOf() : null;
+  if (!at) return fetch(path, init);
+  const send = async (fresh: boolean) => {
+    const t = await tokenFor(fresh);
+    return fetch(at + path, { ...init, headers: { ...(init.headers as Record<string, string> | undefined), ...(t ? { Authorization: `Bearer ${t}` } : {}) } });
+  };
+  const res = await send(false);
+  return res.status === 401 ? send(true) : res;
+}
+
+/** A socket to vibes' API (a path under /api): its address, and what to say on it first (the token, if it's another site's). */
+export async function apiSocket(path: string): Promise<{ url: string; hello: string | null }> {
+  const at = await apiBaseOf();
+  const url = `${(at ?? location.origin).replace(/^http/, "ws")}${path}`;
+  if (!at) return { url, hello: null };
+  const t = await tokenFor();
+  return { url, hello: t ? JSON.stringify({ type: "auth", token: t } satisfies RoomRequest) : null };
+}
+
 export async function request<T>(method: string, path: string, body?: unknown): Promise<T> {
-  const res = await fetch(path, {
+  const res = await apiFetch(path, {
     method,
     headers: body === undefined ? {} : { "Content-Type": "application/json" },
     body: body === undefined ? undefined : JSON.stringify(body),
@@ -98,6 +146,7 @@ export function useLogout() {
   return useMutation({
     mutationFn: () => request<void>("POST", "/auth/logout"),
     onSuccess: () => {
+      token = null;
       // Logged out first, so the app swaps to the login page; then drop the
       // rest. (clear() would also drop "me" from under the mounted app, which
       // then never hears that it's null.)

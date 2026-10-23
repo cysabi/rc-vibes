@@ -2,14 +2,16 @@
 // pick-your-name dev login when VIBES_DEV_LOGIN=1. Sessions are signed
 // cookies holding the user's id and name; nothing is stored server-side.
 // Devices (a wall display) log in with a key of their own instead: see
-// VIBES_DEVICE_KEYS and /auth/device.
+// VIBES_DEVICE_KEYS and /auth/device. A page at another of vibes' addresses
+// than the main one reaches the API at the main one with a short-lived token
+// from its own (/auth/token), as a cookie doesn't go from one site to another.
 
-import { createHash, randomBytes, timingSafeEqual } from "node:crypto";
+import { createHash, createHmac, randomBytes, timingSafeEqual } from "node:crypto";
 import { Hono, type Context, type MiddlewareHandler } from "hono";
 import { deleteCookie, getSignedCookie, setSignedCookie } from "hono/cookie";
 import { parseSigned } from "hono/utils/cookie";
 import { z } from "zod";
-import type { LoginOptions, Me } from "../shared/vibes.ts";
+import type { ApiToken, LoginOptions, Me } from "../shared/vibes.ts";
 import type { Config } from "./env.ts";
 
 const SESSION_COOKIE = "vibes_session";
@@ -71,8 +73,38 @@ async function startSession(c: Context, config: Config, user: Me, deviceKey?: st
   await setSignedCookie(c, SESSION_COOKIE, value, config.sessionSecret, cookieOptions(config, maxAge));
 }
 
+/** Who's asking: by their session cookie, or a token from another of vibes' addresses (Authorization: Bearer; apiTokenOf). */
 export async function readSession(c: Context, config: Config): Promise<Me | null> {
-  return sessionOf(await getSignedCookie(c, config.sessionSecret, SESSION_COOKIE), config);
+  const cookie = sessionOf(await getSignedCookie(c, config.sessionSecret, SESSION_COOKIE), config);
+  if (cookie) return cookie;
+  const [scheme, token] = (c.req.header("authorization") ?? "").split(" ");
+  return scheme?.toLowerCase() === "bearer" && token ? userOfToken(token, config) : null;
+}
+
+// A token's as good as the session it was made from, for this long at most.
+const TOKEN_MS = 10 * 60_000;
+const tokenMac = (payload: string, config: Config) => createHmac("sha256", config.sessionSecret).update(`vibes api token\0${payload}`).digest("base64url");
+
+/**
+ * A token for the API at vibes' main address, from a session cookie's value
+ * at another: what the session says, signed, and good for TOKEN_MS (or until
+ * the session ends). Null if the session's no good.
+ */
+export function apiTokenOf(session: string, config: Config): ApiToken | null {
+  if (!sessionOf(session, config)) return null;
+  const s = sessionSchema.parse(JSON.parse(session));
+  const payload = JSON.stringify({ ...s, exp: Math.min(s.exp, Date.now() + TOKEN_MS) });
+  return { token: `${Buffer.from(payload).toString("base64url")}.${tokenMac(payload, config)}`, exp: JSON.parse(payload).exp as number };
+}
+
+/** Who a token's for, if vibes made it and it's still good (as a session is: its device's key kept, and so on). */
+export function userOfToken(token: string, config: Config): Me | null {
+  const dot = token.indexOf(".");
+  if (dot < 0) return null;
+  const payload = Buffer.from(token.slice(0, dot), "base64url").toString();
+  const given = Buffer.from(token.slice(dot + 1));
+  const want = Buffer.from(tokenMac(payload, config));
+  return given.length === want.length && timingSafeEqual(given, want) ? sessionOf(payload, config) : null;
 }
 
 /** The session in a raw Cookie header, for what's handled outside Hono (the box proxy). */
@@ -125,7 +157,21 @@ export function authRoutes(config: Config) {
   const handoffs = new Map<string, { user: Me; nonce: string; exp: number }>();
   const failed = (c: Context) => c.text("Login failed: the request didn't match. Try logging in again.", 400);
 
-  auth.get("/options", (c) => c.json<LoginOptions>({ rc: config.rc !== null, dev: config.devLogin }));
+  // From another of vibes' addresses, the API is reached at the main one (no
+  // proxy between), with a token from this one. The page names its address.
+  auth.get("/options", (c) => {
+    const from = known(c.req.query("origin"));
+    return c.json<LoginOptions>({ rc: config.rc !== null, dev: config.devLogin, api: from && from !== main ? main : null });
+  });
+
+  // A short-lived token for the API at the main address, from this one's session.
+  auth.get("/token", async (c) => {
+    const raw = await getSignedCookie(c, config.sessionSecret, SESSION_COOKIE);
+    const made = raw ? apiTokenOf(raw, config) : null;
+    if (!made) return c.json({ error: "log in first", code: "unauthenticated" }, 401);
+    c.header("Cache-Control", "no-store");
+    return c.json<ApiToken>(made);
+  });
 
   auth.get("/login", async (c) => {
     if (!config.rc) return c.redirect("/");

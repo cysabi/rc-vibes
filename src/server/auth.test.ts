@@ -159,4 +159,48 @@ describe("device keys", () => {
     expect(() => withKeys(`portal=${KEY},portal=${"m".repeat(32)}`)).toThrow(/twice/);
     expect(() => withKeys(`portal=${KEY},kitchen=${KEY}`)).toThrow(/another/);
   });
+
+  it("ends a device's token with its key, as its session", async () => {
+    const cfg = withKeys(`portal=${KEY}`);
+    const jar = new Jar();
+    jar.take(await appFor(cfg).request(`/auth/device?key=${KEY}`));
+    const { token } = (await (await appFor(cfg).request("/auth/token", { headers: { cookie: jar.header } })).json()) as { token: string };
+    const asked = async (a: Hono) => (await a.request("/me", { headers: { authorization: `Bearer ${token}` } })).json();
+    expect(await asked(appFor(cfg))).toEqual({ id: "device:portal", name: "Portal", dev: false });
+    expect(await asked(appFor(withKeys(`portal=${"j".repeat(40)}`)))).toBeNull();
+  });
+});
+
+describe("the API at the main address, from another", () => {
+  const withMe = () => app.get("/me", async (c) => c.json(await readSession(c, config)));
+  const options = async (origin: string) => (await (await app.request(`/auth/options?origin=${encodeURIComponent(origin)}`)).json()) as { api: string | null };
+  afterEach(() => vi.useRealTimers());
+
+  it("is the main address for a page at another, and the page's own otherwise", async () => {
+    expect((await options("https://vibes.recurse.com")).api).toBe("https://vibes.hall.ly");
+    expect((await options("https://vibes.hall.ly")).api).toBeNull();
+    expect((await options("https://evil.example")).api).toBeNull();
+  });
+
+  it("takes a token from the page's own address in place of the cookie, for ten minutes", async () => {
+    withMe();
+    const { jars } = await logIn("https://vibes.recurse.com");
+    const res = await get(jars.recurse, "https://vibes.recurse.com/auth/token");
+    expect(res.headers.get("cache-control")).toBe("no-store");
+    const { token, exp } = (await res.json()) as { token: string; exp: number };
+    expect(exp - Date.now()).toBeGreaterThan(9 * 60_000);
+    const asked = async (t: string) => (await app.request("/me", { headers: { authorization: `Bearer ${t}` } })).json();
+    expect(await asked(token)).toEqual({ id: "rc:7", name: "Ada", dev: false });
+    // Changed, it's no one's.
+    const [payload, sig] = token.split(".");
+    const forged = Buffer.from(Buffer.from(payload!, "base64url").toString().replace("Ada", "Eve")).toString("base64url");
+    expect(await asked(`${forged}.${sig}`)).toBeNull();
+    // Nor once it's run out.
+    vi.useFakeTimers({ now: exp + 1 });
+    expect(await asked(token)).toBeNull();
+  });
+
+  it("gives no token without a session", async () => {
+    expect((await get(new Jar(), "https://vibes.recurse.com/auth/token")).status).toBe(401);
+  });
 });

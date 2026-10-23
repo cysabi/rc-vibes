@@ -38,7 +38,7 @@ export const change: z.ZodType<Change> = z.discriminatedUnion("op", [
   z.object({ op: z.literal("stack"), order: z.array(key).max(500) }),
 ]);
 
-export const request = z.object({ type: z.literal("apply"), id: key, changes: z.array(change).max(1000) });
+export const request = z.object({ type: z.literal("apply"), id: key, changes: z.array(change).max(1000), whole: z.boolean().optional() });
 
 /** An apply stopped at change `at`, why, and what it added before it. */
 export class ApplyRefused extends Error {

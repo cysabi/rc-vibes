@@ -473,11 +473,14 @@ function omit<T>(record: Record<string, T>, key: string): Record<string, T> {
  * Make the room match the draft, in one apply over the room socket: room
  * tone, then the shaders it takes out, then the sketches it adds, then each
  * other shader's mute and mask, then the stack's order. Refused part way,
- * just the rest stays pending, and it's thrown.
+ * just the rest stays pending, and it's thrown. `whole` (live mode, which
+ * sends again each time the draft changes, without waiting): it stands for
+ * any such send before it that vibes hasn't made yet (scene.ts), and only
+ * the newest send's answer, with nothing edited since, clears the draft.
  */
-export async function applyDraft(scene: Scene): Promise<void> {
+export async function applyDraft(scene: Scene, { whole = false }: { whole?: boolean } = {}): Promise<void> {
   const start = draft;
-  const { rest: d, error } = await sendDraft(scene, start);
+  const { rest: d, error } = await sendDraft(scene, start, whole);
   // The scene showing what was made comes before the answer; with no answer
   // (the connection lost), it's looked at again. Edits made while the draft
   // was being sent are kept: they only count where they still differ from
@@ -486,7 +489,9 @@ export async function applyDraft(scene: Scene): Promise<void> {
   // would put it in again, and again).
   if (error && !(error instanceof ApplyError)) await invalidateScene().catch(() => {});
   const added = new Set(start.added.filter((a) => !d.added.some((x) => x.key === a.key)).map((a) => a.key));
-  set(draft === start ? d : { ...draft, added: draft.added.filter((a) => !added.has(a.key)) });
+  // Left as it is otherwise, so a later send (live mode's) still knows it as what it sent.
+  if (draft === start) set(d);
+  else if (draft.added.some((a) => added.has(a.key))) set({ ...draft, added: draft.added.filter((a) => !added.has(a.key)) });
   if (error) throw error;
 }
 
@@ -494,7 +499,7 @@ export async function applyDraft(scene: Scene): Promise<void> {
  * The draft's changes, sent as one apply; what's left of the draft after
  * (nothing, unless the apply was refused part way, or not answered), and why.
  */
-async function sendDraft(scene: Scene, d: Draft): Promise<{ rest: Draft; error: Error | null }> {
+async function sendDraft(scene: Scene, d: Draft, whole: boolean): Promise<{ rest: Draft; error: Error | null }> {
   // Each change, with what's left of the draft once it's made.
   const changes: Change[] = [];
   const rests: Draft[] = [];
@@ -565,7 +570,7 @@ async function sendDraft(scene: Scene, d: Draft): Promise<{ rest: Draft; error: 
 
   if (changes.length === 0) return { rest: EMPTY, error: null };
   try {
-    for (const [key, id] of Object.entries(await applyChanges(changes))) madeAs.set(key, id);
+    for (const [key, id] of Object.entries(await applyChanges(changes, whole))) madeAs.set(key, id);
     return { rest: EMPTY, error: null };
   } catch (err) {
     if (!(err instanceof ApplyError)) return { rest: d, error: err as Error };

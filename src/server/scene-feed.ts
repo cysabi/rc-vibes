@@ -50,6 +50,9 @@ const LAYOUT_RETRY_MS = 10_000;
 const MAX_EARLY = 200;
 // A shader vibes changed is asked after if no event's said how it is by then.
 const CONFIRM_MS = 500;
+// A run of changes (live mode's drag) changes the room as each comes; the
+// scene that shows them goes to browsers at most this often (soon).
+const PACE_MS = 50;
 
 export interface FeedDeps {
   config: Config;
@@ -276,11 +279,25 @@ export function createSceneFeed({ config, db, arclamp, follow, layout, instances
   // One make at a time; asked for while one's going, one more after it.
   let making: Promise<void> | null = null;
   let queued: Promise<void> | null = null;
+  let madeAt = 0;
   function run(): Promise<void> {
+    madeAt = Date.now();
     making = make()
       .catch((err) => console.error("couldn't make the scene feed:", err))
       .finally(() => (making = null));
     return making;
+  }
+  // The next paced make (soon), and everyone waiting on it.
+  let pacing: Promise<void> | null = null;
+  /** The scene made, and sent on, with every change made so far: now, or once it's been PACE_MS since the last. */
+  function soon(): Promise<void> {
+    pacing ??= new Promise<void>((done) => setTimeout(done, Math.max(0, madeAt + PACE_MS - Date.now()))).then(() => {
+      pacing = null;
+      clearTimeout(gathering);
+      gathering = undefined;
+      return build();
+    });
+    return pacing;
   }
   function build(): Promise<void> {
     if (queued) return queued;
@@ -292,12 +309,16 @@ export function createSceneFeed({ config, db, arclamp, follow, layout, instances
     return queued;
   }
   let gathering: ReturnType<typeof setTimeout> | undefined;
+  // Paced too, so a run of changes (each a gather) makes a scene at most every PACE_MS.
   function gather() {
     if (stopped || gathering) return;
-    gathering = setTimeout(() => {
-      gathering = undefined;
-      void build();
-    }, GATHER_MS);
+    gathering = setTimeout(
+      () => {
+        gathering = undefined;
+        void build();
+      },
+      Math.max(GATHER_MS, madeAt + PACE_MS - Date.now()),
+    );
   }
 
   const following = follow({
@@ -517,6 +538,9 @@ export function createSceneFeed({ config, db, arclamp, follow, layout, instances
       await build();
       return latest?.feed ?? null;
     },
+
+    /** As now, but paced: made at most every PACE_MS, however many ask (live mode's run of changes). */
+    soon,
 
     noting,
 

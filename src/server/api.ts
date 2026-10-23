@@ -4,6 +4,7 @@
 import { upgradeWebSocket } from "@hono/node-server";
 import { zValidator } from "@hono/zod-validator";
 import { Hono, type Context, type ErrorHandler } from "hono";
+import { cors } from "hono/cors";
 import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
@@ -11,10 +12,10 @@ import { normalizeLights, type LightsResponse } from "../shared/arclamp.ts";
 import { orientationsOf } from "../shared/fixtures.ts";
 import { clampAlong, hangsOnRails, RAIL_ID, railLength } from "../shared/rails.ts";
 import { MAX_TAGS, TAG } from "../shared/tags.ts";
-import type { Lights, Me, RoomMessage, Spot, Status } from "../shared/vibes.ts";
+import type { Change, Lights, Me, RoomMessage, Spot, Status } from "../shared/vibes.ts";
 import { ApplyRefused, createApply, request as applyRequest } from "./apply.ts";
 import { ArclampError, type Arclamp } from "./arclamp.ts";
-import { requireUser, type AuthEnv } from "./auth.ts";
+import { readSession, requireUser, userOfToken, type AuthEnv } from "./auth.ts";
 import type { Db } from "./db.ts";
 import type { Config } from "./env.ts";
 import type { HealthWatch } from "./health.ts";
@@ -53,6 +54,40 @@ export interface ApiDeps {
 const STREAM_PING_MS = 10_000;
 // The most an apply can say (each change's mask is at most 2000 lights).
 const MAX_APPLY_BYTES = 4 * 1024 * 1024;
+// The sockets, which a page at another of vibes' addresses opens without a cookie, saying who's there first.
+const SOCKETS = new Set(["/api/scene/ws", "/api/stream"]);
+// How long a socket without a cookie has to say who's there.
+const AUTH_WAIT_MS = 10_000;
+const authMessage = z.object({ type: z.literal("auth"), token: z.string().max(4096) });
+
+/**
+ * Who's on a socket: its cookie's person, or (with none) whoever its first
+ * message's token says, told to `then` once known; closed if it says no one.
+ * Each later message goes to `message`.
+ */
+function whoIsOn(cookie: Me | null, config: Config, ws: { close(code?: number, reason?: string): void }, then: (user: Me) => void) {
+  let user = cookie;
+  const waiting = user ? undefined : setTimeout(() => ws.close(4401, "log in first"), AUTH_WAIT_MS);
+  if (user) then(user);
+  return {
+    /** A message, if it's past saying who's there (null if it was that). */
+    take(text: string): string | null {
+      if (user) return text;
+      let asked: ReturnType<typeof authMessage.safeParse> | null = null;
+      try {
+        asked = authMessage.safeParse(JSON.parse(text));
+      } catch {
+        // Not JSON: no one.
+      }
+      user = asked?.success ? userOfToken(asked.data.token, config) : null;
+      clearTimeout(waiting);
+      if (!user) ws.close(4401, "log in first");
+      else then(user);
+      return null;
+    },
+    done: () => clearTimeout(waiting),
+  };
+}
 
 /**
  * The lights as vibes has them: arclamp's (asked for at most once a minute),
@@ -125,7 +160,19 @@ export function apiRoutes({ config, arclamp, db, relay, origins, lights, feed, s
     }
     await next();
   });
-  api.use("*", requireUser(config));
+  // A page at another of vibes' addresses reaches the API at this one
+  // (LoginOptions.api), with a token in place of a cookie: its browser may.
+  api.use("*", cors({ origin: (o) => (origins.includes(o) ? o : null), allowHeaders: ["Authorization", "Content-Type"], allowMethods: ["GET", "POST", "PUT", "PATCH", "DELETE"], maxAge: 7200 }));
+  // So does its socket, which (with no cookie to bring) says who's there first:
+  // let through without one, to do that (whoIsOn).
+  const user = requireUser(config);
+  api.use("*", async (c, next) => {
+    if (SOCKETS.has(c.req.path) && c.req.header("upgrade")?.toLowerCase() === "websocket") {
+      c.set("user", (await readSession(c, config)) as Me);
+      return next();
+    }
+    return user(c, next);
+  });
   // Whatever's changed through vibes outside arclamp (an instance, say) is made into the scene feed now too.
   api.use("*", async (c, next) => {
     await next();
@@ -288,37 +335,82 @@ export function apiRoutes({ config, arclamp, db, relay, origins, lights, feed, s
 
     // The room socket (RoomRequest and RoomMessage, in shared/vibes.ts): the
     // scene feed (scene-feed.ts), as it is and then each time it changes; and
-    // applies, each made in order (apply.ts) and answered once the scene that
-    // shows it has gone out. Its origin is checked as every request's is
-    // (above): a socket isn't held to the same-origin rule.
+    // applies, made in order (apply.ts), each answered once the scene that
+    // shows it has gone out. A browser sends the next without waiting: in
+    // live mode, a whole one (everything it has pending) each time that
+    // changes, which stands for the whole ones waiting before it, so those
+    // needn't be made, and the room keeps up with the latest. Their answers
+    // wait on a paced scene (feed.soon), so a drag doesn't send the whole
+    // scene to every browser at each step. Its origin is checked as every
+    // request's is (above): a socket isn't held to the same-origin rule.
     .get(
       "/scene/ws",
       upgradeWebSocket((c) => {
-        const user = c.get("user");
+        const cookie = (c.get("user") as Me | null) ?? null;
+        let user: Me | null = null;
+        let on: ReturnType<typeof whoIsOn> | null = null;
         let closed = false;
+        let say = (_message: string) => {};
         let unsubscribe = () => {};
         let ping: ReturnType<typeof setInterval> | undefined;
-        // Applies, one at a time, in the order they came.
-        let applying: Promise<void> = Promise.resolve();
+        // Applies waiting to be made, in the order they came; whether one's
+        // being made; and their answers, in that order too.
+        const waiting: { id: string; changes: Change[]; whole: boolean }[] = [];
+        let making = false;
+        let answering: Promise<void> = Promise.resolve();
+        const answer = (message: RoomMessage) => say(JSON.stringify(message));
+
+        async function make() {
+          if (making || !user) return;
+          making = true;
+          while (waiting.length > 0 && !closed) {
+            // A whole one stands for the whole ones just before it.
+            let n = 0;
+            while (waiting[n]?.whole && waiting[n + 1]?.whole) n++;
+            const covered = waiting.splice(0, n);
+            const next = waiting.shift()!;
+            let said: RoomMessage;
+            try {
+              said = { type: "applied", id: next.id, made: await apply(next.changes, user) };
+            } catch (err) {
+              const why = err instanceof ApplyRefused ? err : new ApplyRefused(0, "internal", "internal error", {});
+              said = { type: "refused", id: next.id, at: why.at, error: why.message, code: why.code, made: why.made };
+            }
+            // Answered once what it changed has gone out: at once for an
+            // Apply, paced for live mode's run. The next is made meanwhile.
+            const shown: Promise<unknown> = next.whole ? feed.soon() : feed.now();
+            answering = answering
+              .then(() => shown)
+              .catch(() => {})
+              .then(() => {
+                for (const { id } of [...covered, next]) answer({ ...said, id });
+              });
+          }
+          making = false;
+        }
+
         return {
           onOpen(_evt, ws) {
-            const say = (message: string) => {
+            say = (message) => {
               if (!closed) ws.send(message);
             };
             const scene = (json: string) => say(`{"type":"scene","feed":${json}}`);
-            void (async () => {
-              const now = feed.current() ?? (await feed.now(), feed.current());
-              if (closed) return;
-              if (now) scene(now.json);
-              unsubscribe = feed.subscribe((_feed, json) => scene(json));
-            })();
+            on = whoIsOn(cookie, config, ws, (u) => {
+              user = u;
+              void (async () => {
+                const now = feed.current() ?? (await feed.now(), feed.current());
+                if (closed) return;
+                if (now) scene(now.json);
+                unsubscribe = feed.subscribe((_feed, json) => scene(json));
+              })();
+              void make();
+            });
             ping = setInterval(() => say('{"type":"ping"}'), STREAM_PING_MS);
           },
-          onMessage(evt, ws) {
-            const answer = (message: RoomMessage) => {
-              if (!closed) ws.send(JSON.stringify(message));
-            };
+          onMessage(evt) {
             const text = typeof evt.data === "string" && evt.data.length <= MAX_APPLY_BYTES ? evt.data : "";
+            // Who's there, first (from another of vibes' addresses).
+            if (on?.take(text) === null) return;
             let asked: ReturnType<typeof applyRequest.safeParse> | null = null;
             try {
               asked = applyRequest.safeParse(JSON.parse(text));
@@ -329,22 +421,12 @@ export function apiRoutes({ config, arclamp, db, relay, origins, lights, feed, s
               answer({ type: "refused", id: "", at: 0, error: "invalid request", code: "bad_body", made: {} });
               return;
             }
-            const { id, changes } = asked.data;
-            applying = applying.then(async () => {
-              let said: RoomMessage;
-              try {
-                said = { type: "applied", id, made: await apply(changes, user) };
-              } catch (err) {
-                const why = err instanceof ApplyRefused ? err : new ApplyRefused(0, "internal", "internal error", {});
-                said = { type: "refused", id, at: why.at, error: why.message, code: why.code, made: why.made };
-              }
-              // What it changed goes out first.
-              await feed.now().catch(() => null);
-              answer(said);
-            });
+            waiting.push({ id: asked.data.id, changes: asked.data.changes, whole: asked.data.whole ?? false });
+            void make();
           },
           onClose() {
             closed = true;
+            on?.done();
             unsubscribe();
             clearInterval(ping);
           },
@@ -387,19 +469,29 @@ export function apiRoutes({ config, arclamp, db, relay, origins, lights, feed, s
       },
     )
 
+    // The light stream: each frame as it comes, once it's known who's there
+    // (from another of vibes' addresses, a token, said first: StreamRequest).
     .get(
       "/stream",
-      upgradeWebSocket(() => {
+      upgradeWebSocket((c) => {
+        const cookie = (c.get("user") as Me | null) ?? null;
+        let on: ReturnType<typeof whoIsOn> | null = null;
         let unsubscribe = () => {};
         return {
           onOpen(_evt, ws) {
-            unsubscribe = relay.subscribe((frame) => {
-              const raw = ws.raw as { bufferedAmount?: number } | undefined;
-              if ((raw?.bufferedAmount ?? 0) > MAX_BUFFERED_BYTES) return;
-              ws.send(frame as Uint8Array<ArrayBuffer>);
+            on = whoIsOn(cookie, config, ws, () => {
+              unsubscribe = relay.subscribe((frame) => {
+                const raw = ws.raw as { bufferedAmount?: number } | undefined;
+                if ((raw?.bufferedAmount ?? 0) > MAX_BUFFERED_BYTES) return;
+                ws.send(frame as Uint8Array<ArrayBuffer>);
+              });
             });
           },
+          onMessage(evt) {
+            if (typeof evt.data === "string") on?.take(evt.data);
+          },
           onClose() {
+            on?.done();
             unsubscribe();
           },
         };

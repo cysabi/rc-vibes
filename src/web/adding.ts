@@ -5,7 +5,7 @@
 
 import { useEffect } from "react";
 import type { Build } from "../shared/vibes.ts";
-import { request } from "./api.ts";
+import { apiFetch, request } from "./api.ts";
 import { currentDraft, drafts, scriptOfBuild, useDraft, type Adding } from "./draft.ts";
 
 const LOOK_MS = 1000;
@@ -34,7 +34,7 @@ async function look(a: Adding) {
       drafts.built(a.key, progress(build));
       return;
     }
-    const res = await fetch(`/api/sketches/${encodeURIComponent(a.sketchId)}/builds/${encodeURIComponent(build.id)}/script`);
+    const res = await apiFetch(`/api/sketches/${encodeURIComponent(a.sketchId)}/builds/${encodeURIComponent(build.id)}/script`);
     if (!res.ok) throw new Error(`couldn't fetch its script (${res.status})`);
     drafts.built(a.key, progress(build), await res.text());
   } catch (err) {

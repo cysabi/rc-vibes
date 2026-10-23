@@ -212,7 +212,13 @@ lights where they are, as free lights. vibes keeps its rail changes in the
 6. **RC OAuth and deploy.** vibes runs on kokuzo's k3s at `vibes.hall.ly`,
    and at `vibes.recurse.com`, RC's proxy in front of it. RC's OAuth app takes
    one callback, on `vibes.hall.ly`, so a login from `vibes.recurse.com` hops
-   there and comes back with a one-time code. Each push to `main` runs `.github/workflows/deploy.yaml`: typecheck and
+   there and comes back with a one-time code. A page at `vibes.recurse.com`
+   reaches the API and its sockets at `vibes.hall.ly`, with no proxy between
+   (`/auth/options?origin=` says where): with a 10-minute token from its own
+   address (`/auth/token`, its session signed), as `Authorization: Bearer`
+   and as each socket's first message, since its cookie doesn't go from one
+   site to the other; vibes lets the other address's pages (CORS). Logging
+   in and out stay at the page's own. Each push to `main` runs `.github/workflows/deploy.yaml`: typecheck and
    tests, then the flake's images (`kokuzo.tailc38f.ts.net/vibes:<sha>`, and
    sketches' boxes' `vibes-box:<sha>`) are pushed and `.kube/version.yaml`
    pinned to them on the `cd` branch, which
@@ -401,7 +407,12 @@ ever be built from one of its commits. On while `SKETCHES=1`.
   got, `/api/scene/scripts`). Anything changed through vibes is looked at
   again at once. A ping every 10 s lets a page tell a quiet socket from a
   dead one and open it again (a restarting vibes, behind a proxy that keeps
-  the connection, never says).
+  the connection, never says). Pending edits go the other way, as applies:
+  live mode sends everything pending each time it changes, without waiting
+  for the last to land (a whole apply, standing for any whole one still
+  waiting: vibes makes just the newest), so the room keeps up with a drag
+  at the cost of one trip there, not a round trip a step. Their answers,
+  and the scenes a run of changes makes, go out at most every 50 ms.
 
 Still to come: VS Code's own defaults that only its product configuration
 sets (no AI chat; the welcome page is skipped from VS Code's address), its

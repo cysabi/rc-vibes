@@ -7,6 +7,7 @@
 
 import { createContext, useContext, useEffect, useSyncExternalStore } from "react";
 import { decodeFrame, frameTime, type Frame, type LightsResponse } from "../shared/arclamp.ts";
+import { apiSocket } from "./api.ts";
 import { Playout, type PlayoutStats } from "./playout.ts";
 
 const RETRY_MS = 1000;
@@ -110,13 +111,18 @@ export function useLiveStream(layout: LightsResponse | undefined) {
       if (!simulated) notify(liveFrame);
     };
 
-    const connect = () => {
-      const scheme = location.protocol === "https:" ? "wss" : "ws";
-      const ws = new WebSocket(`${scheme}://${location.host}/api/stream`);
+    // At vibes' API address, saying who's there first if that's another site (apiSocket).
+    const connect = () => void apiSocket("/api/stream").then(open);
+    const open = ({ url, hello }: { url: string; hello: string | null }) => {
+      if (stopped) return;
+      const ws = new WebSocket(url);
       socket = ws;
       ws.binaryType = "arraybuffer";
       let first = true;
-      ws.onopen = () => setConnected(true);
+      ws.onopen = () => {
+        if (hello) ws.send(hello);
+        setConnected(true);
+      };
       ws.onmessage = (event) => {
         const data = event.data as ArrayBuffer;
         if (first) {

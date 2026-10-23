@@ -17,6 +17,19 @@ export interface Me extends Person {
 export interface LoginOptions {
   rc: boolean;
   dev: boolean;
+  /**
+   * Where the API and its sockets are, when it's another of vibes' addresses
+   * than this page's (its main one: the quickest way to it); null for this
+   * page's own. Reached there with a token from this page's own (/auth/token).
+   */
+  api: string | null;
+}
+
+/** A short-lived token for the API at another of vibes' addresses (LoginOptions.api): as `Authorization: Bearer`, and a socket's first message. */
+export interface ApiToken {
+  token: string;
+  /** When it stops working, in ms. */
+  exp: number;
 }
 
 /**
@@ -125,8 +138,18 @@ export type Change =
   /** The stack in this order, top first. */
   | { op: "stack"; order: ShaderKey[] };
 
-/** What a browser says over the room socket (/api/scene/ws). */
-export type RoomRequest = { type: "apply"; id: string; changes: Change[] };
+/**
+ * What a browser says over the room socket (/api/scene/ws): an apply; and,
+ * first, on a socket to vibes at another address than the page's, its token
+ * (ApiToken), in place of a cookie. An apply that's `whole` carries
+ * everything the browser has pending (live mode sends one each time that
+ * changes, without waiting): it stands for any whole one waiting before it,
+ * which are answered as it is.
+ */
+export type RoomRequest = { type: "apply"; id: string; changes: Change[]; whole?: boolean } | { type: "auth"; token: string };
+
+/** What a browser says first over the light stream (/api/stream), on a socket to vibes at another address than the page's. */
+export type StreamRequest = { type: "auth"; token: string };
 
 /**
  * What vibes says over it: the scene (as it starts, and as it changes), a

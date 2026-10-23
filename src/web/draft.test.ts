@@ -42,6 +42,7 @@ vi.mock("./scene.ts", () => {
 
 const { applyDraft, currentDraft, drafts, EMPTY, keyNow, layerOf, layersOf, pendingCount, reachOf, reorderWithin, roomtoneChanges, switchEverywhere, switchFor, switchState, templateOf } =
   await import("./draft.ts");
+const { applyChanges } = await import("./scene.ts");
 
 /** A shader in the room, as vibes sends it (with its script fetched): arclamp's shader `id`, put in some other way. */
 function shader(id: number, extra: Partial<SceneShader> = {}): SceneShader {
@@ -305,6 +306,35 @@ describe("apply", () => {
     during = () => drafts.setRoomtone({ "1": { brightness: 0.3 } }, "dimmer");
     await applyDraft(live);
     expect(currentDraft().roomtone).toEqual({ "1": { brightness: 0.3 } });
+  });
+
+  it("sends live mode's whole drafts without waiting: only the newest's answer, with nothing edited since, clears it", async () => {
+    const answers: (() => void)[] = [];
+    const usual = vi.mocked(applyChanges).getMockImplementation()!;
+    vi.mocked(applyChanges).mockImplementation((changes, whole) => {
+      sent.push(...changes);
+      expect(whole).toBe(true);
+      return new Promise((done) => answers.push(() => done({})));
+    });
+    try {
+      drafts.setRoomtone({ "1": { brightness: 0.2 } }, "dim");
+      const first = applyDraft(live, { whole: true });
+      drafts.setRoomtone({ "1": { brightness: 0.3 } }, "dim");
+      const second = applyDraft(live, { whole: true });
+      // Both on their way at once, each with everything pending as it was then.
+      expect(sent).toEqual([
+        { op: "roomtone", lights: { "1": { brightness: 0.2 } }, code: "dim" },
+        { op: "roomtone", lights: { "1": { brightness: 0.3 } }, code: "dim" },
+      ]);
+      answers[0]!();
+      await first;
+      expect(currentDraft().roomtone).toEqual({ "1": { brightness: 0.3 } });
+      answers[1]!();
+      await second;
+      expect(currentDraft()).toBe(EMPTY);
+    } finally {
+      vi.mocked(applyChanges).mockImplementation(usual);
+    }
   });
 
   it("leaves just what didn't land pending when a step fails", async () => {

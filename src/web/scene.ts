@@ -10,7 +10,7 @@
 import { useSyncExternalStore } from "react";
 import type { RoomTemplate } from "../shared/arclamp.ts";
 import type { Change, RoomMessage, RoomRequest, SceneFeed, Shader, ShaderKey } from "../shared/vibes.ts";
-import { request } from "./api.ts";
+import { apiSocket, request } from "./api.ts";
 
 /** A shader as vibes sent it, with its script once that's here. */
 export interface SceneShader extends Shader {
@@ -96,15 +96,38 @@ let retry: number | undefined;
 let heard = 0;
 let watchdog: number | undefined;
 
+// The socket being opened (its address, and token, first: apiSocket); and,
+// once it's open and has said who's there, the socket itself, for sends.
+let opening = false;
+let greeted: Promise<WebSocket> | null = null;
+
 function open() {
-  const ws = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/api/scene/ws`);
+  if (socket || opening) return;
+  opening = true;
+  greeted = apiSocket("/api/scene/ws").then(
+    ({ url, hello }) =>
+      new Promise<WebSocket>((resolve) => {
+        opening = false;
+        // Nothing wants it any more.
+        if (listeners.size === 0 && waiting.size === 0) return;
+        connect(url, hello, resolve);
+      }),
+  );
+}
+
+function connect(url: string, hello: string | null, greet: (ws: WebSocket) => void) {
+  const ws = new WebSocket(url);
   socket = ws;
   heard = Date.now();
   window.clearInterval(watchdog);
   watchdog = window.setInterval(() => {
     if (socket === ws && Date.now() - heard >= SILENT_MS) ws.close();
   }, SILENT_MS / 5);
-  ws.onopen = () => (heard = Date.now());
+  ws.onopen = () => {
+    heard = Date.now();
+    if (hello) ws.send(hello);
+    greet(ws);
+  };
   ws.onmessage = (e: MessageEvent<string>) => {
     heard = Date.now();
     const m = JSON.parse(e.data) as RoomMessage;
@@ -139,7 +162,7 @@ function open() {
 
 function subscribe(listener: () => void) {
   listeners.add(listener);
-  if (!socket) open();
+  open();
   return () => {
     listeners.delete(listener);
     if (listeners.size === 0 && waiting.size === 0) {
@@ -155,16 +178,16 @@ function subscribe(listener: () => void) {
 /**
  * A draft's changes, made in the room in order, as one apply; the shaders
  * it added, by the keys of the edits that added them. Refused at a change,
- * an ApplyError says which.
+ * an ApplyError says which. Sent at once, whatever's still waiting for an
+ * answer; `whole` (live mode's), it's everything pending, and stands for any
+ * whole one sent before it that vibes hasn't made yet.
  */
-export function applyChanges(changes: Change[]): Promise<Record<string, ShaderKey>> {
+export function applyChanges(changes: Change[], whole = false): Promise<Record<string, ShaderKey>> {
   return new Promise((resolve, reject) => {
     const id = crypto.randomUUID();
     waiting.set(id, { resolve, reject });
-    const ws = socket ?? (open(), socket!);
-    const send = () => ws.send(JSON.stringify({ type: "apply", id, changes } satisfies RoomRequest));
-    if (ws.readyState === WebSocket.OPEN) send();
-    else ws.addEventListener("open", send, { once: true });
+    open();
+    void greeted!.then((ws) => ws.send(JSON.stringify({ type: "apply", id, changes, ...(whole ? { whole } : {}) } satisfies RoomRequest)));
   });
 }
 

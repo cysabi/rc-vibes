@@ -3,7 +3,7 @@ import type { Rail } from "../shared/arclamp.ts";
 import { useAddingBuilds } from "./adding.ts";
 import { useLights, useMe } from "./api.ts";
 import { useScene, type Scene } from "./scene.ts";
-import { applyDraft, keyNow, layerOf, layersOf, pendingCount, reachOf, templateOf, useDraft, type LayerKey } from "./draft.ts";
+import { applyDraft, keyNow, layerOf, layersOf, pendingCount, reachOf, templateOf, useDraft, type Draft, type LayerKey } from "./draft.ts";
 import { Banners } from "./components/Banners.tsx";
 import { ColorPreview } from "./components/ColorPreview.tsx";
 import { Login } from "./components/Login.tsx";
@@ -56,34 +56,32 @@ function Shell() {
   // Pending edits put vibes in simulated mode: the map shows the preview of
   // them until they're applied or discarded. So does peeking at the room
   // tone, with every shader set aside while it's held. In live mode there's
-  // no preview: edits go to the room as they're made, one send at a time
-  // (each as soon as the last lands), and only a failed send shows them as
-  // pending, to try again or drop.
+  // no preview: edits go to the room as they're made, everything pending
+  // sent again each time it changes, without waiting for the last send to
+  // land (vibes makes the newest: scene.ts), so the room keeps up with a
+  // drag. Only a failed send shows them as pending, to try again or drop.
   const draft = useDraft();
   const live = scene.data ?? NO_SCENE;
   const pending = scene.data ? pendingCount(live, draft) : 0;
   const peeking = usePeek();
   const liveMode = useLiveMode();
   const [liveError, setLiveError] = useState<string | null>(null);
-  const sending = useRef(false);
-  // Bumped as each send lands, to look again for what came in meanwhile.
-  const [sent, setSent] = useState(0);
+  // The draft last sent: sent again once it's changed.
+  const lastSent = useRef<Draft | null>(null);
   useEffect(() => {
     // After a failed send, it waits for Apply or Discard rather than trying again and again.
-    if (!liveMode || pending === 0 || sending.current || liveError) return;
-    sending.current = true;
-    applyDraft(live)
-      .catch((err: Error) => setLiveError(err.message))
-      .finally(() => {
-        sending.current = false;
-        setSent((n) => n + 1);
-      });
-  }, [liveMode, pending, draft, live, liveError, sent]);
+    if (!liveMode || pending === 0 || liveError || draft === lastSent.current) return;
+    lastSent.current = draft;
+    applyDraft(live, { whole: true }).catch((err: Error) => setLiveError(err.message));
+  }, [liveMode, pending, draft, live, liveError]);
   // Nothing pending, or live mode switched, starts clean.
   useEffect(() => {
     if (pending === 0) setLiveError(null);
   }, [pending]);
-  useEffect(() => setLiveError(null), [liveMode]);
+  useEffect(() => {
+    setLiveError(null);
+    lastSent.current = null;
+  }, [liveMode]);
   const previewing = pending > 0 && (!liveMode || liveError !== null);
   const simulated = previewing || peeking;
   const simInputs = useMemo(() => {
