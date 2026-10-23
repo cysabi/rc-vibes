@@ -48,6 +48,7 @@ export {
   type Param,
 } from "./field.ts";
 export { clock, type Clock, type Every } from "./signal.ts";
-export { declaredParams, param, setParamValues, takePacket, type ParamOptions, type ParamPacket, type ParamSpec, type ParamValues } from "./param.ts";
+export { param, type ParamOptions, type VibesHost } from "./param.ts";
+export type { ColorValue, LightFilter, ParamSpec, ParamValue } from "./wire.ts";
 export { chance, clamp, decay, ease, fract, hash, lerp, noiseAt, remap, saw, smoothstep, square, tri, wave } from "./shape.ts";
 export { sketch, type Look, type LookResult, type Looks, type SketchOptions, type SwitchLook, type SwitchResult } from "./sketch.ts";

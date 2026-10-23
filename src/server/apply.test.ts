@@ -75,7 +75,8 @@ beforeEach(() => {
     start: async () => ({ refused: "no builds here", status: 409 as const }),
     onFinish: () => () => {},
   } as unknown as Parameters<typeof createInstances>[0]["builds"];
-  const instances = createInstances({ config, db, arclamp, builds, lightIds: async () => [1, 2, 3, 4] });
+  const lights = async () => [1, 2, 3, 4].map((id) => ({ id, type: "br30", tags: [], coords: null, rail: null, channels: [] }));
+  const instances = createInstances({ config, db, arclamp, builds, lightIds: async () => [1, 2, 3, 4], lights });
   apply = createApply({
     shaders: createShaders({ config, arclamp, db, instances }),
     instances,
@@ -145,30 +146,33 @@ describe("an apply", () => {
 });
 
 describe("a param in an apply", () => {
-  const speed = { name: "speed", default: 7, min: 0, max: 20, step: 0.1, label: "Speed", perLight: true };
+  const speed = { kind: "number", name: "speed", label: "Speed", lights: {}, default: 7, min: 0, max: 20, step: 0.1 } as const;
 
-  /** A live instance of a build whose script declares `speed`. */
+  /** A live instance whose shader has said its sketch declares `speed`. */
   function liveInstance(): string {
     db.addBuild({ id: "bp", sketch_id: SKETCH, commit_sha: "b".repeat(40), builder: "1", by_id: ada.id, by_name: ada.name, at: 0 });
-    db.finishBuild("bp", { state: "built", finished_at: 1, plan: "vite main.ts", error: null, log: "", script: "function update(p) { return p; }", params: [speed] });
+    db.finishBuild("bp", { state: "built", finished_at: 1, plan: "vite main.ts", error: null, log: "", script: "function update(p) { return p; }" });
     db.addInstance({ id: "0f4527e5-4faf-4691-b789-e4c389175402", sketch_id: SKETCH, build_id: "bp", home: [1, 2], by_id: ada.id, by_name: ada.name, at: 0 });
-    db.updateInstance("0f4527e5-4faf-4691-b789-e4c389175402", { shader_id: 11, state: "live" });
+    db.updateInstance("0f4527e5-4faf-4691-b789-e4c389175402", { shader_id: 11, state: "live", declared: [speed] });
     return "0f4527e5-4faf-4691-b789-e4c389175402";
   }
 
-  it("changes the instance's values, for everywhere or for some lights", async () => {
+  it("changes the instance's values, light by light", async () => {
     const id = liveInstance();
-    await apply([{ op: "params", key: id, name: "speed", patch: { all: 9, lights: { "2": 3 } } }], ada);
-    expect(db.instance(id)!.params).toEqual({ speed: { all: 9, lights: { "2": 3 } } });
+    await apply([{ op: "params", key: id, name: "speed", set: [[9, [1]], [3, [2]]] }], ada);
+    expect(db.instance(id)!.params).toEqual({ speed: [[9, [1]], [3, [2]]] });
   });
 
   it("is refused for a param the sketch doesn't declare, not passed over as gone", async () => {
     const id = liveInstance();
-    await expect(apply([{ op: "params", key: id, name: "nope", patch: { all: 1 } }], ada)).rejects.toMatchObject({ at: 0, code: "no_param" });
+    await expect(apply([{ op: "params", key: id, name: "nope", set: [[1, [1]]] }], ada)).rejects.toMatchObject({ at: 0, code: "no_param" });
   });
 
-  it("isn't taken from a browser for a param with a name that isn't a word", () => {
-    expect(request.safeParse({ type: "apply", id: "a", changes: [{ op: "params", key: "k", name: "two words", patch: {} }] }).success).toBe(false);
-    expect(request.safeParse({ type: "apply", id: "a", changes: [{ op: "params", key: "k", name: "speed", patch: { all: null, lights: { "1": null } } }] }).success).toBe(true);
+  it("isn't taken from a browser for a param with a name that isn't a word, or a change that isn't one", () => {
+    const params = (name: string, set: unknown) => request.safeParse({ type: "apply", id: "a", changes: [{ op: "params", key: "k", name, set }] }).success;
+    expect(params("two words", [[1, [1]]])).toBe(false);
+    expect(params("speed", [])).toBe(false);
+    expect(params("speed", [["fast", [1]]])).toBe(false);
+    expect(params("speed", [[null, [1]], [true, [2]], [{ a: 0, b: 0, lm: 1, fidelity: 1 }, [3]]])).toBe(true);
   });
 });

@@ -1,96 +1,230 @@
-import dgram from "node:dgram";
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { LightInfo } from "../shared/arclamp.ts";
 import type { ParamSpec } from "../shared/params.ts";
+import { ArclampError } from "./arclamp.ts";
 import { openDb, type Db } from "./db.ts";
-import { createParamsSender, specsOf, targetOf, type ParamsSender } from "./params.ts";
+import { createParamLinks, declarationsOf, linkOfToken, linkToken, type ParamLinks, type SeenShader } from "./params.ts";
 
-const speed: ParamSpec = { name: "speed", default: 7, min: 0, max: 20, step: 0.1, label: "Speed", perLight: true };
-const bands: ParamSpec = { name: "bands", default: 3, min: 1, max: 8, step: 1, label: "Bands", perLight: false };
+const SECRET = "s".repeat(32);
+const speed: ParamSpec = { kind: "number", name: "speed", label: "Speed", lights: {}, default: 7, min: 0, max: 20, step: 0.1 };
+const on: ParamSpec = { kind: "toggle", name: "on", label: "On", lights: { kinds: ["switch"] }, default: false };
+// 1 and 2 take colors; 3 is an old bulb.
+const LIGHTS: LightInfo[] = [1, 2, 3].map((id) => ({ id, type: id === 3 ? "relay" : "br30", tags: [], coords: null, rail: null, channels: [] }));
 
-describe("what a builder says a script declares", () => {
-  it("keeps the params that read as params, once each, and drops the rest", () => {
-    expect(specsOf([speed, { name: "no" }, { ...bands, name: "two words" }, bands, { ...speed, default: 50 }, speed])).toEqual([speed, bands]);
-    expect(specsOf("nope")).toEqual([]);
-    expect(specsOf(undefined)).toEqual([]);
+describe("what a shader says its sketch declares", () => {
+  it("keeps the params that read as params, once each, and says why it dropped the rest", () => {
+    const { specs, dropped } = declarationsOf([speed, { name: "no" }, { ...speed, name: "two words" }, on, { ...speed, default: 50 }, speed]);
+    expect(specs).toEqual([speed, on]);
+    expect(dropped).toEqual([
+      'param no: its kind is "number", "color" or "toggle", not undefined',
+      'a param\'s name is a word (letters, digits, _ or -), not "two words"',
+      "param speed: its default should be a number from its min to its max",
+      "param speed is declared twice",
+    ]);
+    expect(declarationsOf("nope")).toEqual({ specs: [], dropped: ["its params aren't a list"] });
+  });
+
+  it("makes a color for color lights, whatever it says", () => {
+    const tint = { kind: "color", name: "tint", label: "Tint", default: { a: 0, b: 0, lm: 300, fidelity: 1 } };
+    expect(declarationsOf([tint]).specs[0]!.lights).toEqual({ kinds: ["color"] });
+    expect(declarationsOf([{ ...tint, lights: { kinds: ["switch"] } }]).dropped[0]).toMatch(/a color is for color lights/);
   });
 });
 
-describe("where a shader takes udp", () => {
-  it("is its first udp port, on arclamp's host if it's bound on every address", () => {
-    expect(targetOf([{ proto: "tcp", host: "10.0.0.5", port: 80 }, { proto: "udp", host: "0.0.0.0", port: 4000 }], "lamp.local")).toEqual({ host: "lamp.local", port: 4000 });
-    expect(targetOf([{ proto: "udp4", host: "10.0.0.5", port: 4000 }], "lamp.local")).toEqual({ host: "10.0.0.5", port: 4000 });
-    expect(targetOf([{ proto: "udp", host: "[::]", port: 4000 }], "lamp.local")).toEqual({ host: "lamp.local", port: 4000 });
-    expect(targetOf([], "lamp.local")).toBeNull();
-    expect(targetOf(undefined, "lamp.local")).toBeNull();
+describe("a link's token", () => {
+  it("says which instance and link it's for, if vibes made it", () => {
+    const token = linkToken(SECRET, "i1", 3);
+    expect(linkOfToken(SECRET, token)).toEqual({ id: "i1", link: 3 });
+    expect(linkOfToken(SECRET, token.replace(".3.", ".4."))).toBeNull();
+    expect(linkOfToken("t".repeat(32), token)).toBeNull();
+    expect(linkOfToken(SECRET, "i1")).toBeNull();
   });
 });
 
-describe("sending params", () => {
+/** An event stream's events, as they come: read one at a time. */
+function events(res: Response) {
+  const reader = res.body!.getReader();
+  const decoder = new TextDecoder();
+  let text = "";
+  return async function next(): Promise<{ event: string; data: unknown } | null> {
+    for (;;) {
+      const at = text.indexOf("\n\n");
+      if (at >= 0) {
+        const block = text.slice(0, at);
+        text = text.slice(at + 2);
+        if (block.startsWith(":")) continue;
+        const event = /^event: (.*)$/m.exec(block)?.[1] ?? "message";
+        const data = /^data: (.*)$/m.exec(block)?.[1];
+        return { event, data: data === undefined ? null : JSON.parse(data) };
+      }
+      const { done, value } = await reader.read();
+      if (done) return null;
+      text += decoder.decode(value, { stream: true });
+    }
+  };
+}
+
+describe("linking shaders, and their streams", () => {
   let db: Db;
-  let sender: ParamsSender;
-  let socket: dgram.Socket;
-  let port: number;
-  let got: string[];
+  let links: ParamLinks;
+  let clock: number;
+  let evals: { id: number; code: string }[];
+  let answer: () => Promise<{ ok: boolean; result?: string; error?: string }>;
+  let changed: number;
 
-  beforeEach(async () => {
+  beforeEach(() => {
     db = openDb(":memory:");
     db.addSketch({ id: "s", name: "Wave", by_id: "u", by_name: "U", at: 0 });
     db.addBuild({ id: "b", sketch_id: "s", commit_sha: "c".repeat(40), builder: "1", by_id: "u", by_name: "U", at: 0 });
-    db.finishBuild("b", { state: "built", finished_at: 1, plan: "vite main.ts", error: null, log: "", script: "function update(p) { return p; }", params: [speed, bands] });
-    db.addInstance({ id: "i", sketch_id: "s", build_id: "b", home: [1, 2], by_id: "u", by_name: "U", at: 0 });
-    db.updateInstance("i", { shader_id: 5, state: "live", params: { speed: { all: 9, lights: { "2": 4 } } } });
-    got = [];
-    socket = dgram.createSocket("udp4");
-    socket.on("message", (m) => got.push(m.toString()));
-    await new Promise<void>((resolve) => socket.bind(0, "127.0.0.1", resolve));
-    port = socket.address().port;
-    sender = createParamsSender({ db, arclampHost: "127.0.0.1", resendMs: 40 });
+    db.addInstance({ id: "i", sketch_id: "s", build_id: "b", home: [1, 2, 3], by_id: "u", by_name: "U", at: 0 });
+    db.updateInstance("i", { shader_id: 5, state: "live" });
+    clock = 0;
+    evals = [];
+    changed = 0;
+    answer = async () => ({ ok: true, result: '{"v":1,"params":1}' });
+    links = createParamLinks({
+      db,
+      arclamp: {
+        evalShader: async (id, code) => {
+          evals.push({ id, code });
+          return answer();
+        },
+      },
+      secret: SECRET,
+      url: "https://vibes.test/shader-api/params",
+      lights: async () => LIGHTS,
+      changed: () => changed++,
+      now: () => clock,
+    });
   });
-  afterEach(async () => {
-    sender.stop();
-    await new Promise<void>((resolve) => socket.close(resolve));
-  });
+  afterEach(() => links.stop());
 
-  const arrived = async (n: number) => {
-    for (let i = 0; i < 50 && got.length < n; i++) await new Promise((r) => setTimeout(r, 10));
-    return got.map((g) => JSON.parse(g) as Record<string, unknown>);
-  };
+  const shader = (more: Partial<SeenShader> = {}): SeenShader => ({ instance: "i", shaderId: 5, running: true, respawns: 0, scriptHash: "h", ...more });
+  const settle = () => new Promise((r) => setTimeout(r, 0));
+  const connect = (token: string, body: unknown = { v: 1, params: [speed, on] }) =>
+    links.routes().request("/shader-api/params", { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(body) });
 
-  it("sends an instance's every param, one packet each, once its shader's port is known, and again as asked", async () => {
-    // Learning the port sends at once, so the clock's read first.
-    const before = Date.now();
-    sender.learn(5, [{ proto: "udp", host: "0.0.0.0", port }]);
-    const packets = await arrived(2);
-    const seqless = (p: Record<string, unknown>) => Object.fromEntries(Object.entries(p).filter(([k]) => k !== "seq"));
-    expect(packets.map(seqless)).toEqual([
-      { vibes: "params", v: 1, name: "speed", all: 9, lights: { "2": 4 } },
-      { vibes: "params", v: 1, name: "bands" },
-    ]);
-    db.updateInstance("i", { params: { speed: { all: 1 } } });
-    sender.send("i");
-    const later = (await arrived(4)).slice(2);
-    expect(later.map(seqless)).toEqual([
-      { vibes: "params", v: 1, name: "speed", all: 1 },
-      { vibes: "params", v: 1, name: "bands" },
-    ]);
-    // Seqs only ever go up, and start from the clock, so a vibes started again isn't behind a sketch that's kept running.
-    const seqs = [...packets, ...later].map((p) => p.seq as number);
-    expect(seqs[0]).toBeGreaterThanOrEqual(before);
-    for (let i = 1; i < seqs.length; i++) expect(seqs[i]).toBeGreaterThan(seqs[i - 1]!);
+  it("links a running shader once vibes has been up long enough for linked ones to come back by themselves", async () => {
+    links.scene([shader()]);
+    await settle();
+    expect(evals).toEqual([]);
+    clock = 10_000;
+    links.scene([shader()]);
+    await settle();
+    expect(evals).toHaveLength(1);
+    expect(evals[0]!.id).toBe(5);
+    expect(evals[0]!.code).toBe(`globalThis.__vibes?.connect(${JSON.stringify({ v: 1, url: "https://vibes.test/shader-api/params", token: linkToken(SECRET, "i", 1) })})`);
+    expect(db.instance("i")!.link_epoch).toBe(1);
   });
 
-  it("sends again every so often, to a live instance's shader, so a lost packet or a restarted sandbox isn't behind for long", async () => {
-    sender.learn(5, [{ proto: "udp", host: "127.0.0.1", port }]);
-    const packets = await arrived(6);
-    expect(packets.length).toBeGreaterThanOrEqual(6);
-    for (let i = 1; i < packets.length; i++) expect(packets[i]!.seq as number).toBeGreaterThan(packets[i - 1]!.seq as number);
+  it("doesn't link one that isn't running, or one that has its stream", async () => {
+    clock = 10_000;
+    links.scene([shader({ running: false })]);
+    await settle();
+    expect(evals).toEqual([]);
+    db.updateInstance("i", { link_epoch: 1 });
+    await connect(linkToken(SECRET, "i", 1));
+    links.scene([shader()]);
+    await settle();
+    expect(evals).toEqual([]);
   });
 
-  it("sends nothing to a shader with no udp port, or that isn't an instance's", async () => {
-    sender.learn(5, []);
-    sender.learn(6, [{ proto: "udp", host: "127.0.0.1", port }]);
-    sender.send("i");
-    await new Promise((r) => setTimeout(r, 100));
-    expect(got).toEqual([]);
+  it("tries again later, waiting longer each time, and not at all for a sandbox with no library to link", async () => {
+    clock = 10_000;
+    answer = async () => {
+      throw new ArclampError(503, "busy", "sandbox eval queue full");
+    };
+    links.scene([shader()]);
+    await settle();
+    clock += 1999;
+    links.scene([shader()]);
+    await settle();
+    expect(evals).toHaveLength(1);
+    clock += 1;
+    links.scene([shader()]);
+    await settle();
+    expect(evals).toHaveLength(2);
+    clock += 3999;
+    links.scene([shader()]);
+    await settle();
+    expect(evals).toHaveLength(2);
+    clock += 1;
+    answer = async () => ({ ok: true, result: "undefined" });
+    links.scene([shader()]);
+    await settle();
+    expect(evals).toHaveLength(3);
+    clock += 3_600_000;
+    links.scene([shader()]);
+    await settle();
+    expect(evals).toHaveLength(3);
+    // A new sandbox (or script) might have one: tried at once.
+    links.scene([shader({ respawns: 1 })]);
+    await settle();
+    expect(evals).toHaveLength(4);
+  });
+
+  it("links again if no stream comes within 10 s of linking", async () => {
+    clock = 10_000;
+    links.scene([shader()]);
+    await settle();
+    clock += 9_999;
+    links.scene([shader()]);
+    await settle();
+    expect(evals).toHaveLength(1);
+    clock += 1;
+    links.scene([shader()]);
+    await settle();
+    expect(evals).toHaveLength(2);
+    expect(db.instance("i")!.link_epoch).toBe(2);
+  });
+
+  it("turns down a stream without the instance's last link's token, or in another protocol", async () => {
+    db.updateInstance("i", { link_epoch: 2 });
+    expect((await connect("nope")).status).toBe(401);
+    expect((await connect(linkToken(SECRET, "i", 1))).status).toBe(401);
+    expect((await connect(linkToken(SECRET, "gone", 2))).status).toBe(401);
+    expect((await connect(linkToken(SECRET, "i", 2), { v: 2, params: [] })).status).toBe(400);
+  });
+
+  it("keeps what's declared, sends every value first, then each change in order, and ends it when the instance goes", async () => {
+    db.updateInstance("i", { link_epoch: 1, params: { speed: [[9, [1]]] } });
+    const res = await connect(linkToken(SECRET, "i", 1));
+    expect(res.status).toBe(200);
+    expect(res.headers.get("content-type")).toMatch(/^text\/event-stream/);
+    expect(db.instance("i")!.declared).toEqual([speed, on]);
+    expect(changed).toBe(1);
+    expect(links.linked("i")).toBe(true);
+    const next = events(res);
+    expect(await next()).toEqual({ event: "state", data: { v: 1, values: { speed: [[9, [1]]] } } });
+    links.send("i", "speed", [[3, [2]]]);
+    links.send("i", "speed", [[null, [1]]]);
+    expect(await next()).toEqual({ event: "change", data: { name: "speed", set: [[3, [2]]] } });
+    expect(await next()).toEqual({ event: "change", data: { name: "speed", set: [[null, [1]]] } });
+    links.gone("i");
+    expect(await next()).toEqual({ event: "end", data: { reason: "gone" } });
+    expect(await next()).toBeNull();
+    expect(links.linked("i")).toBe(false);
+  });
+
+  it("has one stream an instance: a new one takes over, and the old is told", async () => {
+    db.updateInstance("i", { link_epoch: 1 });
+    const first = events(await connect(linkToken(SECRET, "i", 1)));
+    await first();
+    const second = events(await connect(linkToken(SECRET, "i", 1)));
+    expect(await first()).toEqual({ event: "end", data: { reason: "replaced" } });
+    expect(await first()).toBeNull();
+    await second();
+    links.send("i", "speed", [[1, [1]]]);
+    expect(await second()).toEqual({ event: "change", data: { name: "speed", set: [[1, [1]]] } });
+  });
+
+  it("lets go of values that can't be any more: another kind now, or lights the param's no longer for", async () => {
+    db.updateInstance("i", { link_epoch: 1, declared: [speed, on], params: { speed: [[9, [1, 3]]], on: [[true, [3]]], old: [[1, [1]]] } });
+    const narrowed: ParamSpec = { ...speed, lights: { kinds: ["color"] } };
+    const nowNumber: ParamSpec = { kind: "number", name: "on", label: "On", lights: {}, default: 0, min: 0, max: 1, step: 0.1 };
+    await connect(linkToken(SECRET, "i", 1), { v: 1, params: [narrowed, nowNumber] });
+    // A param it doesn't declare now keeps its values, for a script that brings it back.
+    expect(db.instance("i")!.params).toEqual({ speed: [[9, [1]]], old: [[1, [1]]] });
+    expect(db.instance("i")!.declared).toEqual([narrowed, nowNumber]);
   });
 });

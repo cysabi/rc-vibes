@@ -68,7 +68,7 @@ const roomtone = { lights: { "1": { a: 0.0600728851, b: 0.134711643, brightness:
 /** The room: its shaders, top first. */
 const room = (...shaders: SceneShader[]): Scene => ({ shaders, roomtone });
 
-const instance: Instance = { id: "i", sketchId: "s", sketchName: "Wave", commit: "c", buildId: "b", branch: "main", head: "c", home: [1, 2, 3], state: "live", error: null, next: null, by: { id: "u", name: "U" }, at: 0, params: {} };
+const instance: Instance = { id: "i", sketchId: "s", sketchName: "Wave", commit: "c", buildId: "b", branch: "main", head: "c", home: [1, 2, 3], state: "live", error: null, next: null, by: { id: "u", name: "U" }, at: 0 };
 /** One put in from a sketch in vibes, still building: its key its instance's. */
 const coming = (extra: Partial<SceneShader> = {}) =>
   shader(0, { key: "i1", stage: "building", name: "Wave", state: null, script: undefined, scriptHash: null, by: "U", instance: { ...instance, id: "i1", home: [1], state: "building" }, ...extra });
@@ -221,21 +221,31 @@ describe("apply", () => {
     expect(currentDraft()).toBe(EMPTY);
   });
 
-  it("keeps a param's change as a pending edit, previews it, and sends what actually changes", async () => {
-    const speed = { name: "speed", default: 7, min: 0, max: 20, step: 0.1, label: "Speed", perLight: true };
-    const withParams = room(shader(12, { params: { specs: [speed], values: { speed: { all: 7, lights: { "1": 2 } } } } }), shader(11));
-    drafts.setParam("rclamp-12", "speed", { all: 9 });
+  it("keeps a param's change as a pending edit, light by light, previews it, and sends what actually changes", async () => {
+    const speed = { kind: "number", name: "speed", label: "Speed", lights: {}, default: 7, min: 0, max: 20, step: 0.1 } as const;
+    const withParams = room(shader(12, { params: { declared: [speed], values: { speed: [[2, [1]]] } } }), shader(11));
+    drafts.setParam("rclamp-12", "speed", [
+      [1, 9],
+      [2, 9],
+    ]);
     expect(pendingCount(withParams, currentDraft())).toBe(1);
-    expect(layerOf(withParams, currentDraft(), "rclamp-12")!.params).toEqual({ specs: [speed], values: { speed: { all: 9, lights: { "1": 2 } } } });
-    // A later change for some lights goes over the first.
-    drafts.setParam("rclamp-12", "speed", { lights: { "2": 3 } });
-    expect(layerOf(withParams, currentDraft(), "rclamp-12")!.params!.values).toEqual({ speed: { all: 9, lights: { "1": 2, "2": 3 } } });
+    expect(layerOf(withParams, currentDraft(), "rclamp-12")!.params).toEqual({ declared: [speed], values: { speed: [[9, [1, 2]]] } });
+    // A later change goes over the first, light by light; null is back to the default.
+    drafts.setParam("rclamp-12", "speed", [
+      [2, 3],
+      [3, null],
+    ]);
+    expect(layerOf(withParams, currentDraft(), "rclamp-12")!.params!.values).toEqual({ speed: [[9, [1]], [3, [2]]] });
     await applyDraft(withParams);
-    expect(sent).toEqual([{ op: "params", key: "rclamp-12", name: "speed", patch: { all: 9, lights: { "2": 3 } } }]);
+    // Light 3 was at the default already: nothing to send for it.
+    expect(sent).toEqual([{ op: "params", key: "rclamp-12", name: "speed", set: [[9, [1]], [3, [2]]] }]);
     expect(currentDraft()).toBe(EMPTY);
     // Back to what's live: nothing to send.
     sent.length = 0;
-    drafts.setParam("rclamp-12", "speed", { all: 7 });
+    drafts.setParam("rclamp-12", "speed", [
+      [1, 2],
+      [2, null],
+    ]);
     expect(pendingCount(withParams, currentDraft())).toBe(0);
     await applyDraft(withParams);
     expect(sent).toEqual([]);

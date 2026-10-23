@@ -66,6 +66,10 @@ export function createArclamp(baseUrl: string, key: string) {
     setMuted: (id: number, muted: boolean) => call<void>("POST", `/v1/shader/${id}/muted`, { muted }),
     // The whole mask: the lights the shader may not change ([] clears it).
     setMask: (id: number, mask: number[]) => call<void>("POST", `/v1/shader/${id}/mask`, { mask }),
+    // A statement run in the shader's live sandbox, between ticks: what it
+    // came to (JSON where JSON can say it; "undefined" for nothing), or what
+    // it threw. arclamp logs each one, with its code.
+    evalShader: (id: number, code: string) => call<{ ok: boolean; result?: string; error?: string }>("POST", `/v1/shader/${id}/eval`, { code }),
     // Merges into the running template: lights and channels not named are
     // left as they are.
     mergeRoomtone: (template: RoomTemplate) => call<ShaderDescriptor>("PUT", "/v1/shader/0", template),

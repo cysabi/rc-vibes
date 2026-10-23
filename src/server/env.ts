@@ -27,6 +27,8 @@ const schema = z.object({
   BOX_RUNNER: z.enum(["docker", "kubernetes"]).default("docker"),
   BOX_IMAGE: z.string().min(1).optional(),
   BOX_VIBES_URL: z.url().optional(),
+  // Where shaders in the room reach vibes, for their params (params.ts).
+  VIBES_SHADER_URL: z.url().optional(),
   BOX_NAMESPACE: z.string().min(1).default("vibes-boxes"),
   BOX_RUNTIME_CLASS: z.string().default("kata"),
   BOX_IDLE_MINUTES: z.coerce.number().positive().default(15),
@@ -76,6 +78,8 @@ export interface Config {
   databasePath: string;
   port: number;
   production: boolean;
+  /** Where shaders in the room reach vibes, for their params (VIBES_SHADER_URL): the main public address, or this machine in development. */
+  shaderUrl: string;
   /** Sketches and their boxes, or null while they're off (SKETCHES=0). */
   sketches: SketchesConfig | null;
 }
@@ -147,6 +151,7 @@ export function loadConfig(source: Record<string, string | undefined> = process.
     databasePath: env.DATABASE_PATH,
     port: env.PORT,
     production,
+    shaderUrl: (env.VIBES_SHADER_URL ?? (production ? env.PUBLIC_URL[0]! : `http://127.0.0.1:${env.PORT}`)).replace(/\/+$/, ""),
     sketches,
   };
 }

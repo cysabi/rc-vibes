@@ -22,8 +22,8 @@ import { zValidator } from "@hono/zod-validator";
 import { Hono, type Context } from "hono";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import type { ShaderDescriptor } from "../shared/arclamp.ts";
-import { patchValues, type ParamPatch } from "../shared/params.ts";
+import type { LightInfo, ShaderDescriptor } from "../shared/arclamp.ts";
+import { cleanValue, factsOf, passes, withChanges, type Changes } from "../shared/params.ts";
 import type { Instance, Me, Person } from "../shared/vibes.ts";
 import type { Arclamp } from "./arclamp.ts";
 import type { AuthEnv } from "./auth.ts";
@@ -56,13 +56,17 @@ export interface InstanceDeps {
   lightIds: () => Promise<number[]>;
   /** Told when an instance changes, to show it (the scene feed). */
   changed?: () => void;
-  /** Told when an instance's params change, to send them to its shader (params.ts). */
-  sendParams?: (id: string) => void;
+  /** Told when an instance's params change, to send the change to its shader (params.ts). */
+  sendParams?: (id: string, name: string, set: Changes) => void;
+  /** Told when an instance is gone, to end its shader's stream of params (params.ts). */
+  gone?: (id: string) => void;
+  /** Every light arclamp has, for which lights a param's for. */
+  lights?: () => Promise<LightInfo[]>;
 }
 
 type Refusal = { refused: string; status: Status; code: string };
 
-export function createInstances({ config, db, arclamp, builds, lightIds, changed = () => {}, sendParams = () => {} }: InstanceDeps) {
+export function createInstances({ config, db, arclamp, builds, lightIds, changed = () => {}, sendParams = () => {}, gone = () => {}, lights = async () => [] }: InstanceDeps) {
   const refusal = (refused: string, status: Status, code: string): Refusal => ({ refused, status, code });
 
   function view(row: InstanceRow): Instance {
@@ -83,7 +87,6 @@ export function createInstances({ config, db, arclamp, builds, lightIds, changed
       next: next && next.state !== "built" ? { commit: next.commit_sha, buildId: next.id, state: next.state, error: next.error && plainText(next.error) } : null,
       by: { id: row.by_id, name: row.by_name },
       at: row.at,
-      params: row.params,
     };
   }
 
@@ -353,30 +356,45 @@ export function createInstances({ config, db, arclamp, builds, lightIds, changed
     },
 
     /**
-     * A param of an instance changed (ParamPatch: for everywhere, or for some
-     * lights, the rest kept), as its sketch declares it (its build says
-     * what); kept, and sent to its shader at once.
+     * A param of an instance changed (each value with its lights; null puts
+     * them back to the default), as its shader says its sketch declares it:
+     * kept, and sent to its shader at once. Lights the param isn't for are
+     * passed over, as a selection mixes them.
      */
-    setParam(id: string, name: string, patch: ParamPatch, user: Person): { instance: Instance } | Refusal {
+    async setParam(id: string, name: string, set: Changes, user: Person): Promise<{ instance: Instance } | Refusal> {
       const inst = db.instance(id);
       if (!inst) return refusal("no such instance", 404, "not_found");
-      const spec = db.build(inst.build_id)?.params?.find((p) => p.name === name);
-      if (!spec) return refusal(`its sketch has no param ${name}`, 404, "no_param");
-      const values = patchValues(spec, inst.params[name], patch);
-      db.updateInstance(id, { params: { ...inst.params, [name]: values } });
+      const spec = inst.declared?.find((p) => p.name === name);
+      if (!spec) return refusal(inst.declared ? `its sketch has no param ${name}` : "it hasn't said what params it has yet", 404, "no_param");
+      const facts = new Map((await lights()).map((l) => [l.id, factsOf(l)]));
+      const kept: Changes = [];
+      for (const [raw, ids] of set) {
+        const value = raw === null ? null : cleanValue(spec, raw);
+        if (raw !== null && value === null) return refusal(`${spec.label} is a ${spec.kind}`, 400, "bad_value");
+        const these = ids.filter((l) => {
+          const f = facts.get(l);
+          return f !== undefined && passes(spec.lights, f);
+        });
+        if (these.length > 0) kept.push([value, these]);
+      }
+      if (kept.length === 0) return refusal(`${spec.label} isn't for any of those lights`, 400, "no_lights");
+      // Anything since (another change, or the shader saying what it declares) is kept: read it again.
+      const now = db.instance(id);
+      if (!now) return refusal("no such instance", 404, "not_found");
+      db.updateInstance(id, { params: { ...now.params, [name]: withChanges(spec, now.params[name], kept) } });
       db.logCoalesced(
         {
           user,
           action: "shader.param",
           ...(inst.shader_id !== null ? { shaderId: inst.shader_id } : {}),
           shaderName: db.sketch(inst.sketch_id)?.name ?? null,
-          detail: { instance: id, param: name, ...(values.all !== undefined ? { all: values.all } : {}), lights: Object.keys(values.lights ?? {}).length },
+          detail: { instance: id, param: name, lights: kept.reduce((n, [, ids]) => n + ids.length, 0) },
         },
         PARAM_LOG_WINDOW_MS,
         (last) => last?.instance === id && last?.param === name,
       );
       changed();
-      sendParams(id);
+      sendParams(id, name, kept);
       return { instance: view(db.instance(id)!) };
     },
 
@@ -402,6 +420,7 @@ export function createInstances({ config, db, arclamp, builds, lightIds, changed
       }
       db.deleteInstance(id);
       db.log({ user, action: "shader.delete", ...(inst.shader_id !== null ? { shaderId: inst.shader_id } : {}), shaderName: db.sketch(inst.sketch_id)?.name ?? null, detail: { instance: id } });
+      gone(id);
       changed();
       return true;
     },
@@ -417,6 +436,7 @@ export function createInstances({ config, db, arclamp, builds, lightIds, changed
       const inst = db.instanceOfShader(shaderId);
       if (!inst) return;
       db.deleteInstance(inst.id);
+      gone(inst.id);
       changed();
     },
   };

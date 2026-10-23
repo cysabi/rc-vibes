@@ -11,36 +11,20 @@
 // updated (the box's Vite has the entry accept its updates, and hand them
 // here as __vibesNext).
 //
-// arclamp's udp is here too, as far as the preview can have it: the socket a
-// sketch binds gets what the panel posts (its params, as packets, as vibes
-// sends them in the room), and sends go nowhere. What the sketch declares as
-// params (the library keeps them on globalThis) is told after each load.
+// Its params are the panel's: what the sketch declares is told after each
+// load or update, and the knobs' values are handed to the library as vibes'
+// stream hands them over in the room (__vibes.apply; packages/vibes/src/param.ts).
 
 import { ESModulesEvaluator, ModuleRunner } from "vite/module-runner";
-import type { ParamSpec } from "../../shared/params.ts";
+import type { VibesHost } from "../../../packages/vibes/src/param.ts";
+import type { ParamSpec, ParamTable } from "../../shared/params.ts";
 
 const scope = self as unknown as DedicatedWorkerGlobalScope & Record<string, unknown>;
 
-const inbox: string[] = [];
-scope.udp = {
-  bind(opts: { port?: number } = {}) {
-    return {
-      key: 0,
-      local: `0.0.0.0:${opts.port ?? 0}`,
-      recv: () => inbox.shift() ?? null,
-      drain: () => inbox.splice(0),
-      send() {},
-      stats: () => ({ recv: 0, dropped: 0, queued: inbox.length }),
-      close() {},
-    };
-  },
-};
+const host = () => scope.__vibes as VibesHost | undefined;
 
-/** What the sketch declares as params, as the library has registered them. */
-function declared(): ParamSpec[] {
-  const r = scope.__vibesParams as { declared?: Record<string, ParamSpec> } | undefined;
-  return r?.declared ? Object.values(r.declared) : [];
-}
+/** What the sketch declares as params, as the library has them. */
+const declared = (): ParamSpec[] => host()?.params() ?? [];
 
 /** Longer than this, an update() stops the preview: arclamp would kill it too. */
 const UPDATE_LIMIT_MS = 250;
@@ -53,8 +37,8 @@ export type ToSketch =
   | { type: "load-modules"; entry: string }
   | { type: "hmr"; payload: Payload }
   | { type: "tick"; seq: number; prev: unknown; now: number; initial: number }
-  /** Packets for the sketch's udp, as vibes sends them in the room. */
-  | { type: "udp"; packets: string[] };
+  /** Its params' values, all of them, as vibes' stream sends them in the room. */
+  | { type: "params"; values: ParamTable };
 export type FromSketch =
   | { type: "loaded" }
   /** What the sketch declares as params, after each load or update. */
@@ -145,8 +129,8 @@ async function reloadModules() {
 
 scope.onmessage = (e: MessageEvent<ToSketch>) => {
   const m = e.data;
-  if (m.type === "udp") {
-    inbox.push(...m.packets);
+  if (m.type === "params") {
+    host()?.apply("state", { v: 1, values: m.values });
     return;
   }
   if (m.type === "load") {

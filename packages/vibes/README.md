@@ -261,30 +261,38 @@ export const update = sketch(osc(4, 0.1).rotate(turn).kaleid(6).color(look).boos
 
 ## Params
 
-A param is a number vibes can change while the sketch runs: a knob on the
-sketch's panel in vibes, and a value per light, so a selection on the map can
-set it for a section. Declare it with a default and a range, and use it
-wherever a number can depend on `here`:
+A param is something vibes can change while the sketch runs, light by light:
+a number, a color, or a toggle. In vibes, select some lights on the map and
+the sketch's panel has a control for each param they're for; to set one
+everywhere, select every light.
 
 ```ts
-import { sketch, osc, palettes, param } from "@roobscoob/vibes";
+import { osc, param, palettes, sketch } from "@roobscoob/vibes";
 
 const speed = param("speed", 0.05, { min: 0, max: 0.5 });
-const bands = param("bands", 3, { min: 1, max: 8, step: 1, perLight: false });
+const tint = param("tint", "#f80");
+const on = param("on", false, { lights: "switch" });
 
-export const update = sketch(osc(bands, speed).color(palettes.dusk));
+const wave = osc(3, speed);
+export const update = sketch({ color: (here) => tint(here).at(600 * wave(here)), switch: on });
 ```
 
-`param(name, default, { min, max, step, label, perLight })` gives a field:
-`speed(here)` is this light's value (its own, if vibes has set one; else the
-value set for everywhere; else the default). `perLight: false` makes it one
-knob for the whole instance, for things like a tempo. The range is the
-slider's; a value is always kept within it.
+`param(name, default, options)` gives a field: `speed(here)` is this light's
+value, or the default until vibes sets one. Its kind is its default's: a
+number (with `min`, `max` and `step`, the slider's; a value is always kept
+within them), `true` or `false`, or anything that says a color. `label` is
+what vibes calls it.
 
-vibes learns what a sketch declares when it builds it, and sends each
-instance's values to its shader over arclamp's udp, as the values change and
-once a second regardless; the preview gets the same packets. Nothing is
-needed in the sketch beyond the declaration.
+`lights` says which lights it's for: a kind (`"color"` or `"switch"`, as
+`light.kind`), kinds, or `{ kinds, tags, ids }`, each one or a list. A light
+passes if it passes every part given, and any one value in a part will do.
+Every light, if not given; a color is only ever for color lights. vibes only
+offers a param for the lights it's for, and any other light reads its
+default.
+
+vibes learns what a sketch declares from the sketch itself, as it runs in the
+room, and streams it each value as it changes; nothing is needed in the
+sketch beyond the declaration.
 
 ## Without sketch()
 

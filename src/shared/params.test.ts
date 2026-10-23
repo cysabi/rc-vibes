@@ -1,32 +1,62 @@
 import { describe, expect, it } from "vitest";
-import { cleanValues, packetOf, patchValues, valueFor, type ParamSpec } from "./params.ts";
+import { appliesTo, colorOfLemtone, factsOf, filterOf, lemtoneOf, passes, valuesAt, withChanges, type ParamSpec } from "./params.ts";
 
-const speed: ParamSpec = { name: "speed", default: 7, min: 0, max: 20, step: 0.1, label: "Speed", perLight: true };
+const speed: ParamSpec = { kind: "number", name: "speed", label: "Speed", lights: {}, default: 7, min: 0, max: 20, step: 0.1 };
+const on: ParamSpec = { kind: "toggle", name: "on", label: "On", lights: { kinds: ["switch"] }, default: false };
+const tint: ParamSpec = { kind: "color", name: "tint", label: "Tint", lights: { kinds: ["color"] }, default: { a: 0, b: 0, lm: 300, fidelity: 1 } };
+
+describe("which lights a param is for", () => {
+  const light = (id: number, kind: "color" | "switch", tags: string[] = []) => ({ id, kind, tags });
+
+  it("is every light passing every part given, any one value in a part doing", () => {
+    const filter = { kinds: ["color" as const], tags: ["rail", "desk"] };
+    expect(passes(filter, light(1, "color", ["desk"]))).toBe(true);
+    expect(passes(filter, light(2, "color", ["wall"]))).toBe(false);
+    expect(passes(filter, light(3, "switch", ["rail"]))).toBe(false);
+    expect(passes({ ids: [4, 5] }, light(5, "switch"))).toBe(true);
+    expect(passes({}, light(6, "switch"))).toBe(true);
+  });
+
+  it("is read from a kind, kinds, or { kinds, tags, ids }, leaving out empty parts", () => {
+    expect(filterOf("switch")).toEqual({ kinds: ["switch"] });
+    expect(filterOf({ kinds: [], tags: "rail", ids: [3, 3] })).toEqual({ tags: ["rail"], ids: [3] });
+    expect(filterOf({ kinds: ["bulb"] })).toBe('lights\' kinds are "color" or "switch", not "bulb"');
+    expect(filterOf({ ids: [0] })).toBe("lights' ids are light ids");
+  });
+
+  it("knows old bulbs from color lights the way sketches do", () => {
+    const relay = { id: 6, type: "relay", tags: ["hall"] };
+    const bulb = { id: 7, type: "br30", tags: null };
+    expect(factsOf(relay)).toEqual({ id: 6, kind: "switch", tags: ["hall"] });
+    expect(factsOf(bulb)).toEqual({ id: 7, kind: "color", tags: [] });
+    expect([appliesTo(on, relay), appliesTo(on, bulb), appliesTo(tint, relay), appliesTo(tint, bulb)]).toEqual([true, false, false, true]);
+  });
+});
 
 describe("a param's values", () => {
-  it("read as a light's own, else everywhere's, else the default, within the range", () => {
-    expect(valueFor(speed, undefined, 1)).toBe(7);
-    expect(valueFor(speed, { all: 3 }, 1)).toBe(3);
-    expect(valueFor(speed, { all: 3, lights: { "1": 10 } }, 1)).toBe(10);
-    expect(valueFor(speed, { all: 3, lights: { "1": 10 } }, 2)).toBe(3);
-    expect(valueFor(speed, { all: 99 }, 2)).toBe(20);
+  it("change light by light, grouped by value, the default and anything not its kind left out", () => {
+    let groups = withChanges(speed, [], [[3, [1, 2]], [99, [3]], [7, [4]], ["fast" as never, [5]]]);
+    expect(groups).toEqual([
+      [3, [1, 2]],
+      [20, [3]],
+    ]);
+    groups = withChanges(speed, groups, [[null, [1]], [20, [2]]]);
+    expect(groups).toEqual([[20, [2, 3]]]);
+    expect(withChanges(on, [], [[true, [6, 7]]], (id) => id === 6)).toEqual([[true, [6]]]);
+    expect(valuesAt(speed, groups, [1, 2])).toEqual([7, 20]);
   });
 
-  it("are cleaned to what's set, within the range", () => {
-    expect(cleanValues(speed, { all: -4, lights: { "1": 30, "2": Number.NaN } })).toEqual({ all: 0, lights: { "1": 20 } });
-    expect(cleanValues(speed, { lights: {} })).toEqual({});
+  it("group colors by the same color", () => {
+    const red = { a: 0.2, b: 0.1, lm: 500, fidelity: 1 };
+    expect(withChanges(tint, [], [[red, [1]], [{ ...red }, [2]], [{ ...red, lm: 400 }, [3]]])).toEqual([
+      [red, [1, 2]],
+      [{ ...red, lm: 400 }, [3]],
+    ]);
   });
 
-  it("take a patch: a part given replaces it, null unsets it, and lights merge", () => {
-    const prev = { all: 3, lights: { "1": 10, "2": 11 } };
-    expect(patchValues(speed, prev, { all: 5 })).toEqual({ all: 5, lights: { "1": 10, "2": 11 } });
-    expect(patchValues(speed, prev, { lights: { "2": null, "3": 12 } })).toEqual({ all: 3, lights: { "1": 10, "3": 12 } });
-    expect(patchValues(speed, prev, { all: null, lights: null })).toEqual({});
-    expect(patchValues(speed, undefined, { lights: { "4": 1 } })).toEqual({ lights: { "4": 1 } });
-  });
-
-  it("go out as one packet each, as the library reads them", () => {
-    expect(JSON.parse(packetOf(3, "speed", { all: 7, lights: { "1": 9 } }))).toEqual({ vibes: "params", v: 1, seq: 3, name: "speed", all: 7, lights: { "1": 9 } });
-    expect(JSON.parse(packetOf(4, "speed", {}))).toEqual({ vibes: "params", v: 1, seq: 4, name: "speed" });
+  it("go between the wire's colors and room tone's editor's", () => {
+    const c = { a: 0.1, b: -0.05, lm: 400, fidelity: 0.5 };
+    expect(lemtoneOf(c)).toEqual({ a: 0.1, b: -0.05, brightness: 0.4, fidelity: 0.5 });
+    expect(colorOfLemtone(lemtoneOf(c))).toEqual(c);
   });
 });

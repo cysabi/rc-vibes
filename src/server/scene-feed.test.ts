@@ -7,7 +7,9 @@ import { openDb, type Db, type InstanceRow } from "./db.ts";
 import { loadConfig } from "./env.ts";
 import type { EventHandlers } from "./event-stream.ts";
 import type { Instances } from "./instances.ts";
+import type { SeenShader } from "./params.ts";
 import { createSceneFeed, type SceneFeedSource } from "./scene-feed.ts";
+import { stamp, stampAs } from "./stamp.ts";
 
 const config = loadConfig({ ARCLAMP_BASE_URL: "http://127.0.0.1:1", ARCLAMP_KEY: "k", SESSION_SECRET: "s".repeat(32), VIBES_SIGNING_KEY: "k".repeat(32), VIBES_DEV_LOGIN: "1" });
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
@@ -192,34 +194,32 @@ describe("the scene feed", () => {
     expect(db.instances().map((i) => i.id)).toEqual(["i2", "i4"]);
   });
 
-  it("carries each instance's params (what its build declares, with its values), and says where each shader takes udp", async () => {
-    const speed = { name: "speed", default: 7, min: 0, max: 20, step: 0.1, label: "Speed", perLight: true };
-    db.addSketch({ id: "s1", name: "Warm wave", by_id: "rc:1", by_name: "Ada", at: 0 });
-    db.addBuild({ id: "b1", sketch_id: "s1", commit_sha: "a".repeat(40), builder: "1", by_id: "rc:1", by_name: "Ada", at: 0 });
-    db.finishBuild("b1", { state: "built", finished_at: 1, plan: "vite main.ts", error: null, log: "", script: "one", params: [speed] });
-    db.addInstance({ id: "i1", sketch_id: "s1", build_id: "b1", home: [1], by_id: "rc:1", by_name: "Ada", at: 1 });
-    db.updateInstance("i1", { shader_id: 3, state: "live", params: { speed: { all: 9 } } });
-    db.addInstance({ id: "i2", sketch_id: "s1", build_id: "b1", home: [2], by_id: "rc:1", by_name: "Ada", at: 2 });
-    const fake = { view: (row: InstanceRow) => ({ id: row.id, sketchId: row.sketch_id, sketchName: "Warm wave", commit: "a".repeat(40), home: row.home, state: row.state, error: row.error, by: { id: row.by_id, name: row.by_name }, at: row.at, params: row.params }), forget: () => {} } as unknown as Instances;
-    const ports: [number, unknown][] = [];
-    scene = [roomtone, shader(3, "one", { ports: [{ proto: "udp", host: "0.0.0.0", port: 4001 }] }), shader(4, "two")];
-    feed = createSceneFeed({ config, db, arclamp, follow: (handlers) => ((on = handlers), { stop() {} }), layout: async () => layout, instances: () => fake, onPorts: (id, p) => ports.push([id, p]), confirmMs: 30 });
+  it("carries each instance's params (what its shader said it declares, with its values), and says which shaders are instances' to link", async () => {
+    const speed = { kind: "number", name: "speed", label: "Speed", lights: {}, default: 7, min: 0, max: 20, step: 0.1 } as const;
+    const [i1, i2, i3] = ["0f4527e5-4faf-4691-b789-e4c389175411", "0f4527e5-4faf-4691-b789-e4c389175412", "0f4527e5-4faf-4691-b789-e4c389175413"];
+    const SKETCH = "0f4527e5-4faf-4691-b789-e4c389175401";
+    db.addSketch({ id: SKETCH, name: "Warm wave", by_id: "rc:1", by_name: "Ada", at: 0 });
+    db.addBuild({ id: "b1", sketch_id: SKETCH, commit_sha: "a".repeat(40), builder: "1", by_id: "rc:1", by_name: "Ada", at: 0 });
+    const built = stamp("function update(p) { return p; }", { sketch: SKETCH, commit: "a".repeat(40), builder: "1" }, config.signingKey!);
+    const as = (id: string) => stampAs(built, id, config.signingKey!)!;
+    db.addInstance({ id: i1, sketch_id: SKETCH, build_id: "b1", home: [1], by_id: "rc:1", by_name: "Ada", at: 1 });
+    db.updateInstance(i1, { shader_id: 3, state: "live", declared: [speed], params: { speed: [[9, [1]]] } });
+    // Its shader's script says it's another's: not one to link.
+    db.addInstance({ id: i2, sketch_id: SKETCH, build_id: "b1", home: [2], by_id: "rc:1", by_name: "Ada", at: 2 });
+    db.updateInstance(i2, { shader_id: 4, state: "live" });
+    // On its way in: no shader yet.
+    db.addInstance({ id: i3, sketch_id: SKETCH, build_id: "b1", home: [2], by_id: "rc:1", by_name: "Ada", at: 3 });
+    const fake = { view: (row: InstanceRow) => ({ id: row.id, sketchId: row.sketch_id, sketchName: "Warm wave", commit: "a".repeat(40), home: row.home, state: row.state, error: row.error, by: { id: row.by_id, name: row.by_name }, at: row.at }), forget: () => {} } as unknown as Instances;
+    const seen: SeenShader[][] = [];
+    scene = [roomtone, shader(3, as(i1), { respawns: 2 }), shader(4, as(i1), { state: "error" }), shader(5, "three")];
+    feed = createSceneFeed({ config, db, arclamp, follow: (handlers) => ((on = handlers), { stop() {} }), layout: async () => layout, instances: () => fake, onShaders: (s) => seen.push(s), confirmMs: 30 });
     snapshot();
     await settle();
-    expect(byKey(now(), "i1")!.params).toEqual({ specs: [speed], values: { speed: { all: 9 } } });
-    expect(byKey(now(), "i2")!.params).toEqual({ specs: [speed], values: {} });
-    expect(byKey(now(), "rclamp-4")!.params).toBeNull();
-    expect(ports).toEqual([
-      [4, undefined],
-      [3, [{ proto: "udp", host: "0.0.0.0", port: 4001 }]],
-    ]);
-    // Gone, it takes nothing: said so, before the rest are said again.
-    removed(3);
-    await settle();
-    expect(ports.slice(2)).toEqual([
-      [3, undefined],
-      [4, undefined],
-    ]);
+    expect(byKey(now(), i1)!.params).toEqual({ declared: [speed], values: { speed: [[9, [1]]] } });
+    expect(byKey(now(), i2)!.params).toEqual({ declared: null, values: {} });
+    expect(byKey(now(), i3)!.params).toEqual({ declared: null, values: {} });
+    expect(byKey(now(), "rclamp-5")!.params).toBeNull();
+    expect(seen.at(-1)).toEqual([{ instance: i1, shaderId: 3, running: true, respawns: 2, scriptHash: sha(as(i1)) }]);
   });
 
   it("shows those on their way in where they're to go in, as they're wanted", async () => {

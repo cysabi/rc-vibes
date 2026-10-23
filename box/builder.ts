@@ -12,7 +12,6 @@ import { spawn } from "node:child_process";
 import { existsSync, mkdirSync, readFileSync, statSync } from "node:fs";
 import path from "node:path";
 import { Readable } from "node:stream";
-import vm from "node:vm";
 import { planSketch, UPDATE_FOOTER, type BuildPlan } from "../src/shared/sketch-plan.ts";
 
 const url = process.env.VIBES_BUILD_URL;
@@ -95,46 +94,7 @@ async function build(plan: BuildPlan): Promise<string> {
   return readFileSync(output, "utf8");
 }
 
-/**
- * The params the script declares (param() in @roobscoob/vibes, which keeps
- * them on globalThis as it loads): read by loading it here, as arclamp would,
- * in a context of its own with the little a sandbox has. Nothing it does here
- * matters; one that can't load declares nothing, and the room says what's wrong.
- */
-function declaredParams(script: string): unknown[] {
-  const quiet = () => {};
-  const never = () => 0;
-  const context = vm.createContext({
-    console: { log: quiet, info: quiet, debug: quiet, warn: quiet, error: quiet },
-    udp: { bind: () => ({ key: 0, local: "0.0.0.0:0", recv: () => null, drain: () => [], send: quiet, stats: () => ({ recv: 0, dropped: 0, queued: 0 }), close: quiet }) },
-    // The rest of what arclamp's prelude gives a sandbox, as the preview's
-    // worker counts on it too (src/web/sim.worker.ts), so a sketch that
-    // reaches for any of it as it loads still loads here: timers that never
-    // fire, a fetch that never answers.
-    setTimeout: never,
-    clearTimeout: quiet,
-    setInterval: never,
-    clearInterval: quiet,
-    fetch: () => new Promise(() => {}),
-    AbortController,
-    crypto,
-    atob,
-    btoa,
-    TextEncoder,
-    TextDecoder,
-  });
-  try {
-    vm.runInContext(script, context, { filename: "sketch.js", timeout: 5000 });
-  } catch (err) {
-    say(`Couldn't load the script to read its params: ${(err as Error).message}`);
-    return [];
-  }
-  const registry = (context as Record<string, unknown>).__vibesParams as { declared?: unknown } | undefined;
-  const declared = registry?.declared;
-  return declared && typeof declared === "object" ? Object.values(declared) : [];
-}
-
-async function report(result: { ok: true; script: string; plan: string; params: unknown[] } | { ok: false; error: string; plan: string | null }) {
+async function report(result: { ok: true; script: string; plan: string } | { ok: false; error: string; plan: string | null }) {
   const res = await fetch(`${url}/build-api/result`, {
     method: "POST",
     headers: { authorization: `Bearer ${token}`, "content-type": "application/json" },
@@ -158,9 +118,7 @@ async function main() {
     }
     const script = await build(plan.build);
     say(`Built: ${script.length} bytes`);
-    const params = declaredParams(script);
-    if (params.length > 0) say(`Params: ${params.map((p) => (p as { name?: unknown }).name).join(", ")}`);
-    await report({ ok: true, script, plan: described, params });
+    await report({ ok: true, script, plan: described });
   } catch (err) {
     say(`Failed: ${(err as Error).message}`);
     await report({ ok: false, error: (err as Error).message, plan: described }).catch((e: Error) => console.error(e.message));

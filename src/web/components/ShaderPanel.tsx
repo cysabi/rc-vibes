@@ -14,7 +14,7 @@
 
 import { useState } from "react";
 import type { LightInfo } from "../../shared/arclamp.ts";
-import { paramText } from "../../shared/params.ts";
+import { appliesTo, valuesAt } from "../../shared/params.ts";
 import { tagLabel } from "../../shared/tags.ts";
 import type { Instance, ShaderSketch } from "../../shared/vibes.ts";
 import { request, useBranchHead } from "../api.ts";
@@ -24,7 +24,8 @@ import { navigate } from "../route.ts";
 import { invalidateScene } from "../scene.ts";
 import { useLiveMode } from "../settings.ts";
 import { commitName, count, listOf, ordinal } from "../words.ts";
-import { Slider } from "./Slider.tsx";
+import { ColorParam } from "./ColorParam.tsx";
+import { ParamControl } from "./ParamControl.tsx";
 
 /** Its head: back to the selection, its name, and where it's from. */
 export function ShaderTitle({ layer, onBack }: { layer: Layer; onBack: () => void }) {
@@ -132,7 +133,7 @@ export function ShaderBody({ layer, stack, removing, lights, selected, onGone }:
           </li>
         )}
       </ul>
-      <Params layer={layer} />
+      <Params layer={layer} lights={lights} selected={selected} />
       <div className="shader-actions">
         {sketch?.name != null && <OpenCode sketch={sketch} />}
         {instance && <Update instance={instance} />}
@@ -143,37 +144,40 @@ export function ShaderBody({ layer, stack, removing, lights, selected, onGone }:
 }
 
 /**
- * Its params, once it's in the room: a slider each, setting the value for
- * everywhere it lights, as a pending edit like any other (the simulation
- * shows it; Apply sends it, or live mode at once). Any set for some lights
- * apart stay as they are.
+ * Its params, once it's in the room and has said what they are: a control
+ * each, for the selected lights it lights that the param is for (its kinds,
+ * tags and ids). A change is a pending edit like any other (the simulation
+ * shows it; Apply sends it, or live mode at once). Every light selected sets
+ * it everywhere.
  */
-function Params({ layer }: { layer: Layer }) {
+function Params({ layer, lights, selected }: { layer: Layer; lights: LightInfo[]; selected: number[] }) {
   const params = layer.params;
-  if (!params || params.specs.length === 0 || layer.stage !== "live") return null;
+  if (!params?.declared || layer.stage !== "live") return null;
+  const reach = new Set(reachOf(layer));
+  const chosen = new Set(selected);
+  const here = lights.filter((l) => chosen.has(l.id) && reach.has(l.id));
+  const rows = params.declared.flatMap((spec) => {
+    const theirs = here.filter((l) => appliesTo(spec, l));
+    return theirs.length > 0 ? [{ spec, theirs }] : [];
+  });
+  if (rows.length === 0) return null;
   return (
     <div className="shader-params">
-      {params.specs.map((spec) => {
-        const values = params.values[spec.name];
-        const value = values?.all ?? spec.default;
-        const apart = Object.keys(values?.lights ?? {}).length;
-        const set = (v: number) => drafts.setParam(layer.key, spec.name, { all: v });
-        return (
-          <Slider
-            key={spec.name}
-            label={spec.label}
-            value={value}
-            min={spec.min}
-            max={spec.max}
-            step={spec.step}
-            track="linear-gradient(90deg, rgb(255 255 255 / 0.06), rgb(255 255 255 / 0.22))"
-            display={`${paramText(value, spec.step)}${apart > 0 ? ` · ${count(apart, "light")} set apart` : ""}`}
-            onChange={set}
-            onCommit={set}
-            marks={[{ at: spec.default, title: `Default: ${paramText(spec.default, spec.step)}` }]}
-          />
-        );
-      })}
+      {rows.map(({ spec, theirs }) => (
+        <ParamControl
+          key={spec.name}
+          spec={spec}
+          lights={theirs}
+          values={valuesAt(
+            spec,
+            params.values[spec.name],
+            theirs.map((l) => l.id),
+          )}
+          onChange={(changes) => drafts.setParam(layer.key, spec.name, changes)}
+          colorPicker={ColorParam}
+          note={count(theirs.length, "light")}
+        />
+      ))}
     </div>
   );
 }

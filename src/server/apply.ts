@@ -12,7 +12,7 @@ import type { Change, Me, ShaderKey } from "../shared/vibes.ts";
 import { ArclampError } from "./arclamp.ts";
 import { isBranchName } from "./git.ts";
 import type { Instances } from "./instances.ts";
-import { paramPatchBody } from "./params.ts";
+import { changesBody } from "./params.ts";
 import { Refused, type Shaders } from "./shaders.ts";
 
 const key = z.string().min(1).max(100);
@@ -34,7 +34,7 @@ export const change: z.ZodType<Change> = z.discriminatedUnion("op", [
   }),
   z.object({ op: z.literal("muted"), key, muted: z.boolean() }),
   z.object({ op: z.literal("mask"), key, mask: ids }),
-  z.object({ op: z.literal("params"), key, name: z.string().regex(PARAM_NAME), patch: paramPatchBody }),
+  z.object({ op: z.literal("params"), key, name: z.string().regex(PARAM_NAME), set: changesBody }),
   z.object({ op: z.literal("stack"), order: z.array(key).max(500) }),
 ]);
 
@@ -77,7 +77,7 @@ export function createApply({ shaders, instances, setRoomtone }: ApplyDeps) {
       case "mask":
         return shaders.setMask(c.key, c.mask, user);
       case "params":
-        return shaders.setParam(c.key, c.name, c.patch, user);
+        return shaders.setParam(c.key, c.name, c.set, user);
       case "stack":
         return shaders.reorder(c.order, user);
       case "add": {

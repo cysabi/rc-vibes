@@ -1,7 +1,7 @@
 // Types for vibes' own API (/api/*), shared by the server and the browser.
 
 import type { Channels, Coords, LightsResponse, RailSpot, RoomTemplate, ShaderState } from "./arclamp.ts";
-import type { ParamPatch, ParamSpec, ParamTable, ShaderParams } from "./params.ts";
+import type { Changes, ShaderParams } from "./params.ts";
 import type { RailShape } from "./rails.ts";
 
 export interface Person {
@@ -54,7 +54,7 @@ export interface Shader {
   footprint: number[];
   /** Its script's sha256, in hex, for the preview to fetch it by; null until it's live. */
   scriptHash: string | null;
-  /** Its params (shared/params.ts): what its sketch declares, and their values; null for one not put in from a sketch. */
+  /** Its params (shared/params.ts): what its sketch says it declares, and their values; null for one not put in from a sketch. */
   params: ShaderParams | null;
 }
 
@@ -88,8 +88,6 @@ export interface Instance {
   by: Person;
   /** When it was put in, in ms. */
   at: number;
-  /** Its params' values, by name. */
-  params: ParamTable;
 }
 
 /** What vibes pushes of the room (over the room socket): the stack of shaders, top first, and the room tone. */
@@ -122,8 +120,8 @@ export type Change =
     }
   | { op: "muted"; key: ShaderKey; muted: boolean }
   | { op: "mask"; key: ShaderKey; mask: number[] }
-  /** A param's values changed (ParamPatch): for everywhere, or for some lights, the rest kept. */
-  | { op: "params"; key: ShaderKey; name: string; patch: ParamPatch }
+  /** A param's values changed: each value with its lights (null back to the default); other lights' kept. */
+  | { op: "params"; key: ShaderKey; name: string; set: Changes }
   /** The stack in this order, top first. */
   | { op: "stack"; order: ShaderKey[] };
 
@@ -243,8 +241,6 @@ export interface Build {
   /** How it was built: "vite main.ts", "package.json: pnpm run build", … */
   plan: string | null;
   error: string | null;
-  /** What its script declares as params; null for a build before vibes read them. */
-  params: ParamSpec[] | null;
   /** What it printed (with the build only, not in lists). */
   log?: string;
 }

@@ -9,9 +9,10 @@
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
-import { paramText } from "../../shared/params.ts";
+import { color } from "../../../packages/vibes/src/color.ts";
+import { appliesTo, valuesAt } from "../../shared/params.ts";
 import type { Lights } from "../../shared/vibes.ts";
-import { Slider } from "../components/Slider.tsx";
+import { ParamControl, type ColorPickerProps } from "../components/ParamControl.tsx";
 import { FramesProvider, type FrameSource } from "../live.ts";
 import { PreviewMap } from "./PreviewMap.tsx";
 import type { FromPreview, SketchSource, ToPreview } from "./protocol.ts";
@@ -94,36 +95,51 @@ function Preview() {
 }
 
 /**
- * The sketch's params as knobs over the map, one slider each, setting the
- * value for every light: the preview's own values, not the room's, sent to
- * the sketch the way vibes sends them in the room.
+ * The sketch's params as knobs over the map, one each, setting every light
+ * it's for: the preview's own values, not the room's, handed to the sketch as
+ * vibes' stream hands them over in the room.
  */
 function Knobs({ runner }: { runner: SketchRunner }) {
   useSyncExternalStore(runner.watch, () => runner.version);
-  if (runner.params.length === 0) return null;
+  const rows = runner.params.flatMap((spec) => {
+    const theirs = runner.lights.filter((l) => appliesTo(spec, l));
+    return theirs.length > 0 ? [{ spec, theirs }] : [];
+  });
+  if (rows.length === 0) return null;
   return (
     // Its own pointer events: a drag that misses a track mustn't pan or select on the map under it.
     <div className="preview-knobs" onPointerDown={(e) => e.stopPropagation()}>
-      {runner.params.map((spec) => {
-        const value = runner.values[spec.name]?.all ?? spec.default;
-        const set = (v: number) => runner.setParam(spec.name, { all: v });
-        return (
-          <Slider
-            key={spec.name}
-            label={spec.label}
-            value={value}
-            min={spec.min}
-            max={spec.max}
-            step={spec.step}
-            track="linear-gradient(90deg, rgb(255 255 255 / 0.06), rgb(255 255 255 / 0.22))"
-            display={paramText(value, spec.step)}
-            onChange={set}
-            onCommit={set}
-            marks={[{ at: spec.default, title: `Default: ${paramText(spec.default, spec.step)}` }]}
-          />
-        );
-      })}
+      {rows.map(({ spec, theirs }) => (
+        <ParamControl
+          key={spec.name}
+          spec={spec}
+          lights={theirs}
+          values={valuesAt(
+            spec,
+            runner.values[spec.name],
+            theirs.map((l) => l.id),
+          )}
+          onChange={(changes) => runner.setParam(spec.name, changes)}
+          colorPicker={PickColor}
+        />
+      ))}
     </div>
+  );
+}
+
+/** A color param here: the browser's own picker (room tone's color editor can't go in a webview), for every light it's for. */
+function PickColor({ lights, values, onChange }: ColorPickerProps) {
+  return (
+    <input
+      type="color"
+      className="preview-color"
+      aria-label="Color"
+      value={color(values[0]!).hex}
+      onChange={(e) => {
+        const c = color(e.target.value).toJSON();
+        onChange(lights.map((l) => [l.id, c]));
+      }}
+    />
   );
 }
 

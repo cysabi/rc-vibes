@@ -29,7 +29,7 @@
 // says there's no such shader (rather than one too new to be in it).
 
 import { createHash } from "node:crypto";
-import { decodeTouched, lightsOf, type LightsResponse, type PortInfo, type RoomTemplate, type ShaderDescriptor } from "../shared/arclamp.ts";
+import { decodeTouched, lightsOf, type LightsResponse, type RoomTemplate, type ShaderDescriptor } from "../shared/arclamp.ts";
 import type { ShaderParams } from "../shared/params.ts";
 import type { SceneFeed, Shader, ShaderSketch } from "../shared/vibes.ts";
 import { ArclampError, type Arclamp } from "./arclamp.ts";
@@ -37,8 +37,9 @@ import type { Db, InstanceRow } from "./db.ts";
 import type { Config } from "./env.ts";
 import type { EventHandlers, Following } from "./event-stream.ts";
 import type { Instances } from "./instances.ts";
+import type { SeenShader } from "./params.ts";
 import { rclampKey, shaderOfKey } from "./shaders.ts";
-import { sketchOf } from "./stamp.ts";
+import { readStamp, sketchOf } from "./stamp.ts";
 
 // Events that come together (a move shifts several shaders) go on as one.
 const GATHER_MS = 20;
@@ -61,8 +62,8 @@ export interface FeedDeps {
   layout: () => Promise<LightsResponse>;
   /** Instances, while sketches are on. */
   instances?: () => Instances | null;
-  /** Told where each shader in the scene takes udp (its ports), as the scene's made: for sending params (params.ts). */
-  onPorts?: (shaderId: number, ports: PortInfo[] | undefined) => void;
+  /** Told the shaders in the scene that are instances' (by their stamps), each time it's made: for linking them for params (params.ts). */
+  onShaders?: (shaders: SeenShader[]) => void;
   confirmMs?: number;
 }
 
@@ -77,12 +78,9 @@ const keep = ({ script: _script, changing: _changing, ...rest }: ShaderDescripto
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 const sorted = (ids: Iterable<number>) => [...ids].sort((a, b) => a - b);
 
-export function createSceneFeed({ config, db, arclamp, follow, layout, instances = () => null, onPorts, confirmMs = CONFIRM_MS }: FeedDeps) {
-  /** An instance's params: what its build says its sketch declares, with its values; null for a build from before vibes read them. */
-  const paramsOf = (row: InstanceRow): ShaderParams | null => {
-    const specs = db.build(row.build_id)?.params;
-    return specs ? { specs, values: row.params } : null;
-  };
+export function createSceneFeed({ config, db, arclamp, follow, layout, instances = () => null, onShaders, confirmMs = CONFIRM_MS }: FeedDeps) {
+  /** An instance's params: what its shader said its sketch declares (null until it has), with its values. */
+  const paramsOf = (row: InstanceRow): ShaderParams => ({ declared: row.declared, values: row.params });
   const shaders = new Map<number, Kept>();
   // Whether it's been told the whole scene yet.
   let whole = false;
@@ -145,8 +143,6 @@ export function createSceneFeed({ config, db, arclamp, follow, layout, instances
     if (footprints.delete(id)) db.deleteFootprint(id);
     unwritten.delete(id);
     instances()?.forget(id);
-    // Nowhere to send to any more.
-    onPorts?.(id, undefined);
   }
 
   /** Shaders vibes keeps something of that the scene doesn't have: gone, if arclamp says there's no such shader. */
@@ -174,6 +170,8 @@ export function createSceneFeed({ config, db, arclamp, follow, layout, instances
     const inUse = new Set<string>();
     let roomtone: RoomTemplate | null = null;
     const inRoom: Shader[] = [];
+    // Instances' shaders, by their stamps: the ones vibes may link for params.
+    const ours: SeenShader[] = [];
     for (const n of [...shaders.values()].sort((a, b) => b.position - a.position)) {
       if (n.type === "roomtone") {
         roomtone = n.template ?? null;
@@ -184,7 +182,11 @@ export function createSceneFeed({ config, db, arclamp, follow, layout, instances
       const sketch = sketches.get(hash) ?? null;
       const inst = byShader.get(n.id);
       const instance = inst && live ? live.view(inst) : null;
-      onPorts?.(n.id, n.ports);
+      const script = scripts.get(hash);
+      const stamp = inst && script ? readStamp(script, config.signingKey) : null;
+      if (inst && stamp?.verified && stamp.stamp.shader === inst.id) {
+        ours.push({ instance: inst.id, shaderId: n.id, running: n.state === "running", respawns: n.respawns ?? 0, scriptHash: hash });
+      }
       inRoom.push({
         key: inst ? inst.id : rclampKey(n.id),
         stage: "live",
@@ -202,6 +204,7 @@ export function createSceneFeed({ config, db, arclamp, follow, layout, instances
         params: inst ? paramsOf(inst) : null,
       });
     }
+    onShaders?.(ours);
     for (const hash of [...scripts.keys()]) {
       if (inUse.has(hash)) continue;
       scripts.delete(hash);

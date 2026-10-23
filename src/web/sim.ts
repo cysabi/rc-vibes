@@ -9,13 +9,13 @@
 // room (useLayerEffects; the selection panel lists them).
 //
 // It differs from arclamp in running ~30 times a second rather than 100, on
-// the browser's JS engine, with browser rules for fetch (CORS), and with udp
-// that only ever carries what the page posts: each shader's params, as
-// packets, as vibes sends them in the room (shared/params.ts).
+// the browser's JS engine, with browser rules for fetch (CORS), and without
+// udp. A shader's params, pending edits and all, are handed to it as vibes'
+// stream hands them over in the room.
 
 import { useEffect, useRef, useSyncExternalStore } from "react";
 import type { Channels, LightInfo } from "../shared/arclamp.ts";
-import { packetOf, type ShaderParams } from "../shared/params.ts";
+import type { ShaderParams } from "../shared/params.ts";
 import type { Layer, LayerKey } from "./draft.ts";
 import { pushSimFrame, setSimulated } from "./live.ts";
 import type { FromWorker, ToWorker } from "./sim.worker.ts";
@@ -89,9 +89,8 @@ class ShaderWorker {
   private waiting = new Map<number, (out: unknown) => void>();
   /** The script couldn't load, or got stuck: nothing more to ask it. */
   stopped = false;
-  /** The params last sent it, as JSON, and how many packets so far (their seq). */
+  /** The params' values last sent it, as JSON. */
   private sentParams: string | null = null;
-  private packets = 0;
 
   readonly script: string;
 
@@ -132,14 +131,12 @@ class ShaderWorker {
     });
   }
 
-  /** Its params, as packets to its udp, when they've changed since last sent (every one, each time: a packet is a param's whole state). */
+  /** Its params' values, all of them, when they've changed since last sent. */
   sendParams(params: ShaderParams | null) {
-    const json = params ? JSON.stringify(params) : null;
+    const json = params ? JSON.stringify(params.values) : null;
     if (json === this.sentParams) return;
     this.sentParams = json;
-    if (!params) return;
-    const packets = params.specs.map((spec) => packetOf(++this.packets, spec.name, params.values[spec.name] ?? {}));
-    if (packets.length > 0) this.worker.postMessage({ type: "udp", packets } satisfies ToWorker);
+    if (params) this.worker.postMessage({ type: "params", values: params.values } satisfies ToWorker);
   }
 
   stop() {

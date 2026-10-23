@@ -23,7 +23,7 @@
 // preview, with why in the console.
 
 import type { Frame, LightInfo } from "../../shared/arclamp.ts";
-import { packetOf, type ParamSpec, type ParamTable, type ParamValues } from "../../shared/params.ts";
+import { withChanges, type ParamSpec, type ParamTable, type ParamValue } from "../../shared/params.ts";
 import type { FrameSource } from "../live.ts";
 import { baseState, mergeOutput, prevOf, type RoomState } from "../sim.ts";
 // Inline, so it also starts where a page can't load a worker from a URL (a
@@ -66,9 +66,8 @@ export class SketchRunner implements FrameSource {
   log: LogLine[] = [];
   /** What the sketch declares as params, as of its last load or update. */
   params: ParamSpec[] = [];
-  /** The knobs' values here: the preview's own, kept across restarts and new builds, sent to the sketch as vibes would in the room. */
+  /** The knobs' values here: the preview's own, kept across restarts and new builds, handed to the sketch as vibes' stream would in the room. */
   values: ParamTable = {};
-  private packets = 0;
   /** Bumped whenever any of the above changes, for React. */
   version = 0;
 
@@ -162,8 +161,8 @@ export class SketchRunner implements FrameSource {
       if (m.type === "log") this.write(m.level, m.text);
       else if (m.type === "params") {
         this.params = m.specs;
-        // A fresh sandbox (or an update) starts from the defaults: the knobs' values, again.
-        this.resendParams();
+        // A fresh sandbox starts from the defaults: the knobs' values, again.
+        this.post({ type: "params", values: this.values });
         this.changed();
       } else if (m.type === "out") this.answer(m.seq, m.out);
       else if (m.type === "hmr") this.onHmr?.(m.payload);
@@ -176,16 +175,13 @@ export class SketchRunner implements FrameSource {
     this.post(s.kind === "script" ? { type: "load", script: s.script } : { type: "load-modules", entry: s.entry });
   }
 
-  /** A param's values from a knob here. */
-  setParam(name: string, values: ParamValues) {
-    this.values = { ...this.values, [name]: values };
-    this.post({ type: "udp", packets: [packetOf(++this.packets, name, values)] });
+  /** A param's values from a knob here: each light's (null back to the default). */
+  setParam(name: string, changes: readonly [number, ParamValue | null][]) {
+    const spec = this.params.find((p) => p.name === name);
+    if (!spec) return;
+    this.values = { ...this.values, [name]: withChanges(spec, this.values[name], changes.map(([id, v]) => [v, [id]])) };
+    this.post({ type: "params", values: this.values });
     this.changed();
-  }
-
-  private resendParams() {
-    const packets = this.params.flatMap((spec) => (this.values[spec.name] ? [packetOf(++this.packets, spec.name, this.values[spec.name]!)] : []));
-    if (packets.length > 0) this.post({ type: "udp", packets });
   }
 
   dispose() {

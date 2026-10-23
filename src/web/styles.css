@@ -1548,6 +1548,17 @@ kbd {
   padding: 0 18px;
 }
 
+/* A param's control (ParamControl), and its way back to the default under it. */
+.param {
+  display: grid;
+  gap: 8px;
+}
+
+.param-default {
+  justify-self: end;
+  font-size: 12px;
+}
+
 .shader-actions {
   display: flex;
   flex-wrap: wrap;

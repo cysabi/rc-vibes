@@ -1,218 +1,327 @@
-// param(): a number a sketch declares, for vibes to change while it runs.
+// param(): something vibes can change while the sketch runs, light by light:
+// a number, a color, or a toggle.
 //
-//   const speed = param("speed", 7, { min: 1, max: 20 });
-//   export const update = sketch(osc(3, speed));
+//   const speed = param("speed", 0.05, { min: 0, max: 0.5 });
+//   const tint = param("tint", "#f80");
+//   const on = param("on", false, { lights: "switch" });
 //
-// A param is a field: wherever a number can depend on here, it's that light's
-// value. vibes keeps a value per light for each instance of a sketch in the
-// room, and one for everywhere, so a selection on the map can set a param for
-// a section; a light nobody's set reads the everywhere value, and without one
-// the default. A param that makes no sense per light (a tempo) says
-// perLight: false, and vibes offers it as one knob.
+//   const wave = osc(3, speed);
+//   export const update = sketch({ color: (here) => tint(here).at(600 * wave(here)), switch: on });
 //
-// Values arrive as packets over arclamp's udp (vibes sends them, and sends
-// them again every second, so a lost one or a restarted sandbox is behind for
-// a second at most); the preview sends the same packets to its worker. Each
-// packet is one param's whole state, as JSON text:
+// A param is a field: each light reads its own value, or the default until
+// vibes sets one. Its kind is its default's: a number, true or false, or
+// anything that says a color. `lights` says which lights it's for (a kind or
+// kinds, or { kinds, tags, ids }; wire.ts): vibes only offers it for those,
+// and any other light reads the default. A color is for color lights only.
 //
-//   { "vibes": "params", "v": 1, "seq": 12, "name": "speed", "all": 7, "lights": { "12": 9 } }
+// vibes learns what a sketch declares from the sketch itself, as it runs in
+// the room: vibes links each shader once (an eval in arclamp calling
+// __vibes.connect), and the library opens a stream to vibes, saying what's
+// declared, and takes each change as it comes (wire.ts has the protocol). The
+// link and the values are kept on globalThis, so a new script in the same
+// sandbox carries on from them; the declarations are the script's own.
 //
-// What's declared, and the values, live on globalThis (__vibesParams): the
-// builder reads the declarations after loading the script, and an edit in the
-// editor runs the module again without losing the values.
+// The preview and the map's simulation have no stream: they hand values in
+// with __vibes.apply(), the same events the stream carries.
 
+import { color, type Color, type ColorInput, type ColorLike } from "./color.ts";
 import { field, type Field } from "./field.ts";
+import type { Here } from "./here.ts";
+import {
+  checkSpec,
+  passes,
+  PROTOCOL,
+  valuesOf,
+  withChanges,
+  type ChangeEvent,
+  type Changes,
+  type ColorValue,
+  type ParamSpec,
+  type ParamTable,
+  type StateEvent,
+} from "./wire.ts";
 
 export interface ParamOptions {
-  /** The slider's range; the default's own size, if not given. */
+  /** A number's range; the default's own size, if not given. */
   min?: number;
   max?: number;
-  /** The slider's step; a hundredth of the range, if not given. */
+  /** A number's step; a hundredth of the range, if not given. */
   step?: number;
-  /** What the knob's called in vibes; the name, if not given. */
+  /** What vibes calls it; its name, if not given. */
   label?: string;
-  /** Whether it can be set per light (true, unless it says). */
-  perLight?: boolean;
+  /** The lights it's for: a kind ("color", "switch") or kinds, or { kinds, tags, ids }, each one or a list. Every light, if not given (a color: every color light). */
+  lights?: string | readonly string[] | { kinds?: string | readonly string[]; tags?: string | readonly string[]; ids?: number | readonly number[] };
 }
 
-/** A param as declared, as vibes learns it from a build. */
-export interface ParamSpec {
-  name: string;
-  default: number;
-  min: number;
-  max: number;
-  step: number;
-  label: string;
-  perLight: boolean;
+// What the host gives the library (arclamp's sandbox, a browser): only what's used, and any may be missing.
+interface Reader {
+  read(): Promise<{ done: boolean; value?: Uint8Array }>;
+}
+interface Host {
+  fetch?: (
+    url: string,
+    init: { method: string; headers: Record<string, string>; body: string; signal: unknown },
+  ) => Promise<{ ok: boolean; status: number; body: { getReader(): Reader } | null }>;
+  AbortController?: new () => { signal: unknown; abort(): void };
+  TextDecoder?: new () => { decode(bytes?: Uint8Array, options?: { stream: boolean }): string };
+  setTimeout?: (fn: () => void, ms: number) => unknown;
+  clearTimeout?: (id: unknown) => void;
+}
+const host = globalThis as unknown as Host;
+
+/** Where to reach vibes, as vibes' link gave it. */
+interface Link {
+  url: string;
+  token: string;
 }
 
-/** A param's values as vibes keeps them: for everywhere, and per light (by id); either may be unset. */
-export interface ParamValues {
-  all?: number;
-  lights?: Record<string, number>;
+/** What outlives a script in its sandbox: the values, the link, and the stream open now. */
+interface Kept {
+  values: ParamTable;
+  link: Link | null;
+  stream: { abort(): void } | null;
 }
 
-/** One param's whole state, as vibes sends it. */
-export interface ParamPacket extends ParamValues {
-  vibes: "params";
-  v: 1;
-  /** Counts up with each send, so an older packet arriving late is ignored. */
-  seq: number;
-  name: string;
-}
+const KEPT = "__vibesParams";
 
-interface Registry {
-  /** In the order declared. */
-  declared: Record<string, ParamSpec>;
-  values: Record<string, ParamValues>;
-  /** The last seq taken for each param. */
-  seqs: Record<string, number>;
-  /** The udp socket, once bound (null: tried, and there's no udp here). */
-  socket: UdpSocket | null | undefined;
-}
-
-// What arclamp's prelude gives a sandbox (and the preview's worker fakes):
-// a socket to receive on. Only what's used here.
-interface UdpSocket {
-  recv(): unknown;
-  drain?(): unknown[];
-}
-interface Udp {
-  bind(opts?: { port?: number }): UdpSocket;
-}
-
-const KEY = "__vibesParams";
-
-function registry(): Registry {
+function kept(): Kept {
   const g = globalThis as Record<string, unknown>;
-  let r = g[KEY] as Registry | undefined;
-  if (!r || typeof r !== "object") g[KEY] = r = { declared: {}, values: {}, seqs: {}, socket: undefined };
-  return r;
+  let k = g[KEPT] as Kept | undefined;
+  if (!k || typeof k !== "object" || typeof k.values !== "object" || k.values === null) g[KEPT] = k = { values: {}, link: null, stream: null };
+  return k;
 }
 
-const finite = (v: unknown): v is number => typeof v === "number" && Number.isFinite(v);
+/** This script's params, in the order declared. */
+const declared = new Map<string, ParamSpec>();
 
-/**
- * A number vibes can change while the sketch runs: by light, or for everywhere.
- * Returns a field giving each light's value (the default, until vibes sets one).
- */
-export function param(name: string, defaultValue: number, options: ParamOptions = {}): Field<number> {
-  if (typeof name !== "string" || !/^[A-Za-z][\w-]{0,39}$/.test(name)) throw new Error(`a param's name is a word (letters, digits, _ or -), not ${JSON.stringify(name)}`);
-  if (!finite(defaultValue)) throw new Error(`param ${name}'s default should be a number, not ${String(defaultValue)}`);
-  const span = Math.max(1, Math.abs(defaultValue));
-  const min = finite(options.min) ? options.min : Math.min(0, defaultValue);
-  const max = finite(options.max) ? options.max : Math.max(min + span, defaultValue);
-  if (min >= max) throw new Error(`param ${name}'s min (${min}) should be below its max (${max})`);
-  const step = finite(options.step) && options.step > 0 ? options.step : (max - min) / 100;
-  const spec: ParamSpec = {
-    name,
-    default: Math.min(max, Math.max(min, defaultValue)),
-    min,
-    max,
-    step,
-    label: typeof options.label === "string" && options.label.trim() ? options.label.trim() : name,
-    perLight: options.perLight !== false,
-  };
-  registry().declared[name] = spec;
-  return field((here) => valueOf(name, here.light.id));
-}
+/** Each param's values by light, read from its groups once each time they change (colors as Colors). */
+const cache = new Map<string, { groups: unknown; spec: ParamSpec; byLight: Map<number, unknown> }>();
 
-/** A param's value for a light: its own, else everywhere's, else the default, kept within the range. */
-export function valueOf(name: string, lightId: number): number {
-  const r = registry();
-  const spec = r.declared[name];
-  if (!spec) return 0;
-  const v = r.values[name];
-  const own = v?.lights?.[String(lightId)];
-  const value = finite(own) ? own : finite(v?.all) ? v.all : spec.default;
-  return Math.min(spec.max, Math.max(spec.min, value));
-}
-
-/** Everything declared so far, in order. */
-export const declaredParams = (): ParamSpec[] => Object.values(registry().declared);
-
-/** Values as the host set them (the preview may set them straight, without packets). */
-export function setParamValues(name: string, values: ParamValues) {
-  registry().values[name] = cleanValues(values);
-}
-
-function cleanValues(values: ParamValues): ParamValues {
-  const out: ParamValues = {};
-  if (finite(values.all)) out.all = values.all;
-  if (values.lights && typeof values.lights === "object") {
-    const lights: Record<string, number> = {};
-    for (const [id, v] of Object.entries(values.lights)) if (finite(v)) lights[id] = v;
-    out.lights = lights;
-  }
+function byLight(spec: ParamSpec): Map<number, unknown> {
+  const groups = kept().values[spec.name];
+  const c = cache.get(spec.name);
+  if (c && c.groups === groups && c.spec === spec) return c.byLight;
+  const out = new Map<number, unknown>();
+  for (const [id, v] of valuesOf(spec, groups)) out.set(id, spec.kind === "color" ? color(v as ColorValue) : v);
+  cache.set(spec.name, { groups, spec, byLight: out });
   return out;
 }
 
-/** A packet's text: what udp gives may be text, bytes, or an object carrying either. */
-function textOf(packet: unknown): string | null {
-  if (typeof packet === "string") return packet;
-  if (packet === null || packet === undefined) return null;
-  if (packet instanceof ArrayBuffer) return decode(new Uint8Array(packet));
-  if (ArrayBuffer.isView(packet)) return decode(new Uint8Array(packet.buffer, packet.byteOffset, packet.byteLength));
-  if (typeof packet === "object") {
-    const o = packet as Record<string, unknown>;
-    for (const key of ["data", "payload", "body", "text", "bytes"]) if (key in o) return textOf(o[key]);
+/** A param as declared, from what param() was given. */
+function specOf(name: string, given: unknown, o: ParamOptions): ParamSpec {
+  const base = { name, label: o.label, lights: o.lights };
+  let raw: unknown;
+  if (typeof given === "number") {
+    const span = Math.max(1, Math.abs(given));
+    const min = Number.isFinite(o.min) ? o.min! : Math.min(0, given);
+    const max = Number.isFinite(o.max) ? o.max! : Math.max(min + span, given);
+    const step = Number.isFinite(o.step) && o.step! > 0 ? o.step! : (max - min) / 100;
+    raw = { ...base, kind: "number", default: Number.isFinite(given) ? Math.min(max, Math.max(min, given)) : given, min, max, step };
+  } else if (typeof given === "boolean") {
+    raw = { ...base, kind: "toggle", default: given };
+  } else {
+    let c: Color;
+    try {
+      c = color(given as ColorInput);
+    } catch (err) {
+      throw new Error(`param ${name}'s default should be a number, true or false, or a color: ${(err as Error).message}`);
+    }
+    raw = { ...base, kind: "color", default: c.toJSON() };
   }
-  return null;
-}
-
-function decode(bytes: Uint8Array): string {
-  const g = globalThis as { TextDecoder?: new () => { decode(b: Uint8Array): string } };
-  if (g.TextDecoder) return new g.TextDecoder().decode(bytes);
-  let s = "";
-  for (let i = 0; i < bytes.length; i++) s += String.fromCharCode(bytes[i]!);
-  return s;
-}
-
-/** A packet taken in, if it's one of vibes' and not older than what's here; whether it was. */
-export function takePacket(packet: unknown): boolean {
-  const text = textOf(packet);
-  if (!text) return false;
-  let p: Partial<ParamPacket>;
-  try {
-    p = JSON.parse(text) as Partial<ParamPacket>;
-  } catch {
-    return false;
-  }
-  if (!p || p.vibes !== "params" || p.v !== 1 || typeof p.name !== "string") return false;
-  const r = registry();
-  if (finite(p.seq)) {
-    const last = r.seqs[p.name];
-    if (last !== undefined && p.seq <= last) return false;
-    r.seqs[p.name] = p.seq;
-  }
-  r.values[p.name] = cleanValues(p);
-  return true;
+  const spec = checkSpec(raw);
+  if (typeof spec === "string") throw new Error(spec);
+  return spec;
 }
 
 /**
- * Whatever vibes has sent since last time, taken in: called each tick by
- * sketch(). Binds the socket the first time there's anything declared.
+ * Something vibes can change while the sketch runs, light by light: a number,
+ * a color, or a toggle (its default says which). A field: each light reads its
+ * own value, or the default until vibes sets one.
  */
-export function receiveParams(): void {
-  const r = registry();
-  if (r.socket === null || Object.keys(r.declared).length === 0) return;
-  if (r.socket === undefined) {
-    const udp = (globalThis as { udp?: Udp }).udp;
-    try {
-      r.socket = udp && typeof udp.bind === "function" ? udp.bind({ port: 0 }) : null;
-    } catch {
-      r.socket = null;
+export function param(name: string, defaultValue: number, options?: ParamOptions): Field<number>;
+export function param(name: string, defaultValue: boolean, options?: ParamOptions): Field<boolean>;
+export function param(name: string, defaultValue: ColorLike, options?: ParamOptions): Field<Color>;
+export function param(name: string, defaultValue: unknown, options: ParamOptions = {}): Field<unknown> {
+  const spec = specOf(name, defaultValue, options);
+  declared.set(name, spec);
+  // Linked already (a new script in a linked sandbox): the stream, once the script's in.
+  if (kept().link && !soon) {
+    soon = true;
+    host.setTimeout?.(() => {
+      soon = false;
+      tickParams();
+    }, 0);
+  }
+  const fallback = spec.kind === "color" ? color(spec.default) : spec.default;
+  return field((here: Here) => {
+    const light = here.light;
+    if (!passes(spec.lights, light)) return fallback;
+    const v = byLight(spec).get(light.id);
+    return v === undefined ? fallback : v;
+  });
+}
+
+/** One of the stream's events (or the same from a preview's host): taken in; whether it was. */
+function apply(event: string, data: unknown): boolean {
+  const k = kept();
+  if (event === "state") {
+    const values = (data as Partial<StateEvent> | null)?.values;
+    if (!values || typeof values !== "object") return false;
+    k.values = { ...values };
+    return true;
+  }
+  if (event === "change") {
+    const d = data as Partial<ChangeEvent> | null;
+    const spec = typeof d?.name === "string" ? declared.get(d.name) : undefined;
+    if (!spec || !Array.isArray(d!.set)) return false;
+    k.values = { ...k.values, [spec.name]: withChanges(spec, k.values[spec.name], d!.set as Changes) };
+    return true;
+  }
+  return false;
+}
+
+// The stream to vibes: one at a time, opened again after a break (1 s, doubling
+// to 30 s; back to 1 s after one that lasted), and given up when vibes says
+// the link is no good (it links the shader again when it wants it).
+const FIRST_WAIT_MS = 1000;
+const MOST_WAIT_MS = 30_000;
+const LASTED_MS = 30_000;
+// vibes sends something every 15 s: nothing for this long, and the stream's dead.
+const QUIET_MS = 45_000;
+
+let soon = false;
+let open = false;
+let retry: unknown = null;
+let wait = FIRST_WAIT_MS;
+let generation = 0;
+
+type Ending = "again" | "stop" | "forget";
+
+/** The stream started (again, if one's open): now, whatever's waiting. */
+function start() {
+  const k = kept();
+  const link = k.link;
+  if (!link || !host.fetch || !host.AbortController || !host.setTimeout) return;
+  if (retry !== null) host.clearTimeout?.(retry);
+  retry = null;
+  try {
+    k.stream?.abort();
+  } catch {
+    // Gone already.
+  }
+  const ctl = new host.AbortController();
+  k.stream = ctl;
+  open = true;
+  const gen = ++generation;
+  const began = Date.now();
+  void follow(link, ctl).then((ending) => {
+    if (gen !== generation) return;
+    open = false;
+    if (k.stream === ctl) k.stream = null;
+    if (ending === "forget" && kept().link === link) kept().link = null;
+    if (ending !== "again") return;
+    if (Date.now() - began >= LASTED_MS) wait = FIRST_WAIT_MS;
+    retry = host.setTimeout!(() => {
+      retry = null;
+      start();
+    }, wait);
+    wait = Math.min(MOST_WAIT_MS, wait * 2);
+  });
+}
+
+async function follow(link: Link, ctl: { signal: unknown; abort(): void }): Promise<Ending> {
+  let quiet: unknown = null;
+  const heard = () => {
+    if (quiet !== null) host.clearTimeout?.(quiet);
+    quiet = host.setTimeout!(() => ctl.abort(), QUIET_MS);
+  };
+  try {
+    heard();
+    const res = await host.fetch!(link.url, {
+      method: "POST",
+      headers: { authorization: `Bearer ${link.token}`, "content-type": "application/json", accept: "text/event-stream" },
+      body: JSON.stringify({ v: PROTOCOL, params: [...declared.values()] }),
+      signal: ctl.signal,
+    });
+    if (res.status === 400 || res.status === 401 || res.status === 403 || res.status === 404 || res.status === 410) return "forget";
+    if (!res.ok || !res.body) return "again";
+    const reader = res.body.getReader();
+    const decoder = host.TextDecoder ? new host.TextDecoder() : null;
+    let text = "";
+    for (;;) {
+      const { done, value } = await reader.read();
+      if (done) return "again";
+      heard();
+      text += decoder ? decoder.decode(value, { stream: true }) : String.fromCharCode(...(value ?? []));
+      for (let at = text.indexOf("\n\n"); at >= 0; at = text.indexOf("\n\n")) {
+        const ending = take(text.slice(0, at));
+        text = text.slice(at + 2);
+        if (ending) {
+          ctl.abort();
+          return ending;
+        }
+      }
     }
-    if (!r.socket) return;
-  }
-  const s = r.socket;
-  if (typeof s.drain === "function") {
-    for (const packet of s.drain()) takePacket(packet);
-    return;
-  }
-  for (let i = 0; i < 64; i++) {
-    const packet = s.recv();
-    if (packet === null || packet === undefined) return;
-    takePacket(packet);
+  } catch {
+    return "again";
+  } finally {
+    if (quiet !== null) host.clearTimeout?.(quiet);
   }
 }
+
+/** One event from the stream, taken in; how the stream ends, if it's an end. */
+function take(block: string): Ending | null {
+  let event = "message";
+  const data: string[] = [];
+  for (const line of block.split("\n")) {
+    if (line === "" || line.startsWith(":")) continue;
+    const colon = line.indexOf(":");
+    const name = colon < 0 ? line : line.slice(0, colon);
+    const value = colon < 0 ? "" : line.slice(colon + (line[colon + 1] === " " ? 2 : 1));
+    if (name === "event") event = value;
+    else if (name === "data") data.push(value);
+  }
+  if (data.length === 0) return null;
+  let parsed: unknown;
+  try {
+    parsed = JSON.parse(data.join("\n"));
+  } catch {
+    return null;
+  }
+  if (event === "end") {
+    const reason = (parsed as { reason?: unknown } | null)?.reason;
+    return reason === "revoked" || reason === "gone" ? "forget" : "stop";
+  }
+  apply(event, parsed);
+  return null;
+}
+
+/** Called each tick (sketch() does): a linked sandbox gets its stream, if it hasn't one and isn't waiting to try again. */
+export function tickParams(): void {
+  if (!open && retry === null && kept().link) start();
+}
+
+/** vibes linking this sandbox (an eval in arclamp): where to reach it, and the stream opened at once. */
+function connect(opts: unknown): { v: number; params?: number; error?: string } {
+  const o = opts as Partial<Link & { v: number }> | null;
+  if (!o || o.v !== PROTOCOL || typeof o.url !== "string" || typeof o.token !== "string") return { v: PROTOCOL, error: `connect takes { v: ${PROTOCOL}, url, token }` };
+  kept().link = { url: o.url, token: o.token };
+  wait = FIRST_WAIT_MS;
+  start();
+  return { v: PROTOCOL, params: declared.size };
+}
+
+/** What vibes (in the room, by eval) and previews (in their workers) use: the script's own, so its params. */
+export interface VibesHost {
+  v: number;
+  connect(opts: unknown): { v: number; params?: number; error?: string };
+  apply(event: string, data: unknown): boolean;
+  params(): ParamSpec[];
+}
+
+(globalThis as Record<string, unknown>).__vibes = {
+  v: PROTOCOL,
+  connect,
+  apply,
+  params: () => [...declared.values()],
+} satisfies VibesHost;

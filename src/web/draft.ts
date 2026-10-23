@@ -14,7 +14,7 @@
 
 import { useSyncExternalStore } from "react";
 import type { Channels } from "../shared/arclamp.ts";
-import { cleanValues, patchValues, type ParamPatch, type ShaderParams } from "../shared/params.ts";
+import { sameValue, valuesOf, withChanges, type Changes, type ParamSpec, type ParamValue, type ShaderParams } from "../shared/params.ts";
 import type { Change, Instance, ShaderKey, ShaderSketch } from "../shared/vibes.ts";
 import { ApplyError, applyChanges, invalidateScene, type Scene, type SceneShader } from "./scene.ts";
 
@@ -25,8 +25,8 @@ export interface ShaderPatch {
   muted?: boolean;
   /** The lights it may not change: its whole mask. */
   mask?: number[];
-  /** Its params' values, by name: each a patch over the live values (for everywhere, or for some lights). */
-  params?: Record<string, ParamPatch>;
+  /** Its params' values, by name: each light's, by id, over the live ones (null back to the default). */
+  params?: Record<string, Record<string, ParamValue | null>>;
 }
 
 export interface Draft {
@@ -126,7 +126,6 @@ function layerOfAdding(a: Adding, d: Draft): Layer {
     next: null,
     by: { id: "", name: "" },
     at: 0,
-    params: {},
   };
   const sketch: ShaderSketch = { id: a.sketchId, name: a.sketchName, commit, edited: false, deleted: false };
   const patch = d.edits[a.key] ?? {};
@@ -213,31 +212,54 @@ export function templateOf(scene: Scene, d: Draft): Record<string, Channels> {
   return out;
 }
 
-/** A shader's params with the draft's patches over its live values. */
-function paramsWith(params: ShaderParams | null, patches: Record<string, ParamPatch> | undefined): ShaderParams | null {
-  if (!params || !patches) return params;
-  const values = { ...params.values };
-  for (const spec of params.specs) {
-    const p = patches[spec.name];
-    if (p) values[spec.name] = patchValues(spec, values[spec.name], p);
+/** Lights' values (null: back to the default) as a change: each value with its lights. */
+function changesOf(byLight: Iterable<[number, ParamValue | null]>): Changes {
+  const out: Changes = [];
+  for (const [id, v] of byLight) {
+    const g = out.find(([w]) => (v === null || w === null ? v === w : sameValue(v, w)));
+    if (g) g[1].push(id);
+    else out.push([v, [id]]);
   }
-  return { specs: params.specs, values };
+  return out;
 }
 
-/** Whether the draft's patches change a shader's params at all. */
-function paramsDiffer(shader: SceneShader, patches: Record<string, ParamPatch> | undefined): boolean {
-  return paramChanges(shader, patches).length > 0;
+/** What's pending for a param, as a change. */
+const pendingChanges = (pending: Record<string, ParamValue | null>): Changes => changesOf(Object.entries(pending).map(([id, v]) => [Number(id), v]));
+
+/** A shader's params with what's pending over its live values. */
+function paramsWith(params: ShaderParams | null, pending: ShaderPatch["params"]): ShaderParams | null {
+  if (!params?.declared || !pending) return params;
+  const values = { ...params.values };
+  for (const spec of params.declared) {
+    const p = pending[spec.name];
+    if (p) values[spec.name] = withChanges(spec, values[spec.name], pendingChanges(p));
+  }
+  return { declared: params.declared, values };
 }
 
-/** The params the draft's patches actually change, as changes to send. */
-function paramChanges(shader: SceneShader, patches: Record<string, ParamPatch> | undefined): Change[] {
-  const params = shader.params;
-  if (!params || !patches) return [];
-  return Object.entries(patches).flatMap(([name, patch]) => {
-    const spec = params.specs.find((s) => s.name === name);
-    if (!spec) return [];
-    const was = cleanValues(spec, params.values[name] ?? {});
-    return JSON.stringify(patchValues(spec, was, patch)) === JSON.stringify(was) ? [] : [{ op: "params", key: shader.key, name, patch } as Change];
+/** Of what's pending for a param, what isn't what's live already: as a change, or null if nothing is. */
+function changeOf(spec: ParamSpec, live: unknown, pending: Record<string, ParamValue | null>): Changes | null {
+  const now = valuesOf(spec, live);
+  const differ = Object.entries(pending).flatMap(([id, v]): [number, ParamValue | null][] => {
+    const was = now.get(Number(id)) ?? spec.default;
+    return sameValue(v ?? spec.default, was) ? [] : [[Number(id), v]];
+  });
+  return differ.length > 0 ? changesOf(differ) : null;
+}
+
+/** Whether what's pending changes a shader's params at all. */
+function paramsDiffer(shader: SceneShader, pending: ShaderPatch["params"]): boolean {
+  return paramChanges(shader, pending).length > 0;
+}
+
+/** The params what's pending actually changes, as changes to send. */
+function paramChanges(shader: SceneShader, pending: ShaderPatch["params"]): Change[] {
+  const declared = shader.params?.declared;
+  if (!declared || !pending) return [];
+  return Object.entries(pending).flatMap(([name, p]) => {
+    const spec = declared.find((s) => s.name === name);
+    const set = spec ? changeOf(spec, shader.params!.values[name], p) : null;
+    return set ? [{ op: "params", key: shader.key, name, set } satisfies Change] : [];
   });
 }
 
@@ -389,12 +411,11 @@ export const drafts = {
   patchShader(key: LayerKey, patch: ShaderPatch) {
     set({ ...draft, edits: { ...draft.edits, [key]: { ...draft.edits[key], ...patch } } });
   },
-  /** Change a param of a shader: for everywhere (all), or for some lights, over whatever's pending for it already. */
-  setParam(key: LayerKey, name: string, patch: ParamPatch) {
+  /** Change a param of a shader on some lights (null: back to its default), over whatever's pending for it already. */
+  setParam(key: LayerKey, name: string, changes: readonly [number, ParamValue | null][]) {
     const was = draft.edits[key]?.params?.[name] ?? {};
-    const lights = patch.lights === null ? null : patch.lights ? { ...(was.lights ?? {}), ...patch.lights } : was.lights;
-    const merged: ParamPatch = { ...was, ...patch, ...(lights !== undefined ? { lights } : {}) };
-    set({ ...draft, edits: { ...draft.edits, [key]: { ...draft.edits[key], params: { ...draft.edits[key]?.params, [name]: merged } } } });
+    const now = { ...was, ...Object.fromEntries(changes.map(([id, v]) => [String(id), v])) };
+    set({ ...draft, edits: { ...draft.edits, [key]: { ...draft.edits[key], params: { ...draft.edits[key]?.params, [name]: now } } } });
   },
   reorder(keysTopFirst: LayerKey[]) {
     set({ ...draft, order: keysTopFirst });
