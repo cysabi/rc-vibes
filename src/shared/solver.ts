@@ -99,6 +99,8 @@ export interface Solver {
   model: Model;
   /** The light (XYZ, in model units) that duties d give. */
   forward(d: Duty): Vec3;
+  /** The light each channel (r, g, b, ww, cw) gives at duties d, sag and all; forward is their sum. */
+  forwardEach(d: Duty): Vec3[];
   /** Whether it makes a lemtone color (a, b) at these lumens and fidelity as asked (solve's "exact"), without working out what it makes if not. */
   makesExactly(a: number, b: number, lm: number, fidelity: number): boolean;
   /** Its duties for a lemtone color (a, b), lumens and fidelity. */
@@ -239,6 +241,18 @@ export function solverOf(model: Model): Solver {
     const xyz: Vec3 = [0, 0, 0];
     forwardInto(d, xyz);
     return xyz;
+  }
+
+  function forwardEach(d: Duty): Vec3[] {
+    const duty = Float64Array.from(d);
+    const unit = new Float64Array(3);
+    return Array.from({ length: CH }, (_, i): Vec3 => {
+      const di = duty[i]!;
+      if (di <= 0) return [0, 0, 0];
+      unitXyz(i, knotDuty(i, duty), unit, 0);
+      const s = di * interaction(i, duty);
+      return [s * unit[0]!, s * unit[1]!, s * unit[2]!];
+    });
   }
 
   // ---- init -----------------------------------------------------------------
@@ -603,5 +617,5 @@ export function solverOf(model: Model): Solver {
     return { light, mode: s.mode, desat: s.desat };
   }
 
-  return { model, forward, makesExactly, solve, output, cwAb, wwAb };
+  return { model, forward, forwardEach, makesExactly, solve, output, cwAb, wwAb };
 }

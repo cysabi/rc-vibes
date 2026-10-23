@@ -1,11 +1,13 @@
 // Relighting: a pixel of the room is every map at that pixel, each times how
-// strongly its bulb channel is on now, added up in linear light, then put
+// strongly its bulb channel is on now (per color: a channel's color shifts a
+// little with its duty), added up in linear light, then put
 // through the camera's own tone curves (look.json) for the screen. Only the
 // maps with any light in them are read, so the work is how many channels are
 // on times the pixels drawn.
 
 import { keepingFor, type Keeping } from "./encode.ts";
 import type { Basis } from "./basis.ts";
+import type { Weight } from "./weights.ts";
 
 /** The camera's look: its color matrix (ProPhoto to linear sRGB) and a tone curve per channel over log2 radiance. */
 export interface Look {
@@ -22,7 +24,7 @@ const MAX_MAPS = 2048;
 const sumWGSL = (m: number[][]) => /* wgsl */ `
 struct U { gain: f32, n: u32, gamma: f32, pad: f32 };
 @group(0) @binding(0) var maps: texture_2d_array<f32>;
-@group(0) @binding(1) var<storage, read> on: array<vec2f>;  // weight × peak, layer
+@group(0) @binding(1) var<storage, read> on: array<vec4f>;  // weight × peak (per color), layer
 @group(0) @binding(2) var<storage, read> curve: array<f32>;
 @group(0) @binding(3) var<uniform> u: U;
 const M = mat3x3f(
@@ -45,7 +47,7 @@ fn curveAt(ch: i32, x: f32) -> f32 {
   var acc = vec3f(0.0);
   for (var i = 0u; i < u.n; i++) {
     let a = on[i];
-    acc += a.x * pow(max(textureLoad(maps, xy, i32(a.y), 0).rgb, vec3f(0.0)), vec3f(u.gamma));
+    acc += a.xyz * pow(max(textureLoad(maps, xy, i32(a.w), 0).rgb, vec3f(0.0)), vec3f(u.gamma));
   }
   let lin = M * (acc * u.gain);
   return vec4f(curveAt(0, lin.r), curveAt(1, lin.g), curveAt(2, lin.b), 1.0);
@@ -62,7 +64,7 @@ export class Relighter {
   private readonly uniforms: GPUBuffer;
   private readonly curves: GPUBuffer;
   private readonly binds = new WeakMap<Basis, GPUBindGroup>();
-  private readonly list = new Float32Array(MAX_MAPS * 2);
+  private readonly list = new Float32Array(MAX_MAPS * 4);
   private configured = false;
 
   private constructor(device: GPUDevice, canvas: HTMLCanvasElement, look: Look) {
@@ -78,7 +80,7 @@ export class Relighter {
       fragment: { module, entryPoint: "fs", targets: [{ format: this.format }] },
       primitive: { topology: "triangle-list" },
     });
-    this.on = device.createBuffer({ size: MAX_MAPS * 8, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
+    this.on = device.createBuffer({ size: MAX_MAPS * 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
     this.uniforms = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     this.curves = device.createBuffer({ size: 3 * CURVE_POINTS * 4, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_DST });
     device.queue.writeBuffer(this.curves, 0, new Float32Array(look.curves.flat()));
@@ -102,17 +104,19 @@ export class Relighter {
   }
 
   /** Draw the room from a basis, each map weighted (maps not named are off), `ev` stops brighter. */
-  draw(basis: Basis, weights: Map<string, number>, gamma: number, ev: number) {
+  draw(basis: Basis, weights: Map<string, Weight>, gamma: number, ev: number) {
     let n = 0;
     for (const [name, w] of weights) {
       const m = basis.layers.get(name);
-      if (!m || !(w > 0)) continue;
-      this.list[n * 2] = w * m.scale;
-      this.list[n * 2 + 1] = m.layer;
+      if (!m || !w.some((v) => v > 0)) continue;
+      this.list[n * 4] = w[0] * m.scale;
+      this.list[n * 4 + 1] = w[1] * m.scale;
+      this.list[n * 4 + 2] = w[2] * m.scale;
+      this.list[n * 4 + 3] = m.layer;
       n++;
     }
     const d = this.device;
-    d.queue.writeBuffer(this.on, 0, this.list, 0, Math.max(2, n * 2));
+    d.queue.writeBuffer(this.on, 0, this.list, 0, Math.max(4, n * 4));
     const u = new ArrayBuffer(16);
     const v = new DataView(u);
     v.setFloat32(0, 2 ** ev, true);

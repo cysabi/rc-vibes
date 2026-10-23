@@ -21,6 +21,15 @@ describe.each(DEVICES)("the $name's solve", ({ solver, vectors }) => {
     }
   });
 
+  it("splits that light by channel", () => {
+    for (const [d0, d1, d2, d3, d4] of vectors.FORWARD_VECTORS) {
+      const d = [d0!, d1!, d2!, d3!, d4!];
+      const sum = solver.forwardEach(d).reduce((s, x) => [s[0] + x[0], s[1] + x[1], s[2] + x[2]]);
+      const out = solver.forward(d);
+      for (let c = 0; c < 3; c++) expect(Math.abs(sum[c]! - out[c]!)).toBeLessThanOrEqual(1e-9 * Math.max(1, out[c]!));
+    }
+  });
+
   // As the firmware's test_solve_vs_reference: modes agree (bar boundary cases),
   // exact solves match tightly, the bisecting ones within a step.
   it("matches the firmware's reference vectors", () => {
