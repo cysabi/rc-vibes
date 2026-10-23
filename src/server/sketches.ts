@@ -201,7 +201,7 @@ export function boxApiRoutes(config: Config, sketches: SketchesConfig, db: Db, l
 
 /** The standard library a new sketch starts on (packages/vibes, on npm). */
 const LIBRARY = "@roobscoob/vibes";
-const LIBRARY_VERSION = "^0.2.1";
+const LIBRARY_VERSION = "^0.3.0";
 
 /** A new sketch's first commit: a gentle wave to start from, on the standard library, and a README. */
 function starter(name: string): Record<string, string> {
