@@ -163,7 +163,12 @@ fn main(@builtin(global_invocation_id) id: vec3u) {
   outb[id.y * prm.padRow + id.x] = vec4u(words[0], words[1], words[2], words[3]);
 }`;
 
-/** How a device keeps the maps: BC7 on desktops, ASTC 4×4 on phones (WebGPU has one or both), plain RGBA as the last resort. */
+/**
+ * How a device keeps the maps: ASTC 4×4 where it can (phones, Apple), else
+ * BC7 (most other desktops; WebGPU has one or the other), plain RGBA as the
+ * last resort. ASTC first: its 8-bit endpoints keep the darks as they are,
+ * where BC7's 7-bit ones (and a shared low bit) blotch them.
+ */
 export type Keeping = "bc7" | "astc" | "rgba8";
 
 export const KEEPING: Record<Keeping, { format: GPUTextureFormat; bytesPerPixel: number; mode: number }> = {
@@ -173,7 +178,7 @@ export const KEEPING: Record<Keeping, { format: GPUTextureFormat; bytesPerPixel:
 };
 
 export function keepingFor(features: GPUSupportedFeatures): Keeping {
-  if (features.has("texture-compression-bc")) return "bc7";
   if (features.has("texture-compression-astc")) return "astc";
+  if (features.has("texture-compression-bc")) return "bc7";
   return "rgba8";
 }

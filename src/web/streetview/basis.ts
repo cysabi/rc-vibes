@@ -1,14 +1,30 @@
 // A camera's photographs, as one map per bulb channel (plus the room with
 // every bulb off), held on the GPU: the "basis" the room is relit from. They
 // come as video, one stream per channel, each frame a map scaled to its own
-// peak and gamma-coded; a device picks the sizes it can hold and the codec it
-// decodes in hardware, and keeps them block-compressed (encode.ts).
+// peak and gamma-coded; a device picks the sizes it can hold and a codec it
+// decodes, and keeps them block-compressed (encode.ts).
+//
+// The video's colour has to arrive exactly. A browser's own conversion (a
+// frame drawn or copied into a texture) rounds to 8 bits, and down: in the
+// darks of each map, after the gamma, that's a cast (warm light goes green)
+// and blotches. So where the decoder will hand over its planes (VideoFrame
+// copyTo: always in software, and for 8-bit in hardware too) they're
+// converted here, BT.709 full range, in float, straight into the block
+// encoder. 10-bit AV1 is decoded in software for that (fast: about 250 maps
+// a second at 4K on an M5 Pro); only frames that can't be read (a 10-bit
+// hardware frame) go through the browser's conversion.
 
 import { ENCODE_WGSL, KEEPING, type Keeping } from "./encode.ts";
 
 // WebGPU's usage flags (the browser's own), which TypeScript's DOM types don't have yet.
 declare const GPUBufferUsage: { readonly COPY_DST: number; readonly COPY_SRC: number; readonly UNIFORM: number; readonly STORAGE: number };
-declare const GPUTextureUsage: { readonly COPY_DST: number; readonly TEXTURE_BINDING: number; readonly RENDER_ATTACHMENT: number };
+declare const GPUTextureUsage: {
+  readonly COPY_DST: number;
+  readonly COPY_SRC: number;
+  readonly TEXTURE_BINDING: number;
+  readonly STORAGE_BINDING: number;
+  readonly RENDER_ATTACHMENT: number;
+};
 
 export interface Stream {
   file: string;
@@ -22,9 +38,11 @@ export interface Stream {
 }
 
 export interface Encoding {
-  codec: "av1" | "h264";
+  codec: "av1" | "hevc" | "h264";
   codec_string: string;
   crf: number;
+  /** Bits per sample: 10 for AV1 and HEVC, 8 for H.264 (and builds from before 10-bit). */
+  bits?: number;
   bytes: number;
   streams: Record<string, Stream>;
 }
@@ -87,23 +105,35 @@ async function supported(e: Encoding, t: Tier, hw: HardwareAcceleration): Promis
   }
 }
 
-/** AV1 where it's decoded in hardware (the smallest to send), else H.264, else whatever decodes at all. */
+/**
+ * AV1 (the smallest to send), then HEVC, then H.264. 10-bit AV1 is decoded
+ * in software, where its planes can be read; anything else in hardware if it
+ * can be, in software if not.
+ */
 export async function pickEncoding(t: Tier): Promise<{ encoding: Encoding; hw: HardwareAcceleration } | null> {
-  const order = ["av1", "h264"].map((c) => t.encodings.find((e) => e.codec === c)).filter((e): e is Encoding => !!e);
-  for (const e of order) if (await supported(e, t, "prefer-hardware")) return { encoding: e, hw: "prefer-hardware" };
-  for (const e of order) if (await supported(e, t, "prefer-software")) return { encoding: e, hw: "prefer-software" };
+  const order = ["av1", "hevc", "h264"].map((c) => t.encodings.find((e) => e.codec === c)).filter((e): e is Encoding => !!e);
+  for (const e of order) {
+    const ways: HardwareAcceleration[] = e.codec === "av1" && (e.bits ?? 8) > 8 ? ["prefer-software", "prefer-hardware"] : ["prefer-hardware", "prefer-software"];
+    for (const hw of ways) if (await supported(e, t, hw)) return { encoding: e, hw };
+  }
   return null;
 }
 
-function decode(e: Encoding, t: Tier, s: Stream, data: Uint8Array, hw: HardwareAcceleration, signal: AbortSignal, onFrame: (f: VideoFrame, i: number) => void) {
+/** Decode one stream, handing each frame on in order; the frame is closed once its handling's done. */
+function decode(
+  e: Encoding,
+  t: Tier,
+  s: Stream,
+  data: Uint8Array,
+  hw: HardwareAcceleration,
+  signal: AbortSignal,
+  onFrame: (f: VideoFrame, i: number) => Promise<void>,
+) {
   return new Promise<void>((resolve, reject) => {
+    let chain = Promise.resolve();
     const dec = new VideoDecoder({
       output: (f) => {
-        try {
-          if (!signal.aborted) onFrame(f, Number(f.timestamp) / 1000);
-        } finally {
-          f.close();
-        }
+        chain = chain.then(() => (signal.aborted ? undefined : onFrame(f, Number(f.timestamp) / 1000))).finally(() => f.close());
       },
       error: reject,
     });
@@ -119,20 +149,168 @@ function decode(e: Encoding, t: Tier, s: Stream, data: Uint8Array, hw: HardwareA
       at += len;
     });
     dec.flush().then(
-      () => {
-        signal.removeEventListener("abort", stop);
-        dec.close();
-        resolve();
-      },
-      (err) => reject(err),
+      () =>
+        chain.then(() => {
+          signal.removeEventListener("abort", stop);
+          dec.close();
+          resolve();
+        }, reject),
+      reject,
     );
   });
 }
 
+// ---- YUV to RGB, exactly ------------------------------------------------------
+
+/**
+ * BT.709, the way the encoder made it (encode side: ffmpeg's 4:2:0, chroma
+ * sited with the even columns and between rows), at the frame's own range:
+ * the streams are full range, but a hardware decoder may hand back video
+ * range (macOS's does, and says so in the frame's colour space). Writes the
+ * video's own gamma-coded RGB to `out`, for the block encoder or a plain copy.
+ */
+const convertWGSL = (out: "rgba16float" | "rgba8unorm") => /* wgsl */ `
+struct C { w: u32, h: u32, yOff: f32, ySpan: f32, cOff: f32, cSpan: f32, nv12: u32, pad: u32 };
+@group(0) @binding(0) var yT: texture_2d<u32>;
+@group(0) @binding(1) var uT: texture_2d<u32>;   // U, or UV interleaved (NV12)
+@group(0) @binding(2) var vT: texture_2d<u32>;
+@group(0) @binding(3) var dst: texture_storage_2d<${out}, write>;
+@group(0) @binding(4) var<uniform> c: C;
+fn chroma(p: vec2i) -> vec2f {
+  let q = clamp(p, vec2i(0), vec2i(i32(c.w / 2u) - 1, i32(c.h / 2u) - 1));
+  if (c.nv12 == 1u) { return vec2f(textureLoad(uT, q, 0).rg); }
+  return vec2f(f32(textureLoad(uT, q, 0).r), f32(textureLoad(vT, q, 0).r));
+}
+@compute @workgroup_size(8, 8)
+fn main(@builtin(global_invocation_id) id: vec3u) {
+  if (id.x >= c.w || id.y >= c.h) { return; }
+  let Y = (f32(textureLoad(yT, vec2i(id.xy), 0).r) - c.yOff) / c.ySpan;
+  let fx = f32(id.x) * 0.5;
+  let fy = (f32(id.y) + 0.5) * 0.5 - 0.5;
+  let x0 = i32(floor(fx)); let y0 = i32(floor(fy));
+  let tx = fx - f32(x0); let ty = fy - f32(y0);
+  let top = mix(chroma(vec2i(x0, y0)), chroma(vec2i(x0 + 1, y0)), tx);
+  let bottom = mix(chroma(vec2i(x0, y0 + 1)), chroma(vec2i(x0 + 1, y0 + 1)), tx);
+  let cc = (mix(top, bottom, ty) - vec2f(c.cOff)) / c.cSpan;
+  let r = Y + 1.5748 * cc.y;
+  let b = Y + 1.8556 * cc.x;
+  let g = (Y - 0.2126 * r - 0.0722 * b) / 0.7152;
+  textureStore(dst, vec2i(id.xy), vec4f(clamp(vec3f(r, g, b), vec3f(0.0), vec3f(1.0)), 1.0));
+}`;
+
+const PLANAR: Record<string, { bits: number; nv12: boolean }> = {
+  I420: { bits: 8, nv12: false },
+  I420P10: { bits: 10, nv12: false },
+  NV12: { bits: 8, nv12: true },
+};
+
+/** Puts frames into a staging texture: by their planes where they can be read, else by the browser's copy. */
+function makeStaging(device: GPUDevice, w: number, h: number, format: "rgba16float" | "rgba8unorm") {
+  const staging = device.createTexture({
+    size: [w, h],
+    format,
+    usage: GPUTextureUsage.STORAGE_BINDING | GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC | GPUTextureUsage.RENDER_ATTACHMENT,
+  });
+  const pipeline = device.createComputePipeline({ layout: "auto", compute: { module: device.createShaderModule({ code: convertWGSL(format) }), entryPoint: "main" } });
+  const params = device.createBuffer({ size: 32, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
+  const planes = new Map<string, { y: GPUTexture; u: GPUTexture; v: GPUTexture; bind: GPUBindGroup }>();
+  const planesFor = (fmt: string) => {
+    let p = planes.get(fmt);
+    if (!p) {
+      const { bits, nv12 } = PLANAR[fmt]!;
+      const one: GPUTextureFormat = bits > 8 ? "r16uint" : "r8uint";
+      const tex = (f: GPUTextureFormat, tw: number, th: number) =>
+        device.createTexture({ size: [tw, th], format: f, usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST });
+      const y = tex(one, w, h);
+      const u = tex(nv12 ? (bits > 8 ? "rg16uint" : "rg8uint") : one, w / 2, h / 2);
+      const v = nv12 ? u : tex(one, w / 2, h / 2);
+      const bind = device.createBindGroup({
+        layout: pipeline.getBindGroupLayout(0),
+        entries: [
+          { binding: 0, resource: y.createView() },
+          { binding: 1, resource: u.createView() },
+          { binding: 2, resource: v.createView() },
+          { binding: 3, resource: staging.createView() },
+          { binding: 4, resource: { buffer: params } },
+        ],
+      });
+      p = { y, u, v, bind };
+      planes.set(fmt, p);
+    }
+    return p;
+  };
+  let exact = 0;
+  let copied = 0;
+  return {
+    staging,
+    get exact() {
+      return exact;
+    },
+    get copied() {
+      return copied;
+    },
+    /** Fill the staging texture from a frame; `enc` then carries on from it (encode, or copy out). */
+    async put(f: VideoFrame, buf: { data: Uint8Array | null }, then: (enc: GPUCommandEncoder) => void) {
+      const fmt = f.format && PLANAR[f.format] ? f.format : null;
+      if (!fmt) {
+        copied++;
+        device.queue.copyExternalImageToTexture({ source: f }, { texture: staging, colorSpace: "srgb", premultipliedAlpha: false }, [w, h]);
+        const enc = device.createCommandEncoder();
+        then(enc);
+        device.queue.submit([enc.finish()]);
+        return;
+      }
+      exact++;
+      const size = f.allocationSize();
+      if (!buf.data || buf.data.byteLength < size) buf.data = new Uint8Array(size);
+      const layout = await f.copyTo(buf.data);
+      // From here to the submit runs without a break, so frames from other streams can't get between.
+      const { bits, nv12 } = PLANAR[fmt]!;
+      const p = planesFor(fmt);
+      const put = (tex: GPUTexture, plane: PlaneLayout, tw: number, th: number) =>
+        device.queue.writeTexture({ texture: tex }, buf.data!, { offset: plane.offset, bytesPerRow: plane.stride, rowsPerImage: th }, [tw, th]);
+      put(p.y, layout[0]!, w, h);
+      put(p.u, layout[1]!, w / 2, h / 2);
+      if (!nv12) put(p.v, layout[2]!, w / 2, h / 2);
+      // Full range unless the frame says otherwise; video range is 16–235 (luma) and 16–240 (chroma) at 8 bits.
+      const s = 2 ** (bits - 8);
+      const full = f.colorSpace.fullRange !== false;
+      const top = 2 ** bits - 1;
+      const u = new ArrayBuffer(32);
+      const dv = new DataView(u);
+      dv.setUint32(0, w, true);
+      dv.setUint32(4, h, true);
+      dv.setFloat32(8, full ? 0 : 16 * s, true);
+      dv.setFloat32(12, full ? top : 219 * s, true);
+      dv.setFloat32(16, full ? (top + 1) / 2 : 128 * s, true);
+      dv.setFloat32(20, full ? top : 224 * s, true);
+      dv.setUint32(24, nv12 ? 1 : 0, true);
+      device.queue.writeBuffer(params, 0, u);
+      const enc = device.createCommandEncoder();
+      const pass = enc.beginComputePass();
+      pass.setPipeline(pipeline);
+      pass.setBindGroup(0, p.bind);
+      pass.dispatchWorkgroups(Math.ceil(w / 8), Math.ceil(h / 8));
+      pass.end();
+      then(enc);
+      device.queue.submit([enc.finish()]);
+    },
+    destroy() {
+      staging.destroy();
+      params.destroy();
+      for (const p of planes.values()) {
+        p.y.destroy();
+        p.u.destroy();
+        if (p.v !== p.u) p.v.destroy();
+      }
+    },
+  };
+}
+
 /**
  * Fetch, decode and keep a tier: each frame goes from the decoder into a
- * staging texture, through the block encoder, into its layer. Progress is
- * the share of maps done.
+ * staging texture, through the block encoder (or straight across, for plain
+ * RGBA), into its layer. Progress is the share of maps done.
  */
 export async function loadBasis(
   device: GPUDevice,
@@ -170,7 +348,7 @@ export async function loadBasis(
   const texture = device.createTexture({
     size: [t.width, t.height, count],
     format: k.format,
-    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | (keeping === "rgba8" ? GPUTextureUsage.RENDER_ATTACHMENT : 0),
+    usage: GPUTextureUsage.TEXTURE_BINDING | GPUTextureUsage.COPY_DST | GPUTextureUsage.COPY_SRC,
   });
   const oom = await device.popErrorScope();
   if (oom) {
@@ -179,20 +357,16 @@ export async function loadBasis(
   }
 
   const extra: { destroy(): void }[] = [];
-  let put: (f: VideoFrame, layer: number) => void;
+  const stage = makeStaging(device, t.width, t.height, keeping === "rgba8" ? "rgba8unorm" : "rgba16float");
+  extra.push(stage);
+  let carry: (enc: GPUCommandEncoder, layer: number) => void;
   if (keeping === "rgba8") {
-    put = (f, layer) =>
-      device.queue.copyExternalImageToTexture({ source: f }, { texture, origin: [0, 0, layer], colorSpace: "srgb", premultipliedAlpha: false }, [t.width, t.height]);
+    carry = (enc, layer) => enc.copyTextureToTexture({ texture: stage.staging }, { texture, origin: [0, 0, layer] }, [t.width, t.height, 1]);
   } else {
     const rowBlocks = t.width / 4;
     const colBlocks = t.height / 4;
     // copyBufferToTexture wants rows in multiples of 256 bytes: 16 blocks.
     const padRow = Math.ceil(rowBlocks / 16) * 16;
-    const staging = device.createTexture({
-      size: [t.width, t.height],
-      format: "rgba8unorm",
-      usage: GPUTextureUsage.COPY_DST | GPUTextureUsage.RENDER_ATTACHMENT | GPUTextureUsage.TEXTURE_BINDING,
-    });
     const blocks = device.createBuffer({ size: padRow * colBlocks * 16, usage: GPUBufferUsage.STORAGE | GPUBufferUsage.COPY_SRC });
     const params = device.createBuffer({ size: 16, usage: GPUBufferUsage.UNIFORM | GPUBufferUsage.COPY_DST });
     device.queue.writeBuffer(params, 0, new Uint32Array([rowBlocks, colBlocks, padRow, k.mode]));
@@ -200,36 +374,32 @@ export async function loadBasis(
     const bind = device.createBindGroup({
       layout: pipeline.getBindGroupLayout(0),
       entries: [
-        { binding: 0, resource: staging.createView() },
+        { binding: 0, resource: stage.staging.createView() },
         { binding: 1, resource: { buffer: blocks } },
         { binding: 2, resource: { buffer: params } },
       ],
     });
-    extra.push(staging, blocks, params);
-    // One staging texture and buffer serve every stream: the queue runs each
-    // frame's copy, encode and copy-out in order before the next frame's.
-    put = (f, layer) => {
-      device.queue.copyExternalImageToTexture({ source: f }, { texture: staging, colorSpace: "srgb", premultipliedAlpha: false }, [t.width, t.height]);
-      const enc = device.createCommandEncoder();
+    extra.push(blocks, params);
+    carry = (enc, layer) => {
       const pass = enc.beginComputePass();
       pass.setPipeline(pipeline);
       pass.setBindGroup(0, bind);
       pass.dispatchWorkgroups(Math.ceil(rowBlocks / 8), Math.ceil(colBlocks / 8));
       pass.end();
       enc.copyBufferToTexture({ buffer: blocks, bytesPerRow: padRow * 16, rowsPerImage: colBlocks }, { texture, origin: [0, 0, layer] }, [t.width, t.height, 1]);
-      device.queue.submit([enc.finish()]);
     };
   }
 
   let done = 0;
   try {
     await Promise.all(
-      names.map((n) =>
-        decode(e, t, e.streams[n]!, data.get(n)!, hw, signal, (f, i) => {
-          put(f, first.get(n)! + i);
+      names.map((n) => {
+        const buf = { data: null as Uint8Array | null };
+        return decode(e, t, e.streams[n]!, data.get(n)!, hw, signal, async (f, i) => {
+          await stage.put(f, buf, (enc) => carry(enc, first.get(n)! + i));
           onProgress(++done / count);
-        }),
-      ),
+        });
+      }),
     );
     await device.queue.onSubmittedWorkDone();
   } catch (err) {
@@ -238,6 +408,7 @@ export async function loadBasis(
   } finally {
     for (const x of extra) x.destroy();
   }
+  if (stage.copied > 0) console.warn(`streetview: ${stage.copied} of ${count} maps went through the browser's own colour conversion (${e.codec}, ${hw})`);
   return { width: t.width, height: t.height, texture, layers, destroy: () => texture.destroy() };
 }
 
