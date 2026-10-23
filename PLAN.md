@@ -217,7 +217,9 @@ lights where they are, as free lights. vibes keeps its rail changes in the
    (`/auth/options?origin=` says where): with a 10-minute token from its own
    address (`/auth/token`, its session signed), as `Authorization: Bearer`
    and as each socket's first message, since its cookie doesn't go from one
-   site to the other; vibes lets the other address's pages (CORS). Logging
+   site to the other; vibes lets the other address's pages (CORS). A page
+   that can't reach `vibes.hall.ly` (a request to it fails outright, as one a
+   proxy or CORS turns away does) uses its own address for all of it. Logging
    in and out stay at the page's own. Each push to `main` runs `.github/workflows/deploy.yaml`: typecheck and
    tests, then the flake's images (`kokuzo.tailc38f.ts.net/vibes:<sha>`, and
    sketches' boxes' `vibes-box:<sha>`) are pushed and `.kube/version.yaml`
@@ -412,7 +414,7 @@ ever be built from one of its commits. On while `SKETCHES=1`.
   for the last to land (a whole apply, standing for any whole one still
   waiting: vibes makes just the newest), so the room keeps up with a drag
   at the cost of one trip there, not a round trip a step. Their answers,
-  and the scenes a run of changes makes, go out at most every 50 ms.
+  and the scenes a run of changes makes, go out at most every 10 ms.
 
 Still to come: VS Code's own defaults that only its product configuration
 sets (no AI chat; the welcome page is skipped from VS Code's address), its

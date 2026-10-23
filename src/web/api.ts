@@ -33,12 +33,28 @@ export class RequestError extends Error {
 // another of vibes' addresses, the main one (no proxy between), reached with
 // a short-lived token from this page's own (/auth/token) in place of the
 // cookie, which doesn't go from one site to another. Asked once; without an
-// answer, this page's own will do.
+// answer, or if the main one can't be reached from here, this page's own will do.
 let apiBase: Promise<string | null> | null = null;
 const apiBaseOf = () =>
   (apiBase ??= fetch(`/auth/options?origin=${encodeURIComponent(location.origin)}`)
     .then(async (r) => (r.ok ? ((await r.json()) as LoginOptions).api : null))
+    .then((api) => api && reachable(api))
     .catch(() => null));
+
+/**
+ * The main address, if a request to it from here goes through (whatever it
+ * answers: a 401's an answer too); else null. One the browser asks about
+ * first (CORS's preflight), as it does every request with the token: what a
+ * proxy in between, or a missing CORS header, would turn away.
+ */
+async function reachable(api: string): Promise<string | null> {
+  const t = await tokenFor();
+  const headers = { "Content-Type": "application/json", ...(t ? { Authorization: `Bearer ${t}` } : {}) };
+  return fetch(`${api}/api/me`, { headers, cache: "no-store" }).then(
+    () => api,
+    () => null,
+  );
+}
 
 // The token, fetched again with this long to spare.
 const TOKEN_SPARE_MS = 60_000;

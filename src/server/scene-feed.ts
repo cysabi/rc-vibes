@@ -52,7 +52,7 @@ const MAX_EARLY = 200;
 const CONFIRM_MS = 500;
 // A run of changes (live mode's drag) changes the room as each comes; the
 // scene that shows them goes to browsers at most this often (soon).
-const PACE_MS = 50;
+const PACE_MS = 10;
 
 export interface FeedDeps {
   config: Config;
