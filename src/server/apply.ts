@@ -62,8 +62,8 @@ export interface ApplyDeps {
   setRoomtone: (lights: Record<string, Record<string, number>>, user: Me, code?: string) => Promise<unknown>;
 }
 
-/** Gone already: nothing left to change. (A param its sketch doesn't have isn't that: it's refused.) */
-const gone = (err: unknown) => (err instanceof Refused || err instanceof ArclampError) && err.status === 404 && err.code !== "no_param";
+/** Gone already: nothing left to change (a shader, or a param its sketch no longer has). */
+const gone = (err: unknown) => (err instanceof Refused || err instanceof ArclampError) && err.status === 404;
 
 export function createApply({ shaders, instances, setRoomtone }: ApplyDeps) {
   async function make(c: Change, user: Me, made: Record<string, ShaderKey>) {

@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { appliesTo, colorOfLemtone, factsOf, filterOf, lemtoneOf, passes, valuesAt, withChanges, type ParamSpec } from "./params.ts";
+import { appliesTo, colorOfLemtone, factsOf, filterOf, kindOf, lemtoneOf, paramText, passes, valuesAt, withChanges, type ParamSpec } from "./params.ts";
 
 const speed: ParamSpec = { kind: "number", name: "speed", label: "Speed", lights: {}, default: 7, min: 0, max: 20, step: 0.1 };
 const on: ParamSpec = { kind: "toggle", name: "on", label: "On", lights: { kinds: ["switch"] }, default: false };
@@ -22,6 +22,13 @@ describe("which lights a param is for", () => {
     expect(filterOf({ kinds: [], tags: "rail", ids: [3, 3] })).toEqual({ tags: ["rail"], ids: [3] });
     expect(filterOf({ kinds: ["bulb"] })).toBe('lights\' kinds are "color" or "switch", not "bulb"');
     expect(filterOf({ ids: [0] })).toBe("lights' ids are light ids");
+  });
+
+  it("tells a light's kind by its channels, as sketches do, and by its type where they aren't known", () => {
+    expect(kindOf({ type: "br30", channels: ["on"] })).toBe("switch");
+    expect(kindOf({ type: "relay", channels: ["a", "b", "brightness", "fidelity"] })).toBe("color");
+    expect(kindOf({ type: "relay", channels: [] })).toBe("switch");
+    expect(kindOf({ type: "br30" })).toBe("color");
   });
 
   it("knows old bulbs from color lights the way sketches do", () => {
@@ -51,6 +58,17 @@ describe("a param's values", () => {
     expect(withChanges(tint, [], [[red, [1]], [{ ...red }, [2]], [{ ...red, lm: 400 }, [3]]])).toEqual([
       [red, [1, 2]],
       [{ ...red, lm: 400 }, [3]],
+    ]);
+  });
+
+  it("show as many decimals as their step has", () => {
+    expect([paramText(2.5, 2.5), paramText(7.5, 2.5), paramText(0.25, 0.25), paramText(3, 1), paramText(0.1, 0.01), paramText(1 / 3, 1 / 300)]).toEqual([
+      "2.5",
+      "7.5",
+      "0.25",
+      "3",
+      "0.10",
+      "0.3333",
     ]);
   });
 

@@ -43,11 +43,12 @@ const proxy = boxes ? createBoxProxy(config, db, boxes) : null;
 // the light stream; arclamp's health, likewise; and sketches put in the room
 // (instances).
 let instances: Instances | null = null;
-const allLights = async () => (await lights.arclampLights()).lights;
 // Instances' params: each shader linked once (an eval), then a stream from it, taking each change.
-const params = builds
-  ? createParamLinks({ db, arclamp, secret: config.sessionSecret, url: `${config.shaderUrl}/shader-api/params`, lights: allLights, changed: () => feed.poke() })
-  : null;
+// Only where shaders can reach vibes (VIBES_SHADER_URL; env.ts).
+const params =
+  builds && config.shaderUrl
+    ? createParamLinks({ db, arclamp, secret: config.sessionSecret, url: `${config.shaderUrl}/shader-api/params`, changed: () => feed.poke() })
+    : null;
 const feed = createSceneFeed({
   config,
   db,
@@ -72,7 +73,8 @@ if (builds) {
     changed: () => feed.poke(),
     sendParams: (id, name, set) => params?.send(id, name, set),
     gone: (id) => params?.gone(id),
-    lights: allLights,
+    // As the selection's panel has them (vibes' edits and all), so a param's for the same lights there and here.
+    lights: async () => (await lights.currentLights()).lights,
   });
 }
 

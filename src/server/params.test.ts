@@ -1,5 +1,4 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
-import type { LightInfo } from "../shared/arclamp.ts";
 import type { ParamSpec } from "../shared/params.ts";
 import { ArclampError } from "./arclamp.ts";
 import { openDb, type Db } from "./db.ts";
@@ -8,8 +7,6 @@ import { createParamLinks, declarationsOf, linkOfToken, linkToken, type ParamLin
 const SECRET = "s".repeat(32);
 const speed: ParamSpec = { kind: "number", name: "speed", label: "Speed", lights: {}, default: 7, min: 0, max: 20, step: 0.1 };
 const on: ParamSpec = { kind: "toggle", name: "on", label: "On", lights: { kinds: ["switch"] }, default: false };
-// 1 and 2 take colors; 3 is an old bulb.
-const LIGHTS: LightInfo[] = [1, 2, 3].map((id) => ({ id, type: id === 3 ? "relay" : "br30", tags: [], coords: null, rail: null, channels: [] }));
 
 describe("what a shader says its sketch declares", () => {
   it("keeps the params that read as params, once each, and says why it dropped the rest", () => {
@@ -92,7 +89,6 @@ describe("linking shaders, and their streams", () => {
       },
       secret: SECRET,
       url: "https://vibes.test/shader-api/params",
-      lights: async () => LIGHTS,
       changed: () => changed++,
       now: () => clock,
     });
@@ -218,13 +214,46 @@ describe("linking shaders, and their streams", () => {
     expect(await second()).toEqual({ event: "change", data: { name: "speed", set: [[1, [1]]] } });
   });
 
-  it("lets go of values that can't be any more: another kind now, or lights the param's no longer for", async () => {
-    db.updateInstance("i", { link_epoch: 1, declared: [speed, on], params: { speed: [[9, [1, 3]]], on: [[true, [3]]], old: [[1, [1]]] } });
+  it("keeps the values as they are when what's declared changes: saying what it declares can't take any away", async () => {
+    const values = { speed: [[9, [1, 3]]], on: [[true, [3]]], old: [[1, [1]]] } as const;
+    db.updateInstance("i", { link_epoch: 1, declared: [speed, on], params: structuredClone(values) as never });
     const narrowed: ParamSpec = { ...speed, lights: { kinds: ["color"] } };
     const nowNumber: ParamSpec = { kind: "number", name: "on", label: "On", lights: {}, default: 0, min: 0, max: 1, step: 0.1 };
     await connect(linkToken(SECRET, "i", 1), { v: 1, params: [narrowed, nowNumber] });
-    // A param it doesn't declare now keeps its values, for a script that brings it back.
-    expect(db.instance("i")!.params).toEqual({ speed: [[9, [1]]], old: [[1, [1]]] });
     expect(db.instance("i")!.declared).toEqual([narrowed, nowNumber]);
+    expect(db.instance("i")!.params).toEqual(values);
+  });
+
+  it("links again a shader whose sandbox or script changed and whose stream didn't come back: the one it has is dead", async () => {
+    clock = 10_000;
+    links.scene([shader()]);
+    await settle();
+    expect(evals).toHaveLength(1);
+    await connect(linkToken(SECRET, "i", 1));
+    // A while later its sandbox starts over; the old stream's still open on this end.
+    clock += 5_000;
+    links.scene([shader({ respawns: 1 })]);
+    await settle();
+    expect(evals).toHaveLength(1);
+    clock += 10_000;
+    links.scene([shader({ respawns: 1 })]);
+    await settle();
+    expect(evals).toHaveLength(2);
+  });
+
+  it("doesn't take a stream that came just as the scene said its script changed for a dead one", async () => {
+    clock = 10_000;
+    db.updateInstance("i", { link_epoch: 1 });
+    await connect(linkToken(SECRET, "i", 1));
+    links.scene([shader()]);
+    // The new script's stream, a moment before the scene says the script's new.
+    clock += 30_000;
+    await connect(linkToken(SECRET, "i", 1));
+    clock += 500;
+    links.scene([shader({ scriptHash: "h2" })]);
+    clock += 60_000;
+    links.scene([shader({ scriptHash: "h2" })]);
+    await settle();
+    expect(evals).toEqual([]);
   });
 });

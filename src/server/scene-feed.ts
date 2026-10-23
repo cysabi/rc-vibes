@@ -84,9 +84,10 @@ export function createSceneFeed({ config, db, arclamp, follow, layout, instances
   const shaders = new Map<number, Kept>();
   // Whether it's been told the whole scene yet.
   let whole = false;
-  // Scripts by hash, and the sketch each was built from (by its stamp).
+  // Scripts by hash; the sketch each was built from, and the instance it is (by its stamp, signed by vibes).
   const scripts = new Map<string, string>();
   const sketches = new Map<string, ShaderSketch | undefined>();
+  const stampedFor = new Map<string, string | null>();
   // By shader: the lights it's changed, and its script's hash (null until that's known).
   const footprints = new Map<number, { hash: string | null; lights: Set<number> }>(
     db.footprints().map((f) => [f.shaderId, { hash: f.scriptHash, lights: new Set(f.lights) }]),
@@ -106,6 +107,8 @@ export function createSceneFeed({ config, db, arclamp, follow, layout, instances
     if (!scripts.has(hash)) {
       scripts.set(hash, script);
       sketches.set(hash, sketchOf(script, config.signingKey, db));
+      const stamp = readStamp(script, config.signingKey);
+      stampedFor.set(hash, stamp?.verified ? (stamp.stamp.shader ?? null) : null);
     }
     return hash;
   }
@@ -182,9 +185,7 @@ export function createSceneFeed({ config, db, arclamp, follow, layout, instances
       const sketch = sketches.get(hash) ?? null;
       const inst = byShader.get(n.id);
       const instance = inst && live ? live.view(inst) : null;
-      const script = scripts.get(hash);
-      const stamp = inst && script ? readStamp(script, config.signingKey) : null;
-      if (inst && stamp?.verified && stamp.stamp.shader === inst.id) {
+      if (inst && stampedFor.get(hash) === inst.id) {
         ours.push({ instance: inst.id, shaderId: n.id, running: n.state === "running", respawns: n.respawns ?? 0, scriptHash: hash });
       }
       inRoom.push({
@@ -209,6 +210,7 @@ export function createSceneFeed({ config, db, arclamp, follow, layout, instances
       if (inUse.has(hash)) continue;
       scripts.delete(hash);
       sketches.delete(hash);
+      stampedFor.delete(hash);
     }
     // The rest aren't in the room yet: building, couldn't go in, or just put
     // in and their shader not heard of yet.

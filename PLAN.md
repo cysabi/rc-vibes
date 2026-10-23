@@ -51,7 +51,7 @@ lighting system at the Recurse Center, served at `vibes.recurse.com`.
 | `BOX_IMAGE` | sketches | the box image |
 | `BOX_RUNNER` | no | `docker` (default: containers on this machine) or `kubernetes` (pods on the cluster vibes runs in) |
 | `BOX_VIBES_URL` | kubernetes | where boxes reach vibes; with Docker, `http://host.docker.internal:$PORT` |
-| `VIBES_SHADER_URL` | no | where shaders in the room reach vibes, for their params; default the main `PUBLIC_URL` in production, `http://127.0.0.1:$PORT` otherwise |
+| `VIBES_SHADER_URL` | no | where shaders in the room reach vibes, for their params; default the main `PUBLIC_URL` in production, `http://127.0.0.1:$PORT` in development when arclamp's on this machine too, and otherwise none (no shader is linked) |
 | `BOX_NAMESPACE`, `BOX_RUNTIME_CLASS` | no | where box pods run (default `vibes-boxes`), and with what (default `kata`; empty for the cluster's own) |
 | `BOX_IDLE_MINUTES` | no | a box whose page hasn't checked in for this long is removed (default 15); its home is kept |
 | `BOX_POOL` | no | how many booted boxes wait to be claimed (default 2) |

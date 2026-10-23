@@ -237,15 +237,62 @@ describe("the stream to vibes", () => {
     await vi.advanceTimersByTimeAsync(0);
     vibes.send('event: end\ndata: {"reason":"replaced"}\n\n');
     await vi.advanceTimersByTimeAsync(60_000);
+    // Ticking on, it stays stopped: the other stream's the one to have.
+    for (let i = 0; i < 5; i++) tickParams();
+    await vi.advanceTimersByTimeAsync(0);
     expect(vibes.calls).toHaveLength(2);
     expect((g.__vibesParams as { link: unknown }).link).not.toBeNull();
 
-    tickParams();
+    // Until vibes links it again.
+    host.connect({ v: 1, url: "https://vibes.test/p", token: "newer" });
     await vi.advanceTimersByTimeAsync(0);
     vibes.send('event: end\ndata: {"reason":"revoked"}\n\n');
     await vi.advanceTimersByTimeAsync(60_000);
+    tickParams();
     expect(vibes.calls).toHaveLength(3);
     expect((g.__vibesParams as { link: unknown }).link).toBeNull();
+  });
+
+  it("goes with the newest script in the sandbox: an older one's leftovers don't open it again", async () => {
+    vi.useFakeTimers();
+    const vibes = fakeVibes();
+    const old = await load();
+    old.param("old", 1);
+    old.host.connect({ v: 1, url: "https://vibes.test/p", token: "t" });
+    await vi.advanceTimersByTimeAsync(0);
+    // The old script's stream breaks; it means to try again in a second.
+    vibes.close();
+    await vi.advanceTimersByTimeAsync(10);
+    // A new script comes in, and opens its own stream at once.
+    const fresh = await load();
+    fresh.param("fresh", 1);
+    fresh.tickParams();
+    await vi.advanceTimersByTimeAsync(0);
+    expect(vibes.calls).toHaveLength(2);
+    // Neither script's code opens another while that one's open (short of going quiet for 45 s).
+    old.tickParams();
+    fresh.tickParams();
+    await vi.advanceTimersByTimeAsync(40_000);
+    expect(vibes.calls).toHaveLength(2);
+    expect(JSON.parse(vibes.calls[1]!.init.body).params.map((p: { name: string }) => p.name)).toEqual(["fresh"]);
+    // And when it breaks, it's the new script's that opens again.
+    vibes.close();
+    await vi.advanceTimersByTimeAsync(1000);
+    expect(vibes.calls).toHaveLength(3);
+    expect(JSON.parse(vibes.calls[2]!.init.body).params.map((p: { name: string }) => p.name)).toEqual(["fresh"]);
+  });
+
+  it("reads a big event in one chunk without a TextDecoder", async () => {
+    vi.stubGlobal("TextDecoder", undefined);
+    const vibes = fakeVibes();
+    const { param, host } = await load();
+    const n = param("n", 0, { min: 0, max: 1e6 });
+    host.connect({ v: 1, url: "https://vibes.test/p", token: "t" });
+    await settle();
+    const ids = Array.from({ length: 30_000 }, (_, i) => i + 1);
+    vibes.send(`event: state\ndata: ${JSON.stringify({ v: 1, values: { n: [[5, ids]] } })}\n\n`);
+    await settle();
+    expect(n({ light: { id: 30_000, kind: "color", tags: [] } } as never)).toBe(5);
   });
 
   it("opens by itself in a linked sandbox's next script, on its first tick", async () => {

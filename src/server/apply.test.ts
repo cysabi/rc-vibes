@@ -163,9 +163,16 @@ describe("a param in an apply", () => {
     expect(db.instance(id)!.params).toEqual({ speed: [[9, [1]], [3, [2]]] });
   });
 
-  it("is refused for a param the sketch doesn't declare, not passed over as gone", async () => {
+  it("passes over a param the sketch no longer has, as gone, and goes on with the rest", async () => {
     const id = liveInstance();
-    await expect(apply([{ op: "params", key: id, name: "nope", set: [[1, [1]]] }], ada)).rejects.toMatchObject({ at: 0, code: "no_param" });
+    await apply(
+      [
+        { op: "params", key: id, name: "nope", set: [[1, [1]]] },
+        { op: "params", key: id, name: "speed", set: [[9, [1]]] },
+      ],
+      ada,
+    );
+    expect(db.instance(id)!.params).toEqual({ speed: [[9, [1]]] });
   });
 
   it("isn't taken from a browser for a param with a name that isn't a word, or a change that isn't one", () => {

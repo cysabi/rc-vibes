@@ -78,10 +78,22 @@ export interface Config {
   databasePath: string;
   port: number;
   production: boolean;
-  /** Where shaders in the room reach vibes, for their params (VIBES_SHADER_URL): the main public address, or this machine in development. */
-  shaderUrl: string;
+  /**
+   * Where shaders in the room reach vibes, for their params (VIBES_SHADER_URL):
+   * the main public address in production, or this machine when arclamp's on
+   * it too. Null otherwise (a development vibes driving the real arclamp, which
+   * can't reach it): then no shader is linked.
+   */
+  shaderUrl: string | null;
   /** Sketches and their boxes, or null while they're off (SKETCHES=0). */
   sketches: SketchesConfig | null;
+}
+
+/** Where shaders reach vibes: as given; else the main public address, in production; else this machine, if arclamp's on it too; else nowhere. */
+function shaderUrlOf(given: string | undefined, publicUrl: string | null, arclamp: string, port: number): string | null {
+  const local = ["127.0.0.1", "localhost", "[::1]"].includes(new URL(arclamp).hostname);
+  const url = given ?? publicUrl ?? (local ? `http://127.0.0.1:${port}` : null);
+  return url && url.replace(/\/+$/, "");
 }
 
 function parseDeviceKeys(raw: string): Map<string, string> {
@@ -151,7 +163,7 @@ export function loadConfig(source: Record<string, string | undefined> = process.
     databasePath: env.DATABASE_PATH,
     port: env.PORT,
     production,
-    shaderUrl: (env.VIBES_SHADER_URL ?? (production ? env.PUBLIC_URL[0]! : `http://127.0.0.1:${env.PORT}`)).replace(/\/+$/, ""),
+    shaderUrl: shaderUrlOf(env.VIBES_SHADER_URL, production ? env.PUBLIC_URL[0]! : null, env.ARCLAMP_BASE_URL, env.PORT),
     sketches,
   };
 }

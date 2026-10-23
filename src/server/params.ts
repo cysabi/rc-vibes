@@ -14,14 +14,16 @@
 //
 // The token is the instance's id and its link's number, signed: linking again
 // counts up, so older tokens stop working. It's in arclamp's audit log (with
-// the eval), and can only read the instance's values and say what it declares.
+// the eval). Whoever can read that can read the instance's values, say what
+// its sketch declares (which changes which controls show, not the values
+// kept), or take its stream over, cutting its shader off until vibes links it
+// again.
 
 import { createHmac, timingSafeEqual } from "node:crypto";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
-import type { LightInfo } from "../shared/arclamp.ts";
-import { checkSpec, factsOf, groupsOf, MAX_PARAMS, passes, PROTOCOL, valuesOf, type Changes, type EndEvent, type ParamSpec, type ParamTable } from "../shared/params.ts";
+import { checkSpec, MAX_PARAMS, PROTOCOL, type Changes, type ColorValue, type EndEvent, type ParamSpec } from "../shared/params.ts";
 import type { Arclamp } from "./arclamp.ts";
 import type { Db } from "./db.ts";
 
@@ -35,12 +37,19 @@ const LINK_WAIT_MS = 10_000;
 const FIRST_RETRY_MS = 2_000;
 const MOST_RETRY_MS = 60_000;
 
-const finite = z.number().finite();
-const colorValue = z.object({ a: finite, b: finite, lm: finite.min(0), fidelity: z.number().min(0).max(1) });
-
-/** A change to a param's values, as the API takes it (Changes): each value with its lights; null puts them back to the default. */
+/**
+ * A change to a param's values, as the API takes it (Changes): each value
+ * with its lights; null puts them back to the default. Whether a value is
+ * one of its param's is the library's rules' to say (cleanValue, in
+ * instances.ts), as everywhere else.
+ */
 export const changesBody = z
-  .array(z.tuple([z.union([finite, z.boolean(), colorValue, z.null()]), z.array(z.number().int().positive()).max(2000)]))
+  .array(
+    z.tuple([
+      z.union([z.number().finite(), z.boolean(), z.custom<ColorValue>((v) => typeof v === "object" && v !== null && !Array.isArray(v)), z.null()]),
+      z.array(z.number().int().positive()).max(2000),
+    ]),
+  )
   .min(1)
   .max(100);
 
@@ -146,15 +155,20 @@ export interface LinkDeps {
   secret: string;
   /** Where shaders reach vibes' stream (…/shader-api/params). */
   url: string;
-  /** Every light, for which a param's for. */
-  lights: () => Promise<LightInfo[]>;
   /** Told when what an instance declares changes (the scene feed shows it). */
   changed?: () => void;
   now?: () => number;
 }
 
-export function createParamLinks({ db, arclamp, secret, url, lights, changed = () => {}, now = Date.now }: LinkDeps) {
+// A stream opened just before the scene said its shader's sandbox or script
+// changed is the new one's, not the old's.
+const STALE_SLACK_MS = 2_000;
+
+export function createParamLinks({ db, arclamp, secret, url, changed = () => {}, now = Date.now }: LinkDeps) {
   const streams = new Map<string, Stream>();
+  // When each instance's stream opened, and when the scene last said its shader's sandbox or script changed.
+  const opened = new Map<string, number>();
+  const moved = new Map<string, number>();
   // Each instance's shader, as the scene last had it.
   let seen = new Map<string, SeenShader>();
   // The last link of each instance's shader (or the last stream's end): for
@@ -166,32 +180,22 @@ export function createParamLinks({ db, arclamp, secret, url, lights, changed = (
 
   const keyOf = (s: SeenShader) => `${s.shaderId}:${s.respawns}:${s.scriptHash}`;
 
-  /** Lights a param can have values for. */
-  async function allowedFor(): Promise<(spec: ParamSpec) => (id: number) => boolean> {
-    const facts = new Map((await lights()).map((l) => [l.id, factsOf(l)]));
-    return (spec) => (id) => {
-      const f = facts.get(id);
-      return f !== undefined && passes(spec.lights, f);
-    };
+  /**
+   * What a shader says its sketch declares, kept. Its values stay as they
+   * are: one that isn't its param's kind now, or is for a light the param
+   * isn't for, is passed over wherever it's read, and gone at its next change.
+   */
+  function declare(id: string, specs: ParamSpec[]) {
+    const inst = db.instance(id);
+    if (!inst || JSON.stringify(inst.declared) === JSON.stringify(specs)) return;
+    db.updateInstance(id, { declared: specs });
+    changed();
   }
 
-  /** What a shader says its sketch declares, kept; values it can't have any more (another kind now, or lights it's no longer for) let go. */
-  async function declare(id: string, specs: ParamSpec[]) {
-    const inst = db.instance(id);
-    if (!inst) return;
-    const allowed = await allowedFor();
-    const values: ParamTable = { ...inst.params };
-    for (const spec of specs) {
-      if (!values[spec.name]) continue;
-      const ok = allowed(spec);
-      const groups = groupsOf(spec, new Map([...valuesOf(spec, values[spec.name])].filter(([id]) => ok(id))));
-      if (groups.length > 0) values[spec.name] = groups;
-      else delete values[spec.name];
-    }
-    const same = JSON.stringify(inst.declared) === JSON.stringify(specs) && JSON.stringify(inst.params) === JSON.stringify(values);
-    if (same) return;
-    db.updateInstance(id, { declared: specs, params: values });
-    changed();
+  /** Whether an instance's stream is from before its sandbox or script changed, with none since: dead, if still open on this end. */
+  function stale(id: string): boolean {
+    const at = moved.get(id);
+    return at !== undefined && (opened.get(id) ?? 0) < at - STALE_SLACK_MS && now() - at >= LINK_WAIT_MS;
   }
 
   async function link(s: SeenShader, key: string) {
@@ -224,11 +228,11 @@ export function createParamLinks({ db, arclamp, secret, url, lights, changed = (
     tries.set(s.instance, { key, at: now(), wait: again ? Math.min(MOST_RETRY_MS, prev!.wait * 2) : first, none: outcome === "none" });
   }
 
-  /** Each running shader with no stream linked, unless it's been tried for this sandbox and script lately (or has no library). */
+  /** Each running shader with no (live) stream linked, unless it's been tried for this sandbox and script lately (or has no library). */
   function check() {
     if (now() - began < LINK_WAIT_MS) return;
     for (const s of seen.values()) {
-      if (!s.running || streams.has(s.instance) || linking.has(s.instance)) continue;
+      if (!s.running || linking.has(s.instance) || (streams.has(s.instance) && !stale(s.instance))) continue;
       const key = keyOf(s);
       const t = tries.get(s.instance);
       if (t && t.key === key && (t.none || now() - t.at < t.wait)) continue;
@@ -247,6 +251,10 @@ export function createParamLinks({ db, arclamp, secret, url, lights, changed = (
   return {
     /** The shaders in the room that are instances': linked as they need to be. */
     scene(shaders: SeenShader[]) {
+      for (const s of shaders) {
+        const was = seen.get(s.instance);
+        if (was && keyOf(was) !== keyOf(s)) moved.set(s.instance, now());
+      }
       seen = new Map(shaders.map((s) => [s.instance, s]));
       check();
     },
@@ -261,6 +269,8 @@ export function createParamLinks({ db, arclamp, secret, url, lights, changed = (
       streams.get(id)?.end("gone");
       seen.delete(id);
       tries.delete(id);
+      opened.delete(id);
+      moved.delete(id);
     },
 
     /** Whether an instance's shader has its stream open. */
@@ -283,7 +293,7 @@ export function createParamLinks({ db, arclamp, secret, url, lights, changed = (
           if (hello?.v !== PROTOCOL) return c.text(`vibes speaks params protocol ${PROTOCOL}`, 400);
           const { specs, dropped } = declarationsOf(hello.params);
           for (const why of dropped) console.warn(`params: instance ${inst.id}: ${why}`);
-          await declare(inst.id, specs);
+          declare(inst.id, specs);
           // One stream an instance: this one takes over.
           streams.get(inst.id)?.end("replaced");
           const { response, stream } = eventStream(() => {
@@ -294,6 +304,7 @@ export function createParamLinks({ db, arclamp, secret, url, lights, changed = (
             if (s) tries.set(inst.id, { key: keyOf(s), at: now(), wait: LINK_WAIT_MS, none: false });
           });
           streams.set(inst.id, stream);
+          opened.set(inst.id, now());
           tries.delete(inst.id);
           stream.write(eventText("state", { v: PROTOCOL, values: db.instance(inst.id)?.params ?? {} }));
           return response;

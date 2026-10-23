@@ -49,14 +49,30 @@ export interface ShaderParams {
   values: ParamTable;
 }
 
-/** What kind of light it is, as sketches see it (light.kind): old bulbs switch, the rest take colors. */
-export const kindOf = (light: Pick<LightInfo, "type">): LightKind => (isBinary(light.type) ? "switch" : "color");
+type Facts = Pick<LightInfo, "id" | "type" | "tags"> & Partial<Pick<LightInfo, "channels">>;
+
+/**
+ * What kind of light it is, as sketches see it (light.kind): one with an `on`
+ * channel switches (old bulbs), the rest take colors. By its type, where its
+ * channels aren't known.
+ */
+export const kindOf = (light: Pick<Facts, "type" | "channels">): LightKind =>
+  light.channels?.length ? (light.channels.includes("on") ? "switch" : "color") : isBinary(light.type) ? "switch" : "color";
 
 /** A light, as a param's filter sees it. */
-export const factsOf = (light: Pick<LightInfo, "id" | "type" | "tags">): LightFacts => ({ id: light.id, kind: kindOf(light), tags: light.tags ?? [] });
+export const factsOf = (light: Facts): LightFacts => ({ id: light.id, kind: kindOf(light), tags: light.tags ?? [] });
 
 /** Whether a param is for this light. */
-export const appliesTo = (spec: ParamSpec, light: Pick<LightInfo, "id" | "type" | "tags">) => passes(spec.lights, factsOf(light));
+export const appliesTo = (spec: ParamSpec, light: Facts) => passes(spec.lights, factsOf(light));
+
+/** For each param, whether it's for a light (by id) of these: lights not among them aren't. */
+export function lightsFor(lights: readonly Facts[]): (spec: ParamSpec) => (id: number) => boolean {
+  const facts = new Map(lights.map((l) => [l.id, factsOf(l)]));
+  return (spec) => (id) => {
+    const f = facts.get(id);
+    return f !== undefined && passes(spec.lights, f);
+  };
+}
 
 /** Each light's value, by id: its own, or the default. */
 export function valuesAt(spec: ParamSpec, groups: Groups | undefined, ids: readonly number[]): ParamValue[] {
@@ -64,9 +80,10 @@ export function valuesAt(spec: ParamSpec, groups: Groups | undefined, ids: reado
   return ids.map((id) => set.get(id) ?? spec.default);
 }
 
-/** A number as a knob shows it: as many decimals as its step has. */
+/** A number as a knob shows it: as many decimals as its step has (2.5, one; 0.25, two), up to four. */
 export function paramText(v: number, step: number): string {
-  const decimals = Math.max(0, Math.min(4, Math.ceil(-Math.log10(step))));
+  let decimals = 0;
+  while (decimals < 4 && Math.abs(step * 10 ** decimals - Math.round(step * 10 ** decimals)) > 1e-9) decimals++;
   return v.toFixed(decimals);
 }
 

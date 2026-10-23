@@ -23,7 +23,7 @@ import { Hono, type Context } from "hono";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { LightInfo, ShaderDescriptor } from "../shared/arclamp.ts";
-import { cleanValue, factsOf, passes, withChanges, type Changes } from "../shared/params.ts";
+import { cleanValue, lightsFor, withChanges, type Changes } from "../shared/params.ts";
 import type { Instance, Me, Person } from "../shared/vibes.ts";
 import type { Arclamp } from "./arclamp.ts";
 import type { AuthEnv } from "./auth.ts";
@@ -359,29 +359,27 @@ export function createInstances({ config, db, arclamp, builds, lightIds, changed
      * A param of an instance changed (each value with its lights; null puts
      * them back to the default), as its shader says its sketch declares it:
      * kept, and sent to its shader at once. Lights the param isn't for are
-     * passed over, as a selection mixes them.
+     * passed over, as a selection mixes them (none left is nothing to do). A
+     * param its sketch no longer has is gone (404), so a pending change to it
+     * is passed over too.
      */
     async setParam(id: string, name: string, set: Changes, user: Person): Promise<{ instance: Instance } | Refusal> {
+      const forLights = lightsFor(await lights());
+      // Read and written with nothing awaited between: nothing since is lost.
       const inst = db.instance(id);
       if (!inst) return refusal("no such instance", 404, "not_found");
       const spec = inst.declared?.find((p) => p.name === name);
       if (!spec) return refusal(inst.declared ? `its sketch has no param ${name}` : "it hasn't said what params it has yet", 404, "no_param");
-      const facts = new Map((await lights()).map((l) => [l.id, factsOf(l)]));
+      const isFor = forLights(spec);
       const kept: Changes = [];
       for (const [raw, ids] of set) {
         const value = raw === null ? null : cleanValue(spec, raw);
         if (raw !== null && value === null) return refusal(`${spec.label} is a ${spec.kind}`, 400, "bad_value");
-        const these = ids.filter((l) => {
-          const f = facts.get(l);
-          return f !== undefined && passes(spec.lights, f);
-        });
+        const these = ids.filter(isFor);
         if (these.length > 0) kept.push([value, these]);
       }
-      if (kept.length === 0) return refusal(`${spec.label} isn't for any of those lights`, 400, "no_lights");
-      // Anything since (another change, or the shader saying what it declares) is kept: read it again.
-      const now = db.instance(id);
-      if (!now) return refusal("no such instance", 404, "not_found");
-      db.updateInstance(id, { params: { ...now.params, [name]: withChanges(spec, now.params[name], kept) } });
+      if (kept.length === 0) return { instance: view(inst) };
+      db.updateInstance(id, { params: { ...inst.params, [name]: withChanges(spec, inst.params[name], kept) } });
       db.logCoalesced(
         {
           user,

@@ -75,11 +75,33 @@ interface Link {
   token: string;
 }
 
-/** What outlives a script in its sandbox: the values, the link, and the stream open now. */
+// The stream to vibes: one at a time, opened again after a break (1 s, doubling
+// to 30 s; back to 1 s after one that lasted), and given up when vibes says
+// the link is no good (it links the shader again when it wants it).
+const FIRST_WAIT_MS = 1000;
+const MOST_WAIT_MS = 30_000;
+const LASTED_MS = 30_000;
+// vibes sends something every 15 s: nothing for this long, and the stream's dead.
+const QUIET_MS = 45_000;
+
+/**
+ * What outlives a script in its sandbox: the values, the link, and the
+ * stream: the one open now, which start of one that was (each counts up),
+ * the next try at one (and whose), how long that waits, and whether another
+ * stream took over. The stream's kept here, not in a script's own module, so
+ * a new script's stream and anything an old one left behind can't both carry
+ * on: only the newest script's library (owner) opens one.
+ */
 interface Kept {
   values: ParamTable;
   link: Link | null;
+  owner: unknown;
   stream: { abort(): void } | null;
+  started: number;
+  retry: unknown;
+  retryBy: unknown;
+  wait: number;
+  halted: boolean;
 }
 
 const KEPT = "__vibesParams";
@@ -87,7 +109,14 @@ const KEPT = "__vibesParams";
 function kept(): Kept {
   const g = globalThis as Record<string, unknown>;
   let k = g[KEPT] as Kept | undefined;
-  if (!k || typeof k !== "object" || typeof k.values !== "object" || k.values === null) g[KEPT] = k = { values: {}, link: null, stream: null };
+  if (!k || typeof k !== "object" || typeof k.values !== "object" || k.values === null) {
+    g[KEPT] = k = { values: {}, link: null, owner: null, stream: null, started: 0, retry: null, retryBy: null, wait: FIRST_WAIT_MS, halted: false };
+  }
+  // Kept by an older library: what it didn't keep.
+  k.started ??= 0;
+  k.retry ??= null;
+  k.wait ??= FIRST_WAIT_MS;
+  k.halted ??= false;
   return k;
 }
 
@@ -180,30 +209,20 @@ function apply(event: string, data: unknown): boolean {
   return false;
 }
 
-// The stream to vibes: one at a time, opened again after a break (1 s, doubling
-// to 30 s; back to 1 s after one that lasted), and given up when vibes says
-// the link is no good (it links the shader again when it wants it).
-const FIRST_WAIT_MS = 1000;
-const MOST_WAIT_MS = 30_000;
-const LASTED_MS = 30_000;
-// vibes sends something every 15 s: nothing for this long, and the stream's dead.
-const QUIET_MS = 45_000;
-
+// This script: whether its stream is open, and whether it's to open soon.
+const me = {};
 let soon = false;
 let open = false;
-let retry: unknown = null;
-let wait = FIRST_WAIT_MS;
-let generation = 0;
 
 type Ending = "again" | "stop" | "forget";
 
-/** The stream started (again, if one's open): now, whatever's waiting. */
+/** The stream started (again, if one's open): now, whatever's waiting, this script's or an older one's. */
 function start() {
   const k = kept();
   const link = k.link;
-  if (!link || !host.fetch || !host.AbortController || !host.setTimeout) return;
-  if (retry !== null) host.clearTimeout?.(retry);
-  retry = null;
+  if (k.owner !== me || !link || !host.fetch || !host.AbortController || !host.setTimeout) return;
+  if (k.retry !== null) host.clearTimeout?.(k.retry);
+  k.retry = null;
   try {
     k.stream?.abort();
   } catch {
@@ -212,21 +231,31 @@ function start() {
   const ctl = new host.AbortController();
   k.stream = ctl;
   open = true;
-  const gen = ++generation;
+  const mine = ++k.started;
   const began = Date.now();
   void follow(link, ctl).then((ending) => {
-    if (gen !== generation) return;
+    // Another's begun since (this script's, or a newer script's): it's that one's to carry on.
+    if (k.started !== mine) return;
     open = false;
-    if (k.stream === ctl) k.stream = null;
-    if (ending === "forget" && kept().link === link) kept().link = null;
+    k.stream = null;
+    if (ending === "forget" && k.link === link) k.link = null;
+    if (ending === "stop") k.halted = true;
     if (ending !== "again") return;
-    if (Date.now() - began >= LASTED_MS) wait = FIRST_WAIT_MS;
-    retry = host.setTimeout!(() => {
-      retry = null;
+    if (Date.now() - began >= LASTED_MS) k.wait = FIRST_WAIT_MS;
+    k.retryBy = me;
+    k.retry = host.setTimeout!(() => {
+      k.retry = null;
       start();
-    }, wait);
-    wait = Math.min(MOST_WAIT_MS, wait * 2);
+    }, k.wait);
+    k.wait = Math.min(MOST_WAIT_MS, k.wait * 2);
   });
+}
+
+/** Bytes as text, a character each (without a TextDecoder, which arclamp has; vibes only ever sends ASCII). */
+function latin1(bytes: Uint8Array | undefined): string {
+  let s = "";
+  if (bytes) for (let i = 0; i < bytes.length; i += 4096) s += String.fromCharCode(...bytes.subarray(i, i + 4096));
+  return s;
 }
 
 async function follow(link: Link, ctl: { signal: unknown; abort(): void }): Promise<Ending> {
@@ -252,7 +281,7 @@ async function follow(link: Link, ctl: { signal: unknown; abort(): void }): Prom
       const { done, value } = await reader.read();
       if (done) return "again";
       heard();
-      text += decoder ? decoder.decode(value, { stream: true }) : String.fromCharCode(...(value ?? []));
+      text += decoder ? decoder.decode(value, { stream: true }) : latin1(value);
       for (let at = text.indexOf("\n\n"); at >= 0; at = text.indexOf("\n\n")) {
         const ending = take(text.slice(0, at));
         text = text.slice(at + 2);
@@ -296,17 +325,27 @@ function take(block: string): Ending | null {
   return null;
 }
 
-/** Called each tick (sketch() does): a linked sandbox gets its stream, if it hasn't one and isn't waiting to try again. */
+/**
+ * Called each tick (sketch() does): a linked sandbox gets this script's
+ * stream, unless it has it, is waiting to try again, or was told another
+ * stream took over (until vibes links it again).
+ */
 export function tickParams(): void {
-  if (!open && retry === null && kept().link) start();
+  const k = kept();
+  if (k.owner !== me || open || !k.link || k.halted) return;
+  // An older script's wait is this one's to cut short: its stream says what this script declares.
+  if (k.retry !== null && k.retryBy === me) return;
+  start();
 }
 
 /** vibes linking this sandbox (an eval in arclamp): where to reach it, and the stream opened at once. */
 function connect(opts: unknown): { v: number; params?: number; error?: string } {
   const o = opts as Partial<Link & { v: number }> | null;
   if (!o || o.v !== PROTOCOL || typeof o.url !== "string" || typeof o.token !== "string") return { v: PROTOCOL, error: `connect takes { v: ${PROTOCOL}, url, token }` };
-  kept().link = { url: o.url, token: o.token };
-  wait = FIRST_WAIT_MS;
+  const k = kept();
+  k.link = { url: o.url, token: o.token };
+  k.halted = false;
+  k.wait = FIRST_WAIT_MS;
   start();
   return { v: PROTOCOL, params: declared.size };
 }
@@ -318,6 +357,9 @@ export interface VibesHost {
   apply(event: string, data: unknown): boolean;
   params(): ParamSpec[];
 }
+
+// This script is the sandbox's newest: its library's the one to keep the stream.
+kept().owner = me;
 
 (globalThis as Record<string, unknown>).__vibes = {
   v: PROTOCOL,

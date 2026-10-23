@@ -367,10 +367,16 @@ describe("an instance's params", () => {
       ["tint", [[red, [1]]]],
       ["bands", [[4, [5]]]],
     ]);
-    // None of them: refused, as nothing would change.
+    // None of them: nothing to do, and nothing sent.
     const none = await put(inst, "on", [[true, [1, 2]]]);
-    expect(none.status).toBe(400);
-    expect(await none.json()).toMatchObject({ code: "no_lights" });
+    expect(none.status).toBe(204);
+    expect(sent).toHaveLength(3);
+    // A color without its fidelity is at fidelity 1, as the library has it.
+    expect((await put(inst, "tint", [[{ a: 0.1, b: 0, lm: 200 }, [2]]])).status).toBe(204);
+    expect(db.instance(inst.id)!.params.tint).toEqual([
+      [red, [1]],
+      [{ a: 0.1, b: 0, lm: 200, fidelity: 1 }, [2]],
+    ]);
   });
 
   it("are only what its shader says its sketch declares, each of its kind, and only an instance has any", async () => {
