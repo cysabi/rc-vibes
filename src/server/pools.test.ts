@@ -196,7 +196,9 @@ describe("pools from before there were pools", () => {
   });
   afterEach(() => rmSync(dir, { recursive: true, force: true }));
 
-  it("are made from each instance's params, declarations and link, with the instance's id, its own", () => {
+  // A database on disk, opened twice: every table made and every migration run, each written through,
+  // which takes CI's runner (on kokuzo's slow disk) more than the usual 5 s.
+  it("are made from each instance's params, declarations and link, with the instance's id, its own", { timeout: 30_000 }, () => {
     const path = join(dir, "vibes.db");
     const old = new DatabaseSync(path);
     // Instances as they were kept just before pools: params kept with each.
