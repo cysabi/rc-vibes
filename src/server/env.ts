@@ -35,6 +35,11 @@ const schema = z.object({
   BOX_POOL: z.coerce.number().int().min(0).default(2),
   BOX_HOMES: z.string().min(1).optional(),
   BOX_HOMES_MOUNT: z.string().min(1).optional(),
+  // Another vibes on this machine's Docker (a second development one): its own boxes and builds.
+  BOX_SCOPE: z
+    .string()
+    .regex(/^[a-z0-9][a-z0-9-]{0,30}$/, "BOX_SCOPE is lowercase letters, digits and -")
+    .optional(),
   // Streetview's photographs: <dir>/<camera>/build (see streetview.ts). Unset, there's no streetview.
   ROOMSTAGE_DIR: z.string().min(1).optional(),
 });
@@ -64,6 +69,12 @@ export interface SketchesConfig {
    * can't, and then it never asks.
    */
   homesMount: string | null;
+  /**
+   * With Docker, which vibes on this machine the boxes and builds are (null:
+   * the usual one). Each looks after only its own, and leaves the rest alone:
+   * a second development vibes doesn't take the first's boxes for leftovers.
+   */
+  scope: string | null;
 }
 
 export interface Config {
@@ -154,6 +165,7 @@ export function loadConfig(source: Record<string, string | undefined> = process.
       homes: env.BOX_HOMES ?? (env.BOX_RUNNER === "docker" ? "vibes-box-homes" : "/var/lib/vibes/box-homes"),
       // Docker's homes, in a folder on this machine (not a volume of Docker's own), are right here.
       homesMount: env.BOX_HOMES_MOUNT ?? (env.BOX_RUNNER === "docker" && env.BOX_HOMES && path.isAbsolute(env.BOX_HOMES) ? env.BOX_HOMES : null),
+      scope: env.BOX_SCOPE ?? null,
     };
   }
   return {

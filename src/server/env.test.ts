@@ -39,4 +39,11 @@ describe("loadConfig", () => {
   it("rejects a short session secret", () => {
     expect(() => loadConfig({ ...base, VIBES_DEV_LOGIN: "1", SESSION_SECRET: "short" })).toThrow(/SESSION_SECRET/);
   });
+
+  it("keeps a second vibes' Docker boxes apart, by a scope of its own", () => {
+    const sketches = { ...base, VIBES_DEV_LOGIN: "1", SKETCHES: "1", BOX_IMAGE: "vibes-box:dev" };
+    expect(loadConfig(sketches).sketches?.scope).toBeNull();
+    expect(loadConfig({ ...sketches, BOX_SCOPE: "playground" }).sketches?.scope).toBe("playground");
+    expect(() => loadConfig({ ...sketches, BOX_SCOPE: "Not OK" })).toThrow(/BOX_SCOPE/);
+  });
 });

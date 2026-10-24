@@ -4,6 +4,11 @@
 // the one it's claimed for from. Builds too, each a container from the same
 // image, with just what it needs to start Nix's daemon and then the build as
 // uid 1000.
+//
+// A vibes knows its own by their label (vibes.box, vibes.build), and takes
+// any others it finds with it for leftovers of its own, to remove. A second
+// vibes on the same Docker (BOX_SCOPE) labels and names its own apart
+// (vibes.box.<scope>, vibes-<scope>-<name>), so neither ever sees the other's.
 
 import { execFile } from "node:child_process";
 import { mkdtemp, rm, writeFile } from "node:fs/promises";
@@ -16,7 +21,6 @@ import type { SketchesConfig } from "./env.ts";
 
 const run = promisify(execFile);
 const docker = async (...args: string[]) => (await run("docker", args)).stdout.trim();
-const container = (name: string) => `vibes-${name}`;
 
 /** Runs `use` with the env (tokens) in a file only it can read, not on the command line. */
 async function withEnvFile<T>(env: Record<string, string>, use: (file: string) => Promise<T>): Promise<T> {
@@ -30,15 +34,21 @@ async function withEnvFile<T>(env: Record<string, string>, use: (file: string) =
   }
 }
 
-async function removeContainer(name: string) {
-  try {
-    await docker("rm", "--force", container(name));
-  } catch (err) {
-    if (!/No such container/i.test(String((err as { stderr?: string }).stderr))) throw err;
-  }
-}
-
 export function dockerRunner(sketches: SketchesConfig): BoxRunner & BuildRunner {
+  // This vibes' own: its containers' names, and their labels (by key, as Docker filters by them).
+  const prefix = sketches.scope ? `vibes-${sketches.scope}-` : "vibes-";
+  const container = (name: string) => `${prefix}${name}`;
+  const boxLabel = sketches.scope ? `vibes.box.${sketches.scope}` : "vibes.box";
+  const buildLabel = sketches.scope ? `vibes.build.${sketches.scope}` : "vibes.build";
+
+  async function removeContainer(name: string) {
+    try {
+      await docker("rm", "--force", container(name));
+    } catch (err) {
+      if (!/No such container/i.test(String((err as { stderr?: string }).stderr))) throw err;
+    }
+  }
+
   async function find(name: string): Promise<string | null> {
     const running = await docker("inspect", "--format", "{{.State.Running}}", container(name)).catch(() => "");
     if (running !== "true") return null;
@@ -58,7 +68,7 @@ export function dockerRunner(sketches: SketchesConfig): BoxRunner & BuildRunner 
           "--name",
           container(name),
           "--label",
-          "vibes.box=1",
+          `${boxLabel}=1`,
           "--publish",
           "127.0.0.1::3000",
           "--volume",
@@ -92,7 +102,7 @@ export function dockerRunner(sketches: SketchesConfig): BoxRunner & BuildRunner 
           "--name",
           container(name),
           "--label",
-          "vibes.build=1",
+          `${buildLabel}=1`,
           "--user",
           "0:0",
           "--cap-drop",
@@ -120,19 +130,23 @@ export function dockerRunner(sketches: SketchesConfig): BoxRunner & BuildRunner 
     removeBuild: removeContainer,
 
     async builds() {
-      const names = await docker("ps", "--all", "--filter", "label=vibes.build", "--format", "{{.Names}}");
-      return names.split("\n").filter(Boolean).map((n) => n.replace(/^vibes-/, ""));
+      const names = await docker("ps", "--all", "--filter", `label=${buildLabel}`, "--format", "{{.Names}}");
+      return names
+        .split("\n")
+        .filter((n) => n.startsWith(prefix))
+        .map((n) => n.slice(prefix.length));
     },
 
     async list(image) {
-      const ids = (await docker("ps", "--quiet", "--filter", "label=vibes.box")).split("\n").filter(Boolean);
+      const ids = (await docker("ps", "--quiet", "--filter", `label=${boxLabel}`)).split("\n").filter(Boolean);
       if (!ids.length) return [];
       const want = await docker("image", "inspect", "--format", "{{.Id}}", image);
       const out = await docker("inspect", "--format", "{{.Name}} {{.Image}}", ...ids);
       return out
         .split("\n")
         .map((line) => line.split(" "))
-        .map(([n, id]) => ({ name: n!.replace(/^\/(vibes-)?/, ""), current: id === want }));
+        .filter(([n]) => n!.replace(/^\//, "").startsWith(prefix))
+        .map(([n, id]) => ({ name: n!.replace(/^\//, "").slice(prefix.length), current: id === want }));
     },
   };
 }
