@@ -3844,6 +3844,15 @@ html {
   text-shadow: 0 1px 8px rgb(0 0 0 / 0.8);
 }
 
+/* What it's showing, and (above it) a warning when its colour's only near. */
+.streetview-notes {
+  display: flex;
+  flex-direction: column-reverse;
+  align-items: flex-start;
+  gap: 6px;
+  min-width: 0;
+}
+
 .streetview-exposure {
   display: flex;
   align-items: center;

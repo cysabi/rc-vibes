@@ -12,7 +12,9 @@
 // converted here, BT.709 full range, in float, straight into the block
 // encoder. 10-bit AV1 is decoded in software for that (fast: about 250 maps
 // a second at 4K on an M5 Pro); only frames that can't be read (a 10-bit
-// hardware frame) go through the browser's conversion.
+// hardware frame) go through the browser's conversion. Chrome's WebGPU
+// copies from the frame itself; Firefox's only from an image (an ImageBitmap,
+// an <img>, a canvas), so there the frame's made one first.
 
 import { ENCODE_WGSL, KEEPING, type Keeping } from "./encode.ts";
 
@@ -70,6 +72,9 @@ export interface Basis {
   texture: GPUTexture;
   /** Each map's layer in the texture, and its peak. */
   layers: Map<string, { layer: number; scale: number }>;
+  /** How many of its maps (of `maps`) went through the browser's own conversion, at 8 bits: their colour's only near. */
+  copied: number;
+  maps: number;
   destroy(): void;
 }
 
@@ -204,6 +209,21 @@ const PLANAR: Record<string, { bits: number; nv12: boolean }> = {
   NV12: { bits: 8, nv12: true },
 };
 
+// Whether this browser's WebGPU copies from a VideoFrame itself (Chrome's does; Firefox's
+// only from an image): found out from the first one it's given.
+let copiesFrames = true;
+
+/** A frame as an image the browser can copy from: an ImageBitmap, or (where it won't make one of a frame) a canvas it's drawn on. */
+async function imageOf(f: VideoFrame, w: number, h: number): Promise<ImageBitmap | OffscreenCanvas> {
+  try {
+    return await createImageBitmap(f);
+  } catch {
+    const canvas = new OffscreenCanvas(w, h);
+    canvas.getContext("2d")!.drawImage(f, 0, 0, w, h);
+    return canvas;
+  }
+}
+
 /** Puts frames into a staging texture: by their planes where they can be read, else by the browser's copy. */
 function makeStaging(device: GPUDevice, w: number, h: number, format: "rgba16float" | "rgba8unorm") {
   const staging = device.createTexture({
@@ -254,7 +274,24 @@ function makeStaging(device: GPUDevice, w: number, h: number, format: "rgba16flo
       const fmt = f.format && PLANAR[f.format] ? f.format : null;
       if (!fmt) {
         copied++;
-        device.queue.copyExternalImageToTexture({ source: f }, { texture: staging, colorSpace: "srgb", premultipliedAlpha: false }, [w, h]);
+        const into = { texture: staging, colorSpace: "srgb", premultipliedAlpha: false } as const;
+        let done = false;
+        if (copiesFrames) {
+          try {
+            device.queue.copyExternalImageToTexture({ source: f }, into, [w, h]);
+            done = true;
+          } catch (err) {
+            // Not a source it takes (Firefox): an image of it, from now on.
+            if (!(err instanceof TypeError)) throw err;
+            copiesFrames = false;
+          }
+        }
+        if (!done) {
+          const image = await imageOf(f, w, h);
+          // From here to the submit runs without a break, as below.
+          device.queue.copyExternalImageToTexture({ source: image }, into, [w, h]);
+          if (image instanceof ImageBitmap) image.close();
+        }
         const enc = device.createCommandEncoder();
         then(enc);
         device.queue.submit([enc.finish()]);
@@ -411,7 +448,7 @@ export async function loadBasis(
     for (const x of extra) x.destroy();
   }
   if (stage.copied > 0) console.warn(`streetview: ${stage.copied} of ${count} maps went through the browser's own colour conversion (${e.codec}, ${hw})`);
-  return { width: t.width, height: t.height, texture, layers, destroy: () => texture.destroy() };
+  return { width: t.width, height: t.height, texture, layers, copied: stage.copied, maps: count, destroy: () => texture.destroy() };
 }
 
 const pipelines = new WeakMap<GPUDevice, GPUComputePipeline>();

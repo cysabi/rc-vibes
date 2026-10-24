@@ -26,6 +26,8 @@ export function StreetView({ id, onClose }: { id: string; onClose: () => void })
   const known = views.data?.some((v) => v.id === id);
   const [status, setStatus] = useState("Loading the photographs…");
   const [error, setError] = useState<string | null>(null);
+  // Whether what's shown went through the browser's own 8-bit conversion (basis.ts): its colour's only near.
+  const [rough, setRough] = useState(false);
   const [ev, setEv] = useState(0);
   const evRef = useRef(ev);
   evRef.current = ev;
@@ -93,7 +95,10 @@ export function StreetView({ id, onClose }: { id: string; onClose: () => void })
         const basis = still && settled ? settled : liveBasis;
         if (!drawn || drawn.basis !== basis || drawn.ev !== evRef.current) {
           made.draw(basis, weights, m.gamma, evRef.current);
-          if (drawn?.basis !== basis) setStatus(label(basis));
+          if (drawn?.basis !== basis) {
+            setStatus(label(basis));
+            setRough(basis.copied > 0);
+          }
           drawn = { basis, ev: evRef.current };
         }
         raf = requestAnimationFrame(loop);
@@ -140,11 +145,16 @@ export function StreetView({ id, onClose }: { id: string; onClose: () => void })
         </button>
       </div>
       <div className="streetview-bottom">
-        {error || (views.data && !known) ? (
-          <p className="map-note bad">{error ?? "There's no camera by that name."}</p>
-        ) : (
-          <p className="map-note mono">{status}</p>
-        )}
+        <div className="streetview-notes">
+          {error || (views.data && !known) ? (
+            <p className="map-note bad">{error ?? "There's no camera by that name."}</p>
+          ) : (
+            <p className="map-note mono">{status}</p>
+          )}
+          {rough && !error && (
+            <p className="map-note warn">Colours are approximate here: this browser only hands over the photographs in 8 bits, so the darks can look off.</p>
+          )}
+        </div>
         <label className="streetview-exposure map-note">
           Exposure
           <input type="range" min={-4} max={4} step={0.1} value={ev} onChange={(e) => setEv(Number(e.target.value))} />
