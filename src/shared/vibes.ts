@@ -1,7 +1,6 @@
 // Types for vibes' own API (/api/*), shared by the server and the browser.
 
-import type { Channels, Coords, LightsResponse, RailSpot, RoomTemplate, ShaderState } from "./arclamp.ts";
-import type { Changes, ShaderParams } from "./params.ts";
+import type { Coords, LightsResponse, RailSpot, RoomTemplate, ShaderState } from "./arclamp.ts";
 import type { RailShape } from "./rails.ts";
 
 export interface Person {
@@ -67,8 +66,8 @@ export interface Shader {
   footprint: number[];
   /** Its script's sha256, in hex, for the preview to fetch it by; null until it's live. */
   scriptHash: string | null;
-  /** Its params (shared/params.ts): what its sketch says it declares, and their values; null for one not put in from a sketch. */
-  params: ShaderParams | null;
+  /** Its params' pool (pools/<pool> in the live tree: shared/live.ts); null for one not put in from a sketch. */
+  pool: string | null;
 }
 
 /**
@@ -103,65 +102,14 @@ export interface Instance {
   at: number;
 }
 
-/** What vibes pushes of the room (over the room socket): the stack of shaders, top first, and the room tone. */
+/** The room as the scene feed makes it (scene-feed.ts), for the live state (shared/live.ts): the stack of shaders, top first, and the room tone. */
 export interface SceneFeed {
   shaders: Shader[];
   roomtone: RoomTemplate | null;
 }
 
-/**
- * One change to the room, in an apply (a browser's pending edits, sent as
- * one): to a shader by its key or, for one being added, by the key of the
- * pending edit that adds it ("+…"), which later changes (in it, or in later
- * applies) can name it by too.
- */
-export type Change =
-  | { op: "roomtone"; lights: Record<string, Channels>; code?: string }
-  | { op: "remove"; key: ShaderKey }
-  | {
-      op: "add";
-      key: string;
-      sketch: string;
-      branch: string;
-      /** The build previewed (or building); without one, its branch's head is built. */
-      build?: string;
-      home: number[];
-      muted: boolean;
-      mask: number[];
-      /** Just above this shader ("" the bottom); on top without one. */
-      above?: ShaderKey;
-    }
-  | { op: "muted"; key: ShaderKey; muted: boolean }
-  | { op: "mask"; key: ShaderKey; mask: number[] }
-  /** A param's values changed: each value with its lights (null back to the default); other lights' kept. */
-  | { op: "params"; key: ShaderKey; name: string; set: Changes }
-  /** The stack in this order, top first. */
-  | { op: "stack"; order: ShaderKey[] };
-
-/**
- * What a browser says over the room socket (/api/scene/ws): an apply; and,
- * first, on a socket to vibes at another address than the page's, its token
- * (ApiToken), in place of a cookie. An apply that's `whole` carries
- * everything the browser has pending (live mode sends one each time that
- * changes, without waiting): it stands for any whole one waiting before it,
- * which are answered as it is.
- */
-export type RoomRequest = { type: "apply"; id: string; changes: Change[]; whole?: boolean } | { type: "auth"; token: string };
-
 /** What a browser says first over the light stream (/api/stream), on a socket to vibes at another address than the page's. */
 export type StreamRequest = { type: "auth"; token: string };
-
-/**
- * What vibes says over it: the scene (as it starts, and as it changes), a
- * ping (every 10 s at least), and each apply's answer: all of it made, or
- * refused at one change (the ones before it made). Either way, the shaders it
- * added, by the keys of the edits that added them.
- */
-export type RoomMessage =
-  | { type: "scene"; feed: SceneFeed }
-  | { type: "ping" }
-  | { type: "applied"; id: string; made: Record<string, ShaderKey> }
-  | { type: "refused"; id: string; at: number; error: string; code: string; made: Record<string, ShaderKey> };
 
 /** The sketch a shader was built from, as its stamp says. */
 export interface ShaderSketch {

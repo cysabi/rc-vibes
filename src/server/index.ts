@@ -17,10 +17,16 @@ import { loadConfig } from "./env.ts";
 import { followEvents } from "./event-stream.ts";
 import { createHealthWatch } from "./health.ts";
 import { createInstances, type Instances } from "./instances.ts";
+import { createLayout } from "./layout.ts";
+import { createLiveState } from "./live.ts";
 import { createParamLinks } from "./params.ts";
+import { createPools } from "./pools.ts";
 import { createSceneFeed } from "./scene-feed.ts";
 import { boxApiRoutes, sketchRoutes } from "./sketches.ts";
 import { createStreamRelay } from "./stream.ts";
+
+// arclamp's lights change only when its lights.json does: they're looked at again this often.
+const LAYOUT_REFRESH_MS = 60_000;
 
 const config = loadConfig();
 const arclamp = createArclamp(config.arclamp.baseUrl, config.arclamp.key);
@@ -39,16 +45,31 @@ const boxes = sketches && runner ? createBoxes(config, sketches, db, runner) : n
 const builds = sketches && runner ? createBuilds(config, sketches, db, runner) : null;
 const proxy = boxes ? createBoxProxy(config, db, boxes) : null;
 
-// The scene as browsers get it, followed as it changes, its footprints from
-// the light stream; arclamp's health, likewise; and sketches put in the room
-// (instances).
+// The live state (shared/live.ts), as every page has it: the scene, the
+// layout and the pools, each changed here, and every change sent on.
+const live = createLiveState();
+// Params, in pools: as the selection's panel has the lights (vibes' edits and all), so a param's for the same lights there and here.
+const pools = createPools({ db, publish: live.publish, lights: async () => (await lights.currentLights()).lights });
+live.replace([["pools", pools.tree()]]);
+// The layout, made again whenever it's changed, and now and then for arclamp's own changes.
+const showLayout = async () => {
+  try {
+    live.layout(await lights.currentLights());
+  } catch {
+    // arclamp's away: next time.
+  }
+};
+void showLayout();
+const layoutTimer = setInterval(() => void showLayout(), LAYOUT_REFRESH_MS);
+layoutTimer.unref();
+const layout = createLayout({ db, arclampLights: lights.arclampLights, currentLights: lights.currentLights, changed: showLayout });
+
+// The scene, followed as it changes, its footprints from the light stream;
+// arclamp's health, likewise; and sketches put in the room (instances).
 let instances: Instances | null = null;
-// Instances' params: each shader linked once (an eval), then a stream from it, taking each change.
+// Pools' streams: each shader linked once (an eval), then a stream from it, taking each change.
 // Only where shaders can reach vibes (VIBES_SHADER_URL; env.ts).
-const params =
-  builds && config.shaderUrl
-    ? createParamLinks({ db, arclamp, secret: config.sessionSecret, url: `${config.shaderUrl}/shader-api/params`, changed: () => feed.poke() })
-    : null;
+const params = builds && config.shaderUrl ? createParamLinks({ pools, arclamp, secret: config.sessionSecret, url: `${config.shaderUrl}/shader-api/params` }) : null;
 const feed = createSceneFeed({
   config,
   db,
@@ -58,6 +79,7 @@ const feed = createSceneFeed({
   instances: () => instances,
   onShaders: (shaders) => params?.scene(shaders),
 });
+feed.subscribe((scene) => live.scene(scene));
 relay.subscribe((frame) => feed.touched(frame));
 // What vibes changes in the scene, it changes through this, so the feed shows it at once.
 const noted = feed.noting(arclamp);
@@ -71,10 +93,8 @@ if (builds) {
     builds,
     lightIds,
     changed: () => feed.poke(),
-    sendParams: (id, name, set) => params?.send(id, name, set),
-    gone: (id) => params?.gone(id),
-    // As the selection's panel has them (vibes' edits and all), so a param's for the same lights there and here.
-    lights: async () => (await lights.currentLights()).lights,
+    pools,
+    gone: (pool) => params?.gone(pool),
   });
 }
 
@@ -82,11 +102,11 @@ const app = new Hono();
 app.onError(handleError);
 app.use("*", csrf({ origin: origins }));
 app.route("/auth", authRoutes(config));
-if (sketches) app.route("/", boxApiRoutes(config, sketches, db, lights));
+if (sketches) app.route("/", boxApiRoutes(config, sketches, db, lights, pools, params));
 if (builds) app.route("/", buildApiRoutes(config, builds));
 if (params) app.route("/", params.routes());
 const sketchApi = sketches && boxes && builds ? sketchRoutes(sketches, db, boxes, builds) : null;
-app.route("/api", apiRoutes({ config, arclamp: noted, db, relay, origins, lights, feed, sketches: sketchApi, instances, health }));
+app.route("/api", apiRoutes({ config, arclamp: noted, db, relay, origins, lights, feed, live, pools, layout, sketches: sketchApi, instances, health }));
 if (config.production) {
   // The built files' dates are Nix's (1970), which browsers take to mean the
   // page is fresh for years: a cached page then loads without the network
@@ -136,6 +156,8 @@ function shutdown() {
   relay.stop();
   feed.stop();
   params?.stop();
+  pools.stop();
+  clearInterval(layoutTimer);
   health.stop();
   boxes?.stop();
   builds?.stop();

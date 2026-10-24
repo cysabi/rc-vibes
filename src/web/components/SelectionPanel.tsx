@@ -37,7 +37,7 @@ import { baseType, isBinary, isOn, lemtoneOf, requestedOf } from "../../shared/f
 import { colorName, lemtoneCode, lumensText } from "../../shared/lemtone.ts";
 import { tagLabel } from "../../shared/tags.ts";
 
-import { useBranchHead, useLights, useStatus } from "../api.ts";
+import { useBranchHead, useStatus } from "../api.ts";
 import {
   changeable,
   drafts,
@@ -59,7 +59,7 @@ import {
 import { ChevronUpIcon, CloseIcon, GripIcon, MoreIcon, PlusIcon } from "../icons.tsx";
 import { useFrames } from "../live.ts";
 import { useNarrow } from "../narrow.ts";
-import { useScene, type Scene } from "../scene.ts";
+import { useLights, useScene, type Scene } from "../scene.ts";
 import { commitName, listOf, ordinal } from "../words.ts";
 import { AddSketch } from "./AddSketch.tsx";
 import { Reveal } from "./Reveal.tsx";
@@ -67,7 +67,7 @@ import { RoomToneEditor } from "./RoomToneEditor.tsx";
 import { AddingBody, AddingTitle, ComingBody, ComingTitle, ShaderBody, ShaderTitle } from "./ShaderPanel.tsx";
 import { paramRowsOf, ShaderParams } from "./ShaderParams.tsx";
 
-const NO_SCENE: Scene = { shaders: [], roomtone: null };
+const NO_SCENE: Scene = { shaders: [], roomtone: null, pools: {} };
 
 const KINDS: Record<string, { one: string; many: string }> = {
   br30: { one: "color bulb", many: "color bulbs" },

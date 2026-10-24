@@ -2,26 +2,30 @@
 // for a shader put in from a sketch in vibes, or rclamp-<id> for one vibes
 // only knows by arclamp's id; and, from whoever's adding it, the key of their
 // pending edit that put it in ("+…"). The browser only ever has keys, and
-// changes shaders by them here (by route, or in an apply: apply.ts); which
-// shader in arclamp a key is, only the server knows. Any shader can be muted, masked, moved or taken out, however it was
-// put in. One not in the room yet (an instance, building) keeps what's wanted
-// of it, and goes in that way (instances.ts).
+// changes shaders by them here (by route, or in an update: updates.ts); which
+// shader in arclamp a key is, only the server knows. Any shader can be muted,
+// masked, moved or taken out, however it was put in. One not in the room yet
+// (an instance, building) keeps what's wanted of it, and goes in that way
+// (instances.ts). An instance's params are in its pool (pools.ts).
 
 import { zValidator } from "@hono/zod-validator";
 import { Hono, type Context } from "hono";
 import { z } from "zod";
 import type { ShaderDescriptor } from "../shared/arclamp.ts";
-import { PARAM_NAME, type Changes } from "../shared/params.ts";
-import type { Person } from "../shared/vibes.ts";
+import { cleanValue, PARAM_NAME, type Changes } from "../shared/params.ts";
+import type { Me, Person } from "../shared/vibes.ts";
 import type { Arclamp } from "./arclamp.ts";
 import type { AuthEnv } from "./auth.ts";
 import type { Db, InstanceRow } from "./db.ts";
 import type { Config } from "./env.ts";
 import type { Instances } from "./instances.ts";
 import { changesBody } from "./params.ts";
+import type { Pools } from "./pools.ts";
 import { sketchOf } from "./stamp.ts";
 
 const RCLAMP = /^rclamp-([1-9][0-9]{0,14})$/;
+// A run of changes to one param (a slider dragged) logs as one entry.
+const PARAM_LOG_WINDOW_MS = 15_000;
 
 /** The key of a shader vibes only knows by arclamp's id. */
 export const rclampKey = (id: number) => `rclamp-${id}`;
@@ -43,10 +47,10 @@ export function shaderOfKey(db: Pick<Db, "instance" | "instanceOfShader">, key: 
 
 /** A change vibes won't make, and why: as an HTTP status, a code and a message. */
 export class Refused extends Error {
-  readonly status: 400 | 404 | 409 | 410 | 503;
+  readonly status: 400 | 403 | 404 | 409 | 410 | 503;
   readonly code: string;
 
-  constructor(status: 400 | 404 | 409 | 410 | 503, code: string, message: string) {
+  constructor(status: 400 | 403 | 404 | 409 | 410 | 503, code: string, message: string) {
     super(message);
     this.status = status;
     this.code = code;
@@ -61,10 +65,12 @@ export interface ShaderDeps {
   db: Db;
   /** Sketches in the room (null with sketches off). */
   instances: Instances | null;
+  /** Params, in their pools. */
+  pools?: Pools | null;
 }
 
 /** Changes to shaders, by key, as someone makes them: each refuses (Refused) what it won't do. */
-export function createShaders({ config, arclamp, db, instances }: ShaderDeps) {
+export function createShaders({ config, arclamp, db, instances, pools = null }: ShaderDeps) {
   /** A shader's name, for the history: its sketch's, or "Shader #<n>". */
   const nameOf = (d: ShaderDescriptor, instance: InstanceRow | null) =>
     (instance ? db.sketch(instance.sketch_id)?.name : sketchOf(d.script, config.signingKey, db)?.name) ?? `Shader #${d.id}`;
@@ -144,13 +150,45 @@ export function createShaders({ config, arclamp, db, instances }: ShaderDeps) {
       db.log({ user, action: "shader.delete", shaderId: there.d.id, shaderName: nameOf(there.d, there.instance) });
     },
 
-    /** A param of a shader put in from a sketch: its values changed (each value with its lights), and sent to it. Only an instance has params. */
+    /**
+     * A param of a shader put in from a sketch: its values changed (each value
+     * with its lights; null back to the default), in its pool, and so sent to
+     * it. Only an instance has params; one its sketch doesn't say it declares
+     * (once it's said what it does) is gone.
+     */
     async setParam(key: string, name: string, set: Changes, user: Person) {
       const it = resolve(key, user);
       if (!it) throw new Refused(404, "not_found", "no such shader");
-      if (!it.instance || !instances) throw new Refused(404, "no_param", "it wasn't put in from a sketch, so it has no params");
-      const made = await instances.setParam(it.instance.id, name, set, user);
-      if ("refused" in made) throw new Refused(made.status, made.code, made.refused);
+      if (!it.instance || !pools) throw new Refused(404, "no_param", "it wasn't put in from a sketch, so it has no params");
+      const declared = pools.get(it.instance.pool_id)?.declared;
+      const spec = declared?.find((p) => p.name === name);
+      if (!spec) {
+        throw new Refused(404, "no_param", declared ? `its sketch has no param ${name}` : "it hasn't said what params it has yet");
+      }
+      for (const [v] of set) if (v !== null && cleanValue(spec, v) === null) throw new Refused(400, "bad_value", `${spec.label} is a ${spec.kind}`);
+      const byLight = set.flatMap(([v, ids]) => ids.map((id): [number, typeof v] => [id, v]));
+      // None of the lights it's for, or nothing different: nothing to note.
+      if (!(await pools.set(it.instance.pool_id, name, byLight, `user:${user.id}`))) return;
+      db.logCoalesced(
+        {
+          user,
+          action: "shader.param",
+          ...(it.arclampId !== null ? { shaderId: it.arclampId } : {}),
+          shaderName: db.sketch(it.instance.sketch_id)?.name ?? null,
+          detail: { instance: it.instance.id, param: name, lights: byLight.length },
+        },
+        PARAM_LOG_WINDOW_MS,
+        (last) => last?.instance === it.instance!.id && last?.param === name,
+      );
+    },
+
+    /** An instance's home moved: what it can light (its mask follows). */
+    async setHome(key: string, home: number[], user: Me) {
+      const it = resolve(key, user);
+      if (!it) throw new Refused(404, "not_found", "no such shader");
+      if (!it.instance || !instances) throw new Refused(400, "no_home", "it wasn't put in from a sketch, so it has no home");
+      const moved = await instances.setHome(it.instance.id, home, user);
+      if ("refused" in moved) throw new Refused(moved.status, moved.code, moved.refused);
     },
 
     /**

@@ -1,20 +1,21 @@
-// Params in the room: each instance's values (kept with it: instances.ts),
-// and a stream to its shader. The protocol is the library's
-// (packages/vibes/src/wire.ts).
+// Params' streams: each pool's values (pools.ts) to the code running with it.
+// The protocol is the library's (packages/vibes/src/wire.ts).
 //
-// vibes links a shader once in its sandbox's life: an eval in arclamp hands
-// the library where vibes is and a token of the instance's. The library then
-// opens POST /shader-api/params, saying what its sketch declares, and vibes
+// vibes links a shader in the room once in its sandbox's life: an eval in
+// arclamp hands the library where vibes is and a token of its instance's
+// pool. The library then opens POST /shader-api/params, saying what its
+// sketch declares (so the pool's declarations are the room's), and vibes
 // answers with every value (state), then each change as it's made (change),
 // and something every 15 s. A new script in the same sandbox keeps the link
 // and opens its own stream; a new sandbox (a respawn) needs linking again.
 // Nothing is lost: within a stream, every change arrives, in order, and a
-// stream that breaks opens again with every value. A shader too slow to read
-// its stream loses the stream, not a change.
+// stream that breaks opens again with every value. Code too slow to read its
+// stream loses the stream, not a change. A sketch's preview, in its box,
+// follows its own pool the same way (a token from /box-api/pools: sketches.ts).
 //
-// The token is the instance's id and its link's number, signed: linking again
-// counts up, so older tokens stop working. It's in arclamp's audit log (with
-// the eval). Whoever can read that can read the instance's values, say what
+// The token is the pool's id and its link's number, signed: linking again
+// counts up, so older tokens stop working. A shader's is in arclamp's audit
+// log (with the eval). Whoever can read that can read its values, say what
 // its sketch declares (which changes which controls show, not the values
 // kept), or take its stream over, cutting its shader off until vibes links it
 // again.
@@ -23,9 +24,9 @@ import { createHmac, timingSafeEqual } from "node:crypto";
 import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
-import { checkSpec, MAX_PARAMS, PROTOCOL, type Changes, type ColorValue, type EndEvent, type ParamSpec } from "../shared/params.ts";
+import { checkSpec, MAX_PARAMS, PROTOCOL, type ColorValue, type EndEvent, type ParamSpec } from "../shared/params.ts";
 import type { Arclamp } from "./arclamp.ts";
-import type { Db } from "./db.ts";
+import type { Pools } from "./pools.ts";
 
 const KEEP_ALIVE_MS = 15_000;
 // More than this waiting for a shader to read, and its stream goes.
@@ -70,10 +71,10 @@ export function declarationsOf(raw: unknown): { specs: ParamSpec[]; dropped: str
 
 const mac = (secret: string, id: string, link: number) => createHmac("sha256", secret).update(`params:${id}:${link}`).digest("base64url");
 
-/** A shader's token for its instance's params: the instance, which link, signed. */
+/** A token for a pool's stream: the pool, which link, signed. */
 export const linkToken = (secret: string, id: string, link: number) => `${id}.${link}.${mac(secret, id, link)}`;
 
-/** The instance and link a token is for, if it's one vibes made. */
+/** The pool and link a token is for, if it's one vibes made. */
 export function linkOfToken(secret: string, token: string): { id: string; link: number } | null {
   const m = /^([^.]+)\.(\d{1,9})\.([A-Za-z0-9_-]+)$/.exec(token);
   if (!m) return null;
@@ -137,9 +138,10 @@ function eventStream(onClose: () => void): { response: Response; stream: Stream 
   return { response, stream };
 }
 
-/** A shader in the room, as the scene has it, for an instance. */
+/** A shader in the room, as the scene has it, for an instance: with its pool. */
 export interface SeenShader {
   instance: string;
+  pool: string;
   shaderId: number;
   /** Running now (not starting, failing, or restarting). */
   running: boolean;
@@ -149,14 +151,12 @@ export interface SeenShader {
 }
 
 export interface LinkDeps {
-  db: Pick<Db, "instance" | "updateInstance">;
+  pools: Pools;
   arclamp: Pick<Arclamp, "evalShader">;
   /** What tokens are signed with. */
   secret: string;
   /** Where shaders reach vibes' stream (…/shader-api/params). */
   url: string;
-  /** Told when what an instance declares changes (the scene feed shows it). */
-  changed?: () => void;
   now?: () => number;
 }
 
@@ -164,14 +164,15 @@ export interface LinkDeps {
 // changed is the new one's, not the old's.
 const STALE_SLACK_MS = 2_000;
 
-export function createParamLinks({ db, arclamp, secret, url, changed = () => {}, now = Date.now }: LinkDeps) {
+export function createParamLinks({ pools, arclamp, secret, url, now = Date.now }: LinkDeps) {
+  // Each pool's stream: one at a time.
   const streams = new Map<string, Stream>();
-  // When each instance's stream opened, and when the scene last said its shader's sandbox or script changed.
+  // When each pool's stream opened, and when the scene last said its shader's sandbox or script changed.
   const opened = new Map<string, number>();
   const moved = new Map<string, number>();
-  // Each instance's shader, as the scene last had it.
+  // Each pool's shader in the room, as the scene last had it.
   let seen = new Map<string, SeenShader>();
-  // The last link of each instance's shader (or the last stream's end): for
+  // The last link of each pool's shader (or the last stream's end): for
   // which shader, sandbox and script (key), when, and how long until trying again.
   const tries = new Map<string, { key: string; at: number; wait: number; none: boolean }>();
   const linking = new Set<string>();
@@ -180,36 +181,25 @@ export function createParamLinks({ db, arclamp, secret, url, changed = () => {},
 
   const keyOf = (s: SeenShader) => `${s.shaderId}:${s.respawns}:${s.scriptHash}`;
 
-  /**
-   * What a shader says its sketch declares, kept. Its values stay as they
-   * are: one that isn't its param's kind now, or is for a light the param
-   * isn't for, is passed over wherever it's read, and gone at its next change.
-   */
-  function declare(id: string, specs: ParamSpec[]) {
-    const inst = db.instance(id);
-    if (!inst || JSON.stringify(inst.declared) === JSON.stringify(specs)) return;
-    db.updateInstance(id, { declared: specs });
-    changed();
-  }
+  // Each change to a pool's values, to the code running with it.
+  const unlisten = pools.onChange((pool, name, set) => streams.get(pool)?.write(eventText("change", { name, set })));
 
-  /** Whether an instance's stream is from before its sandbox or script changed, with none since: dead, if still open on this end. */
-  function stale(id: string): boolean {
-    const at = moved.get(id);
-    return at !== undefined && (opened.get(id) ?? 0) < at - STALE_SLACK_MS && now() - at >= LINK_WAIT_MS;
+  /** Whether a pool's stream is from before its shader's sandbox or script changed, with none since: dead, if still open on this end. */
+  function stale(pool: string): boolean {
+    const at = moved.get(pool);
+    return at !== undefined && (opened.get(pool) ?? 0) < at - STALE_SLACK_MS && now() - at >= LINK_WAIT_MS;
   }
 
   async function link(s: SeenShader, key: string) {
-    const prev = tries.get(s.instance);
+    const prev = tries.get(s.pool);
     const again = prev?.key === key;
-    linking.add(s.instance);
+    linking.add(s.pool);
     let outcome: "linked" | "none" | "failed" = "failed";
     try {
-      const inst = db.instance(s.instance);
-      if (!inst) return;
-      const n = inst.link_epoch + 1;
-      db.updateInstance(s.instance, { link_epoch: n });
+      if (!pools.get(s.pool)) return;
+      const n = pools.relink(s.pool);
       // Generated, with JSON for data: nothing anyone typed is ever run.
-      const code = `globalThis.__vibes?.connect(${JSON.stringify({ v: PROTOCOL, url, token: linkToken(secret, s.instance, n) })})`;
+      const code = `globalThis.__vibes?.connect(${JSON.stringify({ v: PROTOCOL, url, token: linkToken(secret, s.pool, n) })})`;
       const r = await arclamp.evalShader(s.shaderId, code);
       if (r.ok && r.result === "undefined") outcome = "none";
       else if (r.ok) {
@@ -221,20 +211,20 @@ export function createParamLinks({ db, arclamp, secret, url, changed = () => {},
       // Not reachable, its sandbox not up, or busy: next time.
       if ((err as { status?: number }).status !== 409) console.warn(`params: couldn't link shader ${s.shaderId}: ${(err as Error).message}`);
     } finally {
-      linking.delete(s.instance);
+      linking.delete(s.pool);
     }
     // No library to link (or one too old): not again, for this sandbox and script.
     const first = outcome === "linked" ? LINK_WAIT_MS : FIRST_RETRY_MS;
-    tries.set(s.instance, { key, at: now(), wait: again ? Math.min(MOST_RETRY_MS, prev!.wait * 2) : first, none: outcome === "none" });
+    tries.set(s.pool, { key, at: now(), wait: again ? Math.min(MOST_RETRY_MS, prev!.wait * 2) : first, none: outcome === "none" });
   }
 
   /** Each running shader with no (live) stream linked, unless it's been tried for this sandbox and script lately (or has no library). */
   function check() {
     if (now() - began < LINK_WAIT_MS) return;
     for (const s of seen.values()) {
-      if (!s.running || linking.has(s.instance) || (streams.has(s.instance) && !stale(s.instance))) continue;
+      if (!s.running || linking.has(s.pool) || (streams.has(s.pool) && !stale(s.pool))) continue;
       const key = keyOf(s);
-      const t = tries.get(s.instance);
+      const t = tries.get(s.pool);
       if (t && t.key === key && (t.none || now() - t.at < t.wait)) continue;
       void link(s, key);
     }
@@ -252,29 +242,27 @@ export function createParamLinks({ db, arclamp, secret, url, changed = () => {},
     /** The shaders in the room that are instances': linked as they need to be. */
     scene(shaders: SeenShader[]) {
       for (const s of shaders) {
-        const was = seen.get(s.instance);
-        if (was && keyOf(was) !== keyOf(s)) moved.set(s.instance, now());
+        const was = seen.get(s.pool);
+        if (was && keyOf(was) !== keyOf(s)) moved.set(s.pool, now());
       }
-      seen = new Map(shaders.map((s) => [s.instance, s]));
+      seen = new Map(shaders.map((s) => [s.pool, s]));
       check();
     },
 
-    /** A change to an instance's values, to its shader. */
-    send(id: string, name: string, set: Changes) {
-      streams.get(id)?.write(eventText("change", { name, set }));
+    /** A token for a pool's stream that isn't a shader's (a preview's): a new link, so any before it stop working. */
+    token: (pool: string) => linkToken(secret, pool, pools.relink(pool)),
+
+    /** A pool gone (its instance with it): its stream ended, and its link no good. */
+    gone(pool: string) {
+      streams.get(pool)?.end("gone");
+      seen.delete(pool);
+      tries.delete(pool);
+      opened.delete(pool);
+      moved.delete(pool);
     },
 
-    /** An instance gone: its stream ended, and its link no good. */
-    gone(id: string) {
-      streams.get(id)?.end("gone");
-      seen.delete(id);
-      tries.delete(id);
-      opened.delete(id);
-      moved.delete(id);
-    },
-
-    /** Whether an instance's shader has its stream open. */
-    linked: (id: string) => streams.has(id),
+    /** Whether a pool's code has its stream open. */
+    linked: (pool: string) => streams.has(pool),
 
     routes() {
       return new Hono().post(
@@ -282,8 +270,8 @@ export function createParamLinks({ db, arclamp, secret, url, changed = () => {},
         bodyLimit({ maxSize: HELLO_LIMIT, onError: (c) => c.text("that's more than params", 413) }),
         async (c) => {
           const who = bearer(c.req.header("authorization"));
-          const inst = who ? db.instance(who.id) : undefined;
-          if (!who || !inst || inst.link_epoch !== who.link) return c.text("that link is over", 401);
+          const p = who ? pools.get(who.id) : undefined;
+          if (!who || !p || p.link_epoch !== who.link) return c.text("that link is over", 401);
           let hello: { v?: unknown; params?: unknown };
           try {
             hello = await c.req.json();
@@ -292,21 +280,22 @@ export function createParamLinks({ db, arclamp, secret, url, changed = () => {},
           }
           if (hello?.v !== PROTOCOL) return c.text(`vibes speaks params protocol ${PROTOCOL}`, 400);
           const { specs, dropped } = declarationsOf(hello.params);
-          for (const why of dropped) console.warn(`params: instance ${inst.id}: ${why}`);
-          declare(inst.id, specs);
-          // One stream an instance: this one takes over.
-          streams.get(inst.id)?.end("replaced");
+          for (const why of dropped) console.warn(`params: pool ${p.id}: ${why}`);
+          // Its code says what it declares, as its owner.
+          pools.declare(p.id, specs, p.owner);
+          // One stream a pool: this one takes over.
+          streams.get(p.id)?.end("replaced");
           const { response, stream } = eventStream(() => {
-            if (streams.get(inst.id) !== stream) return;
-            streams.delete(inst.id);
+            if (streams.get(p.id) !== stream) return;
+            streams.delete(p.id);
             // It'll likely open again by itself (a new script, or a blip): give it the time to.
-            const s = seen.get(inst.id);
-            if (s) tries.set(inst.id, { key: keyOf(s), at: now(), wait: LINK_WAIT_MS, none: false });
+            const s = seen.get(p.id);
+            if (s) tries.set(p.id, { key: keyOf(s), at: now(), wait: LINK_WAIT_MS, none: false });
           });
-          streams.set(inst.id, stream);
-          opened.set(inst.id, now());
-          tries.delete(inst.id);
-          stream.write(eventText("state", { v: PROTOCOL, values: db.instance(inst.id)?.params ?? {} }));
+          streams.set(p.id, stream);
+          opened.set(p.id, now());
+          tries.delete(p.id);
+          stream.write(eventText("state", { v: PROTOCOL, values: pools.table(p.id) }));
           return response;
         },
       );
@@ -314,6 +303,7 @@ export function createParamLinks({ db, arclamp, secret, url, changed = () => {},
 
     stop() {
       clearInterval(timer);
+      unlisten();
       for (const s of streams.values()) s.end();
     },
   };

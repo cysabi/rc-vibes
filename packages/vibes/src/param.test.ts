@@ -169,6 +169,33 @@ function fakeVibes() {
 
 const settle = () => new Promise<void>((r) => setTimeout(r, 0));
 
+describe("a preview's hot reloads", () => {
+  it("drops what a module run again no longer declares, once it's run", async () => {
+    const { param, host } = await load();
+    param("speed", 1);
+    param("tint", "#f80");
+    // This file is the module that declared them; run again, it declares speed only.
+    host.retire!(["/param.test.ts"]);
+    expect(host.params().map((p) => p.name)).toEqual(["speed", "tint"]);
+    param("speed", 2);
+    host.settle!();
+    expect(host.params().map((p) => p.name)).toEqual(["speed"]);
+    expect(host.params()[0]!.default).toBe(2);
+  });
+
+  it("keeps what other modules declared, and everything if it all runs again and declares it", async () => {
+    const { param, host } = await load();
+    param("speed", 1);
+    host.retire!(["/some-other-module.ts"]);
+    host.settle!();
+    expect(host.params().map((p) => p.name)).toEqual(["speed"]);
+    host.retire!("*");
+    param("speed", 1);
+    host.settle!();
+    expect(host.params().map((p) => p.name)).toEqual(["speed"]);
+  });
+});
+
 describe("the stream to vibes", () => {
   it("opens when vibes links the sandbox, saying what's declared, and takes the events in order", async () => {
     const vibes = fakeVibes();

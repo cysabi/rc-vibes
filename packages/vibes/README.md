@@ -290,9 +290,11 @@ Every light, if not given; a color is only ever for color lights. vibes only
 offers a param for the lights it's for, and any other light reads its
 default.
 
-vibes learns what a sketch declares from the sketch itself, as it runs in the
-room, and streams it each value as it changes; nothing is needed in the
-sketch beyond the declaration.
+vibes learns what a sketch declares from the sketch itself, as it runs (in the
+room; in vibes' preview of it, before it's in; in the editor's preview), and
+streams it each value as it changes; nothing is needed in the sketch beyond
+the declaration. A param you rename or delete goes from the editor's knobs as
+you save, though the preview carries on without reloading.
 
 ## Without sketch()
 

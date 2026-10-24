@@ -1,12 +1,17 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
+import type { LightInfo } from "../shared/arclamp.ts";
+import type { Op } from "../shared/live.ts";
 import type { ParamSpec } from "../shared/params.ts";
 import { ArclampError } from "./arclamp.ts";
 import { openDb, type Db } from "./db.ts";
 import { createParamLinks, declarationsOf, linkOfToken, linkToken, type ParamLinks, type SeenShader } from "./params.ts";
+import { createPools, type Pools } from "./pools.ts";
 
 const SECRET = "s".repeat(32);
 const speed: ParamSpec = { kind: "number", name: "speed", label: "Speed", lights: {}, default: 7, min: 0, max: 20, step: 0.1 };
 const on: ParamSpec = { kind: "toggle", name: "on", label: "On", lights: { kinds: ["switch"] }, default: false };
+const light = (id: number, channels: string[]): LightInfo => ({ id, type: "br30", tags: [], coords: null, rail: null, channels });
+const LIGHTS = [light(1, ["a", "b", "brightness", "fidelity"]), light(2, ["a", "b", "brightness", "fidelity"]), light(3, ["on"])];
 
 describe("what a shader says its sketch declares", () => {
   it("keeps the params that read as params, once each, and says why it dropped the rest", () => {
@@ -29,12 +34,12 @@ describe("what a shader says its sketch declares", () => {
 });
 
 describe("a link's token", () => {
-  it("says which instance and link it's for, if vibes made it", () => {
-    const token = linkToken(SECRET, "i1", 3);
-    expect(linkOfToken(SECRET, token)).toEqual({ id: "i1", link: 3 });
+  it("says which pool and link it's for, if vibes made it", () => {
+    const token = linkToken(SECRET, "p1", 3);
+    expect(linkOfToken(SECRET, token)).toEqual({ id: "p1", link: 3 });
     expect(linkOfToken(SECRET, token.replace(".3.", ".4."))).toBeNull();
     expect(linkOfToken("t".repeat(32), token)).toBeNull();
-    expect(linkOfToken(SECRET, "i1")).toBeNull();
+    expect(linkOfToken(SECRET, "p1")).toBeNull();
   });
 });
 
@@ -61,26 +66,26 @@ function events(res: Response) {
   };
 }
 
-describe("linking shaders, and their streams", () => {
+describe("linking shaders to their pools, and the pools' streams", () => {
+  const OWNER = "instance:i";
   let db: Db;
+  let pools: Pools;
   let links: ParamLinks;
   let clock: number;
   let evals: { id: number; code: string }[];
   let answer: () => Promise<{ ok: boolean; result?: string; error?: string }>;
-  let changed: number;
+  let published: Op[];
 
   beforeEach(() => {
     db = openDb(":memory:");
-    db.addSketch({ id: "s", name: "Wave", by_id: "u", by_name: "U", at: 0 });
-    db.addBuild({ id: "b", sketch_id: "s", commit_sha: "c".repeat(40), builder: "1", by_id: "u", by_name: "U", at: 0 });
-    db.addInstance({ id: "i", sketch_id: "s", build_id: "b", home: [1, 2, 3], by_id: "u", by_name: "U", at: 0 });
-    db.updateInstance("i", { shader_id: 5, state: "live" });
+    published = [];
+    pools = createPools({ db, publish: (ops) => published.push(...ops), lights: async () => LIGHTS });
+    pools.ensure("p", OWNER);
     clock = 0;
     evals = [];
-    changed = 0;
     answer = async () => ({ ok: true, result: '{"v":1,"params":1}' });
     links = createParamLinks({
-      db,
+      pools,
       arclamp: {
         evalShader: async (id, code) => {
           evals.push({ id, code });
@@ -89,13 +94,15 @@ describe("linking shaders, and their streams", () => {
       },
       secret: SECRET,
       url: "https://vibes.test/shader-api/params",
-      changed: () => changed++,
       now: () => clock,
     });
   });
-  afterEach(() => links.stop());
+  afterEach(() => {
+    links.stop();
+    pools.stop();
+  });
 
-  const shader = (more: Partial<SeenShader> = {}): SeenShader => ({ instance: "i", shaderId: 5, running: true, respawns: 0, scriptHash: "h", ...more });
+  const shader = (more: Partial<SeenShader> = {}): SeenShader => ({ instance: "i", pool: "p", shaderId: 5, running: true, respawns: 0, scriptHash: "h", ...more });
   const settle = () => new Promise((r) => setTimeout(r, 0));
   const connect = (token: string, body: unknown = { v: 1, params: [speed, on] }) =>
     links.routes().request("/shader-api/params", { method: "POST", headers: { authorization: `Bearer ${token}`, "content-type": "application/json" }, body: JSON.stringify(body) });
@@ -109,8 +116,8 @@ describe("linking shaders, and their streams", () => {
     await settle();
     expect(evals).toHaveLength(1);
     expect(evals[0]!.id).toBe(5);
-    expect(evals[0]!.code).toBe(`globalThis.__vibes?.connect(${JSON.stringify({ v: 1, url: "https://vibes.test/shader-api/params", token: linkToken(SECRET, "i", 1) })})`);
-    expect(db.instance("i")!.link_epoch).toBe(1);
+    expect(evals[0]!.code).toBe(`globalThis.__vibes?.connect(${JSON.stringify({ v: 1, url: "https://vibes.test/shader-api/params", token: linkToken(SECRET, "p", 1) })})`);
+    expect(pools.get("p")!.link_epoch).toBe(1);
   });
 
   it("doesn't link one that isn't running, or one that has its stream", async () => {
@@ -118,8 +125,7 @@ describe("linking shaders, and their streams", () => {
     links.scene([shader({ running: false })]);
     await settle();
     expect(evals).toEqual([]);
-    db.updateInstance("i", { link_epoch: 1 });
-    await connect(linkToken(SECRET, "i", 1));
+    await connect(linkToken(SECRET, "p", pools.relink("p")));
     links.scene([shader()]);
     await settle();
     expect(evals).toEqual([]);
@@ -171,57 +177,86 @@ describe("linking shaders, and their streams", () => {
     links.scene([shader()]);
     await settle();
     expect(evals).toHaveLength(2);
-    expect(db.instance("i")!.link_epoch).toBe(2);
+    expect(pools.get("p")!.link_epoch).toBe(2);
   });
 
-  it("turns down a stream without the instance's last link's token, or in another protocol", async () => {
-    db.updateInstance("i", { link_epoch: 2 });
+  it("doesn't link a shader whose pool isn't there", async () => {
+    clock = 10_000;
+    links.scene([shader({ pool: "gone" })]);
+    await settle();
+    expect(evals).toEqual([]);
+  });
+
+  it("turns down a stream without the pool's last link's token, or in another protocol", async () => {
+    pools.relink("p");
+    pools.relink("p");
     expect((await connect("nope")).status).toBe(401);
-    expect((await connect(linkToken(SECRET, "i", 1))).status).toBe(401);
+    expect((await connect(linkToken(SECRET, "p", 1))).status).toBe(401);
     expect((await connect(linkToken(SECRET, "gone", 2))).status).toBe(401);
-    expect((await connect(linkToken(SECRET, "i", 2), { v: 2, params: [] })).status).toBe(400);
+    expect((await connect(linkToken(SECRET, "p", 2), { v: 2, params: [] })).status).toBe(400);
   });
 
-  it("keeps what's declared, sends every value first, then each change in order, and ends it when the instance goes", async () => {
-    db.updateInstance("i", { link_epoch: 1, params: { speed: [[9, [1]]] } });
-    const res = await connect(linkToken(SECRET, "i", 1));
+  it("keeps what's declared (as the pool's owner), sends every value first, then each change in order, and ends it when the pool goes", async () => {
+    await pools.set("p", "speed", [[1, 9]], OWNER);
+    const res = await connect(linkToken(SECRET, "p", pools.relink("p")));
     expect(res.status).toBe(200);
     expect(res.headers.get("content-type")).toMatch(/^text\/event-stream/);
-    expect(db.instance("i")!.declared).toEqual([speed, on]);
-    expect(changed).toBe(1);
-    expect(links.linked("i")).toBe(true);
+    expect(pools.get("p")!.declared).toEqual([speed, on]);
+    expect(pools.get("p")!.owner).toBe(OWNER);
+    expect(published).toContainEqual(["pools/p/declared", [speed, on]]);
+    expect(links.linked("p")).toBe(true);
     const next = events(res);
     expect(await next()).toEqual({ event: "state", data: { v: 1, values: { speed: [[9, [1]]] } } });
-    links.send("i", "speed", [[3, [2]]]);
-    links.send("i", "speed", [[null, [1]]]);
+    await pools.set("p", "speed", [[2, 3]], "user:u");
+    await pools.set("p", "speed", [[1, null]], "user:u");
     expect(await next()).toEqual({ event: "change", data: { name: "speed", set: [[3, [2]]] } });
     expect(await next()).toEqual({ event: "change", data: { name: "speed", set: [[null, [1]]] } });
-    links.gone("i");
+    links.gone("p");
     expect(await next()).toEqual({ event: "end", data: { reason: "gone" } });
     expect(await next()).toBeNull();
-    expect(links.linked("i")).toBe(false);
+    expect(links.linked("p")).toBe(false);
   });
 
-  it("has one stream an instance: a new one takes over, and the old is told", async () => {
-    db.updateInstance("i", { link_epoch: 1 });
-    const first = events(await connect(linkToken(SECRET, "i", 1)));
+  it("has one stream a pool: a new one takes over, and the old is told", async () => {
+    const token = linkToken(SECRET, "p", pools.relink("p"));
+    const first = events(await connect(token));
     await first();
-    const second = events(await connect(linkToken(SECRET, "i", 1)));
+    const second = events(await connect(token));
     expect(await first()).toEqual({ event: "end", data: { reason: "replaced" } });
     expect(await first()).toBeNull();
     await second();
-    links.send("i", "speed", [[1, [1]]]);
+    await pools.set("p", "speed", [[1, 1]], "user:u");
     expect(await second()).toEqual({ event: "change", data: { name: "speed", set: [[1, [1]]] } });
   });
 
+  it("only tells a pool's stream of its own pool's changes", async () => {
+    pools.ensure("q", "instance:j");
+    const next = events(await connect(linkToken(SECRET, "p", pools.relink("p"))));
+    await next();
+    await pools.set("q", "speed", [[1, 4]], "user:u");
+    await pools.set("p", "speed", [[1, 5]], "user:u");
+    expect(await next()).toEqual({ event: "change", data: { name: "speed", set: [[5, [1]]] } });
+  });
+
   it("keeps the values as they are when what's declared changes: saying what it declares can't take any away", async () => {
-    const values = { speed: [[9, [1, 3]]], on: [[true, [3]]], old: [[1, [1]]] } as const;
-    db.updateInstance("i", { link_epoch: 1, declared: [speed, on], params: structuredClone(values) as never });
+    await pools.set("p", "speed", [[1, 9], [3, 9]], OWNER);
+    await pools.set("p", "on", [[3, true]], OWNER);
+    await pools.set("p", "old", [[1, 1]], OWNER);
+    const values = structuredClone(pools.get("p")!.values);
+    pools.declare("p", [speed, on], OWNER);
     const narrowed: ParamSpec = { ...speed, lights: { kinds: ["color"] } };
     const nowNumber: ParamSpec = { kind: "number", name: "on", label: "On", lights: {}, default: 0, min: 0, max: 1, step: 0.1 };
-    await connect(linkToken(SECRET, "i", 1), { v: 1, params: [narrowed, nowNumber] });
-    expect(db.instance("i")!.declared).toEqual([narrowed, nowNumber]);
-    expect(db.instance("i")!.params).toEqual(values);
+    await connect(linkToken(SECRET, "p", pools.relink("p")), { v: 1, params: [narrowed, nowNumber] });
+    expect(pools.get("p")!.declared).toEqual([narrowed, nowNumber]);
+    expect(pools.get("p")!.values).toEqual(values);
+  });
+
+  it("gives a stream that isn't a shader's (a preview's) a token of a new link, so older ones stop working", async () => {
+    const old = linkToken(SECRET, "p", pools.relink("p"));
+    const token = links.token("p");
+    expect(token).toBe(linkToken(SECRET, "p", 2));
+    expect((await connect(old)).status).toBe(401);
+    expect((await connect(token)).status).toBe(200);
   });
 
   it("links again a shader whose sandbox or script changed and whose stream didn't come back: the one it has is dead", async () => {
@@ -229,7 +264,7 @@ describe("linking shaders, and their streams", () => {
     links.scene([shader()]);
     await settle();
     expect(evals).toHaveLength(1);
-    await connect(linkToken(SECRET, "i", 1));
+    await connect(linkToken(SECRET, "p", 1));
     // A while later its sandbox starts over; the old stream's still open on this end.
     clock += 5_000;
     links.scene([shader({ respawns: 1 })]);
@@ -243,12 +278,12 @@ describe("linking shaders, and their streams", () => {
 
   it("doesn't take a stream that came just as the scene said its script changed for a dead one", async () => {
     clock = 10_000;
-    db.updateInstance("i", { link_epoch: 1 });
-    await connect(linkToken(SECRET, "i", 1));
+    const token = linkToken(SECRET, "p", pools.relink("p"));
+    await connect(token);
     links.scene([shader()]);
     // The new script's stream, a moment before the scene says the script's new.
     clock += 30_000;
-    await connect(linkToken(SECRET, "i", 1));
+    await connect(token);
     clock += 500;
     links.scene([shader({ scriptHash: "h2" })]);
     clock += 60_000;

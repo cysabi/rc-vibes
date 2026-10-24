@@ -41,7 +41,8 @@ import {
   type RailShape,
 } from "../../shared/rails.ts";
 import type { Placement, Spot, TagChange, TypeChange } from "../../shared/vibes.ts";
-import { useChangeLayout, useMoveCamera, useStreetViews, type LayoutChange } from "../api.ts";
+import { useMoveCamera, useStreetViews } from "../api.ts";
+import { useChangeLayout, type LayoutChange } from "../scene.ts";
 import { FLOORS, planExtent, type Floor } from "../floors.ts";
 import { screenGamut, setHdrCanvas, useDisplay, useGamut } from "../display.ts";
 import { CheckIcon, DownloadIcon, FitIcon, MinusIcon, PencilIcon, PlusIcon, RailIcon, TrashIcon, TurnIcon, UndoIcon } from "../icons.tsx";

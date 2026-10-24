@@ -23,16 +23,18 @@
 // preview, with why in the console.
 
 import type { Frame, LightInfo } from "../../shared/arclamp.ts";
-import { withChanges, type ParamSpec, type ParamTable, type ParamValue } from "../../shared/params.ts";
+import { groupsOf, valuesOf, withChanges, type ParamSpec, type ParamTable, type ParamValue } from "../../shared/params.ts";
 import type { FrameSource } from "../live.ts";
 import { baseState, mergeOutput, prevOf, type RoomState } from "../sim.ts";
 // Inline, so it also starts where a page can't load a worker from a URL (a
 // VS Code webview's resources are on another origin).
 import SketchWorker from "./sketch.worker.ts?worker&inline";
 import type { FromSketch, ToSketch } from "./sketch.worker.ts";
-import type { LogLine, SketchSource } from "./protocol.ts";
+import type { LogLine, SketchSource, ToPreview } from "./protocol.ts";
 
 const TICK_MS = 33;
+// A value turned here that vibes hasn't sent back by now, it won't (it was already that there).
+const ECHO_MS = 2000;
 // A sketch that hasn't answered by then is stuck (an endless loop). How long
 // update() itself may take, the worker times, where it runs; this is only
 // for one that never answers, generous so a busy page isn't taken for it.
@@ -66,10 +68,22 @@ export class SketchRunner implements FrameSource {
   log: LogLine[] = [];
   /** What the sketch declares as params, as of its last load or update. */
   params: ParamSpec[] = [];
-  /** The knobs' values here: the preview's own, kept across restarts and new builds, handed to the sketch as vibes' stream would in the room. */
+  /**
+   * The knobs' values here: the preview's own pool's, kept across restarts
+   * and new builds, handed to the sketch as vibes' stream would in the room.
+   * Turned here, they change at once, and go to vibes (onSet); vibes' copy
+   * comes back (remote), so they're the same wherever they're turned.
+   */
   values: ParamTable = {};
   /** Bumped whenever any of the above changes, for React. */
   version = 0;
+  /** Told what the sketch declares, each time that changes. */
+  onDeclared: ((specs: ParamSpec[]) => void) | null = null;
+  /** Told each knob turned here. */
+  onSet: ((name: string, changes: [number, ParamValue | null][]) => void) | null = null;
+  // Values turned here that vibes hasn't sent back yet, by param and light, oldest first: till they're back,
+  // vibes' copy is behind this one there. One vibes doesn't send back (no change to it) is let go after a while.
+  private sent = new Map<string, number[]>();
 
   constructor(source: SketchSource, lights: LightInfo[]) {
     this.source = source;
@@ -160,6 +174,7 @@ export class SketchRunner implements FrameSource {
       const m = e.data;
       if (m.type === "log") this.write(m.level, m.text);
       else if (m.type === "params") {
+        if (JSON.stringify(m.specs) !== JSON.stringify(this.params)) this.onDeclared?.(m.specs);
         this.params = m.specs;
         // A fresh sandbox starts from the defaults: the knobs' values, again.
         this.post({ type: "params", values: this.values });
@@ -175,11 +190,75 @@ export class SketchRunner implements FrameSource {
     this.post(s.kind === "script" ? { type: "load", script: s.script } : { type: "load-modules", entry: s.entry });
   }
 
-  /** A param's values from a knob here: each light's (null back to the default). */
+  /** A param's values from a knob here: each light's (null back to the default), at once, and on to vibes. */
   setParam(name: string, changes: readonly [number, ParamValue | null][]) {
     const spec = this.params.find((p) => p.name === name);
     if (!spec) return;
     this.values = { ...this.values, [name]: withChanges(spec, this.values[name], changes.map(([id, v]) => [v, [id]])) };
+    this.post({ type: "params", values: this.values });
+    this.changed();
+    const now = performance.now();
+    for (const [id] of changes) {
+      const key = `${name}/${id}`;
+      this.sent.set(key, [...this.waitingOn(key), now]);
+    }
+    this.onSet?.(name, [...changes]);
+  }
+
+  /** Values turned here at a light that vibes hasn't sent back yet (when each was turned), forgetting any it won't. */
+  private waitingOn(key: string): number[] {
+    const now = performance.now();
+    const left = (this.sent.get(key) ?? []).filter((at) => now - at < ECHO_MS);
+    if (left.length > 0) this.sent.set(key, left);
+    else this.sent.delete(key);
+    return left;
+  }
+
+  /**
+   * The pool's values as vibes has them: all of them (as the extension
+   * follows it again), or a change. Where a knob's been turned here and vibes
+   * hasn't sent it back yet, this copy's ahead: what vibes says there is the
+   * turn coming back (the last of them, as vibes kept it), not news.
+   */
+  remote(m: Extract<ToPreview, { type: "pool" }>) {
+    if (m.event === "state") {
+      // All of it, params not declared (yet) here included, for when they are.
+      const next: ParamTable = { ...m.values };
+      for (const spec of this.params) {
+        const theirs = valuesOf(spec, m.values[spec.name]);
+        const ours = valuesOf(spec, this.values[spec.name]);
+        for (const key of [...this.sent.keys()]) {
+          if (!key.startsWith(`${spec.name}/`) || this.waitingOn(key).length === 0) continue;
+          const id = Number(key.slice(spec.name.length + 1));
+          const v = ours.get(id);
+          if (v === undefined) theirs.delete(id);
+          else theirs.set(id, v);
+        }
+        next[spec.name] = groupsOf(spec, theirs);
+      }
+      this.values = next;
+    } else {
+      const spec = this.params.find((p) => p.name === m.name);
+      if (!spec) return;
+      const take: [number, ParamValue | null][] = [];
+      for (const [v, ids] of m.set) {
+        for (const id of ids) {
+          const key = `${m.name}/${id}`;
+          const waiting = this.waitingOn(key);
+          if (waiting.length > 0) {
+            waiting.shift();
+            if (waiting.length > 0) {
+              this.sent.set(key, waiting);
+              continue;
+            }
+            this.sent.delete(key);
+          }
+          take.push([id, v]);
+        }
+      }
+      if (take.length === 0) return;
+      this.values = { ...this.values, [m.name]: withChanges(spec, this.values[m.name], take.map(([id, v]) => [v, [id]])) };
+    }
     this.post({ type: "params", values: this.values });
     this.changed();
   }

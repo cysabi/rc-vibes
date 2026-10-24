@@ -1,61 +1,100 @@
-// The room socket (/api/scene/ws; RoomMessage and RoomRequest, in
-// shared/vibes.ts): the room as vibes pushes it (scene-feed.ts on the
-// server), the stack of shaders as vibes has them, top first, and the room
-// tone, sent again each time it changes while anything here is watching; and
-// applies, a draft's changes sent as one (applyChanges), each answered once
-// the scene showing it has come. The feed leaves scripts out (scriptHash says
-// which each is); the preview needs them to run pending edits, so they're
+// The room socket (/api/scene/ws; shared/live.ts): this page's copy of the
+// live state, kept as vibes sends it (the whole tree, then each change, each
+// numbered: a page that reconnects says the last it had, and gets what it
+// missed), and this page's updates to it (sendUpdate), each answered once the
+// tree shows it. From the tree, the room as the page shows it (useScene: the
+// stack of shaders, top first, the room tone, and the pools) and the lights'
+// layout (useLayout). The tree leaves scripts out (scriptHash says which
+// each shader's is); the preview needs them to run pending edits, so they're
 // fetched once each, by hash, and put back.
 
-import { useSyncExternalStore } from "react";
+import { useCallback, useState, useSyncExternalStore } from "react";
 import type { RoomTemplate } from "../shared/arclamp.ts";
-import type { Change, RoomMessage, RoomRequest, SceneFeed, Shader, ShaderKey } from "../shared/vibes.ts";
+import { pathOf, withOps, type LiveTree, type Op, type Pool, type RoomMessage, type RoomRequest } from "../shared/live.ts";
+import type { Lights, Placement, RailChange, Shader, ShaderKey, TagChange, TypeChange } from "../shared/vibes.ts";
 import { apiSocket, request } from "./api.ts";
 
-/** A shader as vibes sent it, with its script once that's here. */
+/** A shader as vibes has it, with its script once that's here. */
 export interface SceneShader extends Shader {
   script?: string;
 }
 
-/** The room: its shaders, top first, and its room tone. */
+/** The room: its shaders, top first, its room tone, and the pools of params. */
 export interface Scene {
   shaders: SceneShader[];
   roomtone: RoomTemplate | null;
+  pools: Record<string, Pool>;
 }
 
 interface State {
-  /** Undefined until the first scene. */
+  /** Undefined until the first tree. */
   scene: Scene | undefined;
+  layout: Lights | undefined;
   error: Error | null;
 }
 
-let state: State = { scene: undefined, error: null };
-let feed: SceneFeed | null = null;
+let state: State = { scene: undefined, layout: undefined, error: null };
+let tree: LiveTree | null = null;
+// The last change the copy here has, of which run of vibes.
+let rev: number | null = null;
+let epoch: string | undefined;
 const scripts = new Map<string, string>();
 const fetching = new Set<string>();
 const listeners = new Set<() => void>();
 let socket: WebSocket | null = null;
 
+// The scene's shaders as last made, by key, with what each was made from:
+// one that hasn't changed is the same object, so what's made from it needn't be again.
+let made = new Map<ShaderKey, { from: Shader; script: string | undefined; shader: SceneShader }>();
+let layoutFrom: LiveTree["layout"] = null;
+
 function publish() {
-  if (!feed) return;
-  const shaders = feed.shaders.map((s) => {
-    const script = s.scriptHash ? scripts.get(s.scriptHash) : undefined;
-    return script === undefined ? s : { ...s, script };
-  });
-  state = { scene: { shaders, roomtone: feed.roomtone }, error: null };
+  if (!tree) return;
+  const next = new Map<ShaderKey, { from: Shader; script: string | undefined; shader: SceneShader }>();
+  const shaders: SceneShader[] = [];
+  for (const key of tree.stack) {
+    const from = tree.shaders[key];
+    if (!from) continue;
+    const script = from.scriptHash ? scripts.get(from.scriptHash) : undefined;
+    const was = made.get(key);
+    const shader = was && was.from === from && was.script === script ? was.shader : script === undefined ? from : { ...from, script };
+    next.set(key, { from, script, shader });
+    shaders.push(shader);
+  }
+  made = next;
+  const scene: Scene = { shaders, roomtone: { lights: tree.roomtone }, pools: tree.pools };
+  let layout = state.layout;
+  if (tree.layout !== layoutFrom) {
+    layoutFrom = tree.layout;
+    const l = tree.layout;
+    layout = l
+      ? {
+          id_width: l.id_width,
+          lights: l.order.flatMap((id) => (l.lights[String(id)] ? [l.lights[String(id)]!] : [])),
+          rails: l.railOrder.flatMap((id) => (l.rails[id] ? [l.rails[id]!] : [])),
+          changed: l.changed,
+        }
+      : undefined;
+  }
+  state = { scene, layout, error: null };
   for (const l of listeners) l();
 }
 
-function take(next: SceneFeed) {
-  feed = next;
-  publish();
-  void fetchScripts();
+// Changes come many a second while anyone drags: those that come together are shown together.
+let publishing = false;
+function publishSoon() {
+  if (publishing) return;
+  publishing = true;
+  queueMicrotask(() => {
+    publishing = false;
+    publish();
+  });
 }
 
-/** The scripts the scene has that aren't here yet; the ones it's dropped, forgotten. */
+/** The scripts the tree has that aren't here yet; the ones it's dropped, forgotten. */
 async function fetchScripts() {
-  if (!feed) return;
-  const now = new Set(feed.shaders.flatMap((s) => (s.scriptHash ? [s.scriptHash] : [])));
+  if (!tree) return;
+  const now = new Set(Object.values(tree.shaders).flatMap((s) => (s.scriptHash ? [s.scriptHash] : [])));
   for (const hash of scripts.keys()) if (!now.has(hash)) scripts.delete(hash);
   const missing = [...now].filter((h) => !scripts.has(h) && !fetching.has(h));
   if (missing.length === 0) return;
@@ -65,25 +104,25 @@ async function fetchScripts() {
     for (const [hash, script] of Object.entries(got)) scripts.set(hash, script);
     publish();
   } catch {
-    // Tried again with the next scene.
+    // Tried again with the next change.
   } finally {
     for (const h of missing) fetching.delete(h);
   }
 }
 
-/** An apply vibes refused at one of its changes (`at`): the ones before it were made, adding `made`. */
-export class ApplyError extends Error {
-  readonly at: number;
+/** An update vibes didn't make (all of it, or, failing part way in arclamp, the rest of it): why, and the shaders it added before it stopped. */
+export class UpdateError extends Error {
+  readonly code: string;
   readonly made: Record<string, ShaderKey>;
 
-  constructor(message: string, at: number, made: Record<string, ShaderKey>) {
+  constructor(message: string, code: string, made: Record<string, ShaderKey>) {
     super(message);
-    this.at = at;
+    this.code = code;
     this.made = made;
   }
 }
 
-// Applies sent, by id, waiting for their answers.
+// Updates sent, by id, waiting for their answers.
 const waiting = new Map<string, { resolve: (made: Record<string, ShaderKey>) => void; reject: (err: Error) => void }>();
 
 // How long to wait before opening the socket again, once it's closed.
@@ -126,35 +165,54 @@ function connect(url: string, hello: string | null, greet: (ws: WebSocket) => vo
   ws.onopen = () => {
     heard = Date.now();
     if (hello) ws.send(hello);
+    // The tree, or what's changed since the copy here.
+    ws.send(JSON.stringify({ type: "hello", rev, ...(epoch ? { epoch } : {}) } satisfies RoomRequest));
     greet(ws);
   };
   ws.onmessage = (e: MessageEvent<string>) => {
     heard = Date.now();
     const m = JSON.parse(e.data) as RoomMessage;
-    if (m.type === "scene") take(m.feed);
-    if (m.type !== "applied" && m.type !== "refused") return;
-    const asked = waiting.get(m.id);
-    waiting.delete(m.id);
-    if (m.type === "applied") asked?.resolve(m.made);
-    else asked?.reject(new ApplyError(m.error, m.at, m.made));
+    if (m.type === "state") {
+      tree = m.tree;
+      rev = m.rev;
+      epoch = m.epoch;
+      publish();
+      void fetchScripts();
+    } else if (m.type === "delta") {
+      // One missed (it can't be, on one socket, but if it were): the tree again, from the start.
+      if (!tree || rev === null || m.rev !== rev + 1) {
+        rev = null;
+        ws.close();
+        return;
+      }
+      tree = withOps(tree, m.ops);
+      rev = m.rev;
+      publishSoon();
+      if (m.ops.some(([path]) => path.startsWith("shaders/"))) void fetchScripts();
+    } else if (m.type === "done" || m.type === "refused") {
+      const asked = waiting.get(m.id);
+      waiting.delete(m.id);
+      if (m.type === "done") asked?.resolve(m.made);
+      else asked?.reject(new UpdateError(m.error, m.code, m.made));
+    }
   };
   ws.onclose = () => {
     if (socket !== ws) return;
     socket = null;
     window.clearInterval(watchdog);
-    // Applies with no answer now: made, or not, or some of them. Sending
+    // Updates with no answer now: made, or not, or some of them. Sending
     // them again is safe (a sketch is added once, however often it's sent).
     for (const [id, asked] of waiting) {
       waiting.delete(id);
       asked.reject(new Error("lost the connection to vibes"));
     }
-    // Opened again in a moment, while anything's watching. Meanwhile the last scene stands.
+    // Opened again in a moment, while anything's watching. Meanwhile the copy here stands.
     window.clearTimeout(retry);
     retry = window.setTimeout(() => {
       if (listeners.size > 0 && !socket) open();
     }, RETRY_MS);
     if (state.scene === undefined) {
-      state = { ...state, error: new Error("couldn't reach vibes for the scene") };
+      state = { ...state, error: new Error("couldn't reach vibes for the room") };
       for (const l of listeners) l();
     }
   };
@@ -176,31 +234,70 @@ function subscribe(listener: () => void) {
 }
 
 /**
- * A draft's changes, made in the room in order, as one apply; the shaders
- * it added, by the keys of the edits that added them. Refused at a change,
- * an ApplyError says which. Sent at once, whatever's still waiting for an
- * answer; `whole` (live mode's), it's everything pending, and stands for any
- * whole one sent before it that vibes hasn't made yet.
+ * Changes to the live state, as one update (all of it, or none); the shaders
+ * it added, by the keys of the edits that added them. Refused, an
+ * UpdateError says why. Sent at once, whatever's still waiting for an
+ * answer: vibes makes them in order, and those that come while one's being
+ * made, together. No changes at all is answered once the tree here is up to
+ * date with whatever vibes has just changed.
  */
-export function applyChanges(changes: Change[], whole = false): Promise<Record<string, ShaderKey>> {
+export function sendUpdate(ops: Op[], note?: string): Promise<Record<string, ShaderKey>> {
   return new Promise((resolve, reject) => {
     const id = crypto.randomUUID();
     waiting.set(id, { resolve, reject });
     open();
-    void greeted!.then((ws) => ws.send(JSON.stringify({ type: "apply", id, changes, ...(whole ? { whole } : {}) } satisfies RoomRequest)));
+    void greeted!.then((ws) => ws.send(JSON.stringify({ type: "update", id, ops, ...(note ? { note } : {}) } satisfies RoomRequest)));
   });
 }
 
 const snapshot = () => state;
+const useState_ = () => useSyncExternalStore(subscribe, snapshot);
 
-/** The room, as `{ data }` (undefined until the first scene). */
+/** The room, as `{ data }` (undefined until the first tree). */
 export function useScene(): { data: Scene | undefined; error: Error | null } {
-  const s = useSyncExternalStore(subscribe, snapshot);
+  const s = useState_();
   return { data: s.scene, error: s.error };
 }
 
-/** The scene, looked at again now (after changing it, to see it changed). */
+/** The lights and rails, with vibes' changes made, as `{ data }` (undefined until vibes has had them from arclamp). */
+export function useLights(): { data: Lights | undefined; error: Error | null } {
+  const s = useState_();
+  return { data: s.layout, error: s.scene ? null : s.error };
+}
+
+/** A change to the map: rails drawn or moved, lights moved, turned to another orientation, and/or tagged. */
+export interface LayoutChange {
+  rails?: RailChange[];
+  placements?: Placement[];
+  types?: TypeChange[];
+  tags?: TagChange[];
+}
+
+/** A change to the map as changes to the live state (vibes draws rails first, so lights can go on one drawn in the same change). */
+export function layoutOps({ rails = [], placements = [], types = [], tags = [] }: LayoutChange): Op[] {
+  return [
+    ...rails.map((r): Op => [pathOf("layout", "rails", r.id), r.rail]),
+    ...placements.map((p): Op => [pathOf("layout", "lights", p.id, "spot"), "rail" in p ? { rail: p.rail } : p.coords && { coords: p.coords }]),
+    ...types.map((t): Op => [pathOf("layout", "lights", t.id, "type"), t.type]),
+    ...tags.map((t): Op => [pathOf("layout", "lights", t.id, "tags"), t.tags]),
+  ];
+}
+
+/** Changing the map: each change sent as it's made (mutate); whether any's still on its way, and why the last one failed, if it did. */
+export function useChangeLayout() {
+  const [sending, setSending] = useState(0);
+  const [error, setError] = useState<Error | null>(null);
+  const mutate = useCallback((change: LayoutChange) => {
+    setSending((n) => n + 1);
+    setError(null);
+    sendUpdate(layoutOps(change))
+      .catch((err: Error) => setError(err))
+      .finally(() => setSending((n) => n - 1));
+  }, []);
+  return { mutate, isPending: sending > 0, error };
+}
+
+/** The tree here, once it has whatever vibes has just changed (after changing it some other way, to see it changed). */
 export async function invalidateScene(): Promise<void> {
-  const next = await request<SceneFeed | null>("GET", "/api/scene/live");
-  if (next) take(next);
+  await sendUpdate([]);
 }

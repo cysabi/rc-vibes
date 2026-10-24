@@ -3,7 +3,10 @@
 // deletes and restores them, opens your box for one, and builds its commits
 // for the room (builds.ts). Boxes, with their
 // own token, clone and push over /git/<id>.git, and get the lights' layout for
-// their preview from /box-api/layout.
+// their preview from /box-api/layout. A box's preview has a pool for its
+// params (pools.ts): /box-api/pools makes it (the box's own) and gives a
+// token to follow it by (params.ts, as a shader in the room does), and
+// /box-api/pools/<id>/values takes each knob turned in the preview.
 //
 // Anyone can delete a sketch, and anyone can restore it, always: deleting
 // removes everyone's boxes for it, and nothing opens it meanwhile, but its
@@ -14,8 +17,12 @@ import { Hono, type Context } from "hono";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { z } from "zod";
+import { POOL_ID } from "../shared/live.ts";
+import { PARAM_NAME } from "../shared/params.ts";
 import type { Me, Sketch, SketchChanges } from "../shared/vibes.ts";
 import type { LightsSource } from "./api.ts";
+import type { ParamLinks } from "./params.ts";
+import { anyValue, type LightChanges, type Pools } from "./pools.ts";
 import type { AuthEnv } from "./auth.ts";
 import { boxOfToken, type Boxes } from "./boxes.ts";
 import { view as buildView, type Builds } from "./builds.ts";
@@ -167,7 +174,7 @@ export function sketchRoutes(sketches: SketchesConfig, db: Db, boxes: Boxes, bui
 
 
 /** What boxes ask vibes for, with their own token: git, and the lights' layout. */
-export function boxApiRoutes(config: Config, sketches: SketchesConfig, db: Db, lights: LightsSource) {
+export function boxApiRoutes(config: Config, sketches: SketchesConfig, db: Db, lights: LightsSource, pools: Pools | null = null, links: ParamLinks | null = null) {
   /** The box a request's token is for (Basic for git, Bearer for the rest). */
   const boxOf = (c: Context) => {
     const header = c.req.header("authorization") ?? "";
@@ -196,7 +203,46 @@ export function boxApiRoutes(config: Config, sketches: SketchesConfig, db: Db, l
     .get("/box-api/layout", async (c) => {
       if (!boxOf(c)) return denied(c);
       return c.json(await lights.currentLights());
-    });
+    })
+
+    // A pool for the box's preview: made (the box's own) if it isn't yet, and a token to follow it by.
+    .post("/box-api/pools", zValidator("json", z.object({ pool: z.string().regex(POOL_ID) })), async (c) => {
+      const box = boxOf(c);
+      if (!box) return denied(c);
+      if (!pools || !links) return c.text("params can't be followed here", 503);
+      const { pool } = c.req.valid("json");
+      const owner = `box:${box.id}`;
+      if (!pools.mayDeclare(pool, owner)) return c.text("that pool isn't this box's", 403);
+      pools.ensure(pool, owner);
+      return c.json({ token: links.token(pool) });
+    })
+
+    // A knob turned in the box's preview: some lights' values of a param (null back to the default).
+    .post(
+      "/box-api/pools/:id/values",
+      zValidator(
+        "json",
+        z.object({
+          name: z.string().regex(PARAM_NAME),
+          changes: z.array(z.tuple([z.number().int().positive(), z.unknown()])).max(2000),
+        }),
+      ),
+      async (c) => {
+        const box = boxOf(c);
+        if (!box) return denied(c);
+        const id = c.req.param("id");
+        const owner = `box:${box.id}`;
+        if (!pools || pools.get(id)?.owner !== owner) return c.text("that pool isn't this box's", 403);
+        const { name, changes } = c.req.valid("json");
+        const values = changes.flatMap(([light, v]): LightChanges => {
+          if (v === null) return [[light, null]];
+          const value = anyValue(v);
+          return value === null ? [] : [[light, value]];
+        });
+        await pools.set(id, name, values, owner);
+        return c.body(null, 204);
+      },
+    );
 }
 
 /** The standard library a new sketch starts on (packages/vibes, on npm). */

@@ -1,22 +1,26 @@
-// Pending edits: changes made in vibes that haven't been applied to the room.
-// While there are any, vibes is in simulated mode: the map shows what the room
-// would do with them (sim.ts), Apply sends them to arclamp, and Discard throws
-// them away. Each browser has its own; others keep seeing the live room.
+// Pending edits: changes made in vibes that haven't been applied to the room:
+// this page's layer over its copy of the live state (scene.ts). While there
+// are any, vibes is in simulated mode: the map shows what the room would do
+// with them (sim.ts), Apply sends them as one update, and Discard throws them
+// away. In live mode, they're sent as they're made. Either way they stay here,
+// shown over the copy, until vibes says it's made them. Each browser has its
+// own; others keep seeing the live room.
 //
 // A draft records only what you changed, on top of whatever is live, so
 // changes others make meanwhile still show through: room tone, each shader's
-// mute, mask and place in the stack, the shaders taken out of it, and the
-// sketches being put in (each on its home, previewed once built). A shader
-// on its way in, or one you're adding, is switched and moved like any other:
-// vibes puts it in that way.
-// It knows shaders by vibes' keys; which shader in arclamp each is, only
-// vibes' server knows.
+// mute, mask, params and place in the stack, the shaders taken out of it, and
+// the sketches being put in (each on its home, previewed once built, with a
+// pool of its own for its params, which goes in with it). A shader on its way
+// in, or one you're adding, is switched and moved like any other: vibes puts
+// it in that way. It knows shaders by vibes' keys; which shader in arclamp
+// each is, only vibes' server knows.
 
 import { useSyncExternalStore } from "react";
 import type { Channels } from "../shared/arclamp.ts";
-import { sameValue, valuesOf, withChanges, type Changes, type ParamSpec, type ParamValue, type ShaderParams } from "../shared/params.ts";
-import type { Change, Instance, ShaderKey, ShaderSketch } from "../shared/vibes.ts";
-import { ApplyError, applyChanges, invalidateScene, type Scene, type SceneShader } from "./scene.ts";
+import { pathOf, type AddSpec, type Op, type Pool } from "../shared/live.ts";
+import { cleanValue, sameValue, tableOf, withChanges, type Changes, type ParamSpec, type ParamValue, type ShaderParams } from "../shared/params.ts";
+import type { Instance, ShaderKey, ShaderSketch } from "../shared/vibes.ts";
+import { invalidateScene, sendUpdate, UpdateError, type Scene, type SceneShader } from "./scene.ts";
 
 /** A shader in the stack: vibes' key, for one in the room or on its way; "+…" for a sketch you're adding. */
 export type LayerKey = ShaderKey;
@@ -60,6 +64,10 @@ export interface Adding {
   mask: number[];
   /** Its build, once asked for. */
   build: { id: string; commit: string; state: "building" | "built" | "failed"; error: string | null } | null;
+  /** Its params' pool: minted here, it goes in with it, values set meanwhile and all. */
+  pool: string;
+  /** What it declares, as the preview of it says (sim.ts), once it's run there. */
+  declared: ParamSpec[] | null;
 }
 
 export const EMPTY: Draft = { roomtone: {}, roomtoneCode: null, edits: {}, order: null, removed: [], added: [] };
@@ -104,8 +112,10 @@ export interface Layer {
   footprint: number[];
   /** If it's a sketch being added (not in the room yet): which. */
   adding: Adding | null;
-  /** Its params, if it was put in from a sketch: what the sketch declares, and the instance's values (live, not pending edits). */
+  /** Its params, if it was put in from a sketch (or is being): what the sketch declares, and their values, pending edits over the live ones. */
   params: ShaderParams | null;
+  /** Its params' pool, if it has one. */
+  pool: string | null;
 }
 
 /** A sketch being added, as a layer on top of the stack: for the preview (once built), and the list. */
@@ -129,7 +139,24 @@ function layerOfAdding(a: Adding, d: Draft): Layer {
   };
   const sketch: ShaderSketch = { id: a.sketchId, name: a.sketchName, commit, edited: false, deleted: false };
   const patch = d.edits[a.key] ?? {};
-  return { key: a.key, stage: "adding", shader: null, name: a.sketchName, sketch, script, muted: patch.muted ?? false, mask: patch.mask ?? a.mask, by: "", instance, footprint: [], adding: a, params: null };
+  // Its params as its preview says it declares them, with whatever's been set on them meanwhile.
+  const params = a.declared ? paramsWith({ declared: a.declared, values: {} }, patch.params) : null;
+  return {
+    key: a.key,
+    stage: "adding",
+    shader: null,
+    name: a.sketchName,
+    sketch,
+    script,
+    muted: patch.muted ?? false,
+    mask: patch.mask ?? a.mask,
+    by: "",
+    instance,
+    footprint: [],
+    adding: a,
+    params,
+    pool: a.pool,
+  };
 }
 
 /** Whether a shader can be switched and moved: any but one that couldn't go in. */
@@ -237,33 +264,41 @@ function paramsWith(params: ShaderParams | null, pending: ShaderPatch["params"])
   return { declared: params.declared, values };
 }
 
-/** Of what's pending for a param, what isn't what's live already: as a change, or null if nothing is. */
-function changeOf(spec: ParamSpec, live: unknown, pending: Record<string, ParamValue | null>): Changes | null {
-  const now = valuesOf(spec, live);
-  const differ = Object.entries(pending).flatMap(([id, v]): [number, ParamValue | null][] => {
-    const was = now.get(Number(id)) ?? spec.default;
-    return sameValue(v ?? spec.default, was) ? [] : [[Number(id), v]];
-  });
-  return differ.length > 0 ? changesOf(differ) : null;
+/** A pool's params as a page shows them: what's declared, and their values (null if there's no such pool yet). */
+function paramsOfPool(pool: Pool | undefined): ShaderParams | null {
+  if (!pool) return null;
+  return { declared: pool.declared, values: pool.declared ? tableOf(pool.declared, pool.values) : {} };
+}
+
+/**
+ * Of what's pending for a pool's params, what isn't what it has already
+ * (each light's value, or the default), as changes to it: a value, or, back
+ * to the default, the value taken away.
+ */
+function paramOps(pool: string, declared: readonly ParamSpec[] | null, live: Pool["values"] | undefined, pending: ShaderPatch["params"]): Op[] {
+  if (!declared || !pending) return [];
+  const ops: Op[] = [];
+  for (const [name, byLight] of Object.entries(pending)) {
+    const spec = declared.find((s) => s.name === name);
+    if (!spec) continue;
+    for (const [id, v] of Object.entries(byLight)) {
+      const kept = live?.[name]?.[id];
+      const was = (kept !== undefined ? cleanValue(spec, kept) : null) ?? spec.default;
+      if (sameValue(v ?? spec.default, was)) continue;
+      const at = pathOf("pools", pool, "values", name, id);
+      ops.push(v === null ? [at] : [at, v]);
+    }
+  }
+  return ops;
 }
 
 /** Whether what's pending changes a shader's params at all. */
-function paramsDiffer(shader: SceneShader, pending: ShaderPatch["params"]): boolean {
-  return paramChanges(shader, pending).length > 0;
+function paramsDiffer(scene: Scene, shader: SceneShader, pending: ShaderPatch["params"]): boolean {
+  const pool = shader.pool ? scene.pools[shader.pool] : undefined;
+  return shader.pool !== null && paramOps(shader.pool, pool?.declared ?? null, pool?.values, pending).length > 0;
 }
 
-/** The params what's pending actually changes, as changes to send. */
-function paramChanges(shader: SceneShader, pending: ShaderPatch["params"]): Change[] {
-  const declared = shader.params?.declared;
-  if (!declared || !pending) return [];
-  return Object.entries(pending).flatMap(([name, p]) => {
-    const spec = declared.find((s) => s.name === name);
-    const set = spec ? changeOf(spec, shader.params!.values[name], p) : null;
-    return set ? [{ op: "params", key: shader.key, name, set } satisfies Change] : [];
-  });
-}
-
-function layerOfShader(shader: SceneShader, d: Draft): Layer {
+function layerOfShader(scene: Scene, shader: SceneShader, d: Draft): Layer {
   const patch = changeable(shader) ? (d.edits[shader.key] ?? {}) : {};
   return {
     key: shader.key,
@@ -278,14 +313,15 @@ function layerOfShader(shader: SceneShader, d: Draft): Layer {
     instance: shader.instance,
     footprint: shader.footprint,
     adding: null,
-    params: paramsWith(shader.params, patch.params),
+    params: shader.pool ? paramsWith(paramsOfPool(scene.pools[shader.pool]), patch.params) : null,
+    pool: shader.pool,
   };
 }
 
 /** One shader with the draft's edits (even one the draft takes out), or one you're adding; null if there's no such shader. */
 export function layerOf(scene: Scene, d: Draft, key: LayerKey): Layer | null {
   const shader = scene.shaders.find((s) => s.key === key);
-  if (shader) return layerOfShader(shader, d);
+  if (shader) return layerOfShader(scene, shader, d);
   const adding = d.added.find((a) => a.key === key);
   return adding ? layerOfAdding(adding, d) : null;
 }
@@ -299,7 +335,7 @@ export function layersOf(scene: Scene, d: Draft): Layer[] {
   const layers = new Map<LayerKey, Layer>();
   // Sketches being added go in on top, the latest topmost (unless you moved them).
   for (const a of [...d.added].reverse()) layers.set(a.key, layerOfAdding(a, d));
-  for (const s of scene.shaders) if (!removed.has(s.key)) layers.set(s.key, layerOfShader(s, d));
+  for (const s of scene.shaders) if (!removed.has(s.key)) layers.set(s.key, layerOfShader(scene, s, d));
   // Your order where you set one; anything that turned up since keeps its
   // place relative to the top.
   const all = [...layers.keys()];
@@ -326,7 +362,7 @@ export function pendingCount(scene: Scene, d: Draft): number {
   n += removedOf(scene, d).length;
   n += d.added.length;
   for (const l of layers) {
-    if (l.muted !== l.shader!.muted || !sameMask(l.mask, l.shader!.mask) || paramsDiffer(l.shader!, d.edits[l.key]?.params)) n++;
+    if (l.muted !== l.shader!.muted || !sameMask(l.mask, l.shader!.mask) || paramsDiffer(scene, l.shader!, d.edits[l.key]?.params)) n++;
   }
   if (layers.map((l) => l.key).join() !== sceneKeys(scene, d).join()) n++;
   return n;
@@ -370,8 +406,8 @@ function load(): Draft {
       edits: Object.fromEntries(Object.entries(saved.edits).filter(([key]) => !old(key))),
       order: saved.order?.some(old) ? null : saved.order,
       removed: saved.removed.filter((key) => !old(key)),
-      // Saved before sketches being added had a branch: all of them were main.
-      added: saved.added.map((a) => ({ ...a, branch: a.branch ?? "main" })),
+      // Saved before sketches being added had a branch (all of them were main), or a pool.
+      added: saved.added.map((a) => ({ ...a, branch: a.branch ?? "main", pool: a.pool ?? crypto.randomUUID(), declared: a.declared ?? null })),
     };
   } catch {
     return EMPTY;
@@ -430,12 +466,19 @@ export const drafts = {
   },
   /**
    * A sketch to put in, on `home`, its build asked for next (adding.ts); its
-   * key, which vibes is sent with it, to put it in once however often it's sent.
+   * key, which vibes is sent with it, to put it in once however often it's
+   * sent. Its params get a pool of their own, here, from the start.
    */
   add(a: Pick<Adding, "sketchId" | "sketchName" | "branch" | "home" | "mask">): LayerKey {
     const key = `+${crypto.randomUUID()}`;
-    set({ ...draft, added: [...draft.added, { ...a, key, build: null }] });
+    set({ ...draft, added: [...draft.added, { ...a, key, build: null, pool: crypto.randomUUID(), declared: null }] });
     return key;
+  },
+  /** What a sketch being added declares, as its preview says (sim.ts). */
+  declared(key: LayerKey, specs: ParamSpec[]) {
+    const a = draft.added.find((x) => x.key === key);
+    if (!a || JSON.stringify(a.declared) === JSON.stringify(specs)) return;
+    set({ ...draft, added: draft.added.map((x) => (x.key === key ? { ...x, declared: specs } : x)) });
   },
   /**
    * How a sketch being added's build is going; with its script, once it's
@@ -463,65 +506,24 @@ export const drafts = {
 
 // ---- apply ------------------------------------------------------------------
 
-function omit<T>(record: Record<string, T>, key: string): Record<string, T> {
-  const out = { ...record };
-  delete out[key];
-  return out;
-}
-
 /**
- * Make the room match the draft, in one apply over the room socket: room
- * tone, then the shaders it takes out, then the sketches it adds, then each
- * other shader's mute and mask, then the stack's order. Refused part way,
- * just the rest stays pending, and it's thrown. `whole` (live mode, which
- * sends again each time the draft changes, without waiting): it stands for
- * any such send before it that vibes hasn't made yet (scene.ts), and only
- * the newest send's answer, with nothing edited since, clears the draft.
+ * What the draft changes, as changes to the live state: room tone, the
+ * shaders it takes out, the sketches it adds (each with its pool: what it
+ * declares, as its preview said, and the values set on it), each other
+ * shader's mute, mask and params, and the stack's order. vibes makes them in
+ * the order that keeps the room right (updates.ts). What it changes that's
+ * the same as what's there already is left out.
  */
-export async function applyDraft(scene: Scene, { whole = false }: { whole?: boolean } = {}): Promise<void> {
-  const start = draft;
-  const { rest: d, error } = await sendDraft(scene, start, whole);
-  // The scene showing what was made comes before the answer; with no answer
-  // (the connection lost), it's looked at again. Edits made while the draft
-  // was being sent are kept: they only count where they still differ from
-  // the room. But a sketch added is added once: whatever went in comes out
-  // of the draft, however the draft changed meanwhile (left in, live mode
-  // would put it in again, and again).
-  if (error && !(error instanceof ApplyError)) await invalidateScene().catch(() => {});
-  const added = new Set(start.added.filter((a) => !d.added.some((x) => x.key === a.key)).map((a) => a.key));
-  // Left as it is otherwise, so a later send (live mode's) still knows it as what it sent.
-  if (draft === start) set(d);
-  else if (draft.added.some((a) => added.has(a.key))) set({ ...draft, added: draft.added.filter((a) => !added.has(a.key)) });
-  if (error) throw error;
-}
-
-/**
- * The draft's changes, sent as one apply; what's left of the draft after
- * (nothing, unless the apply was refused part way, or not answered), and why.
- */
-async function sendDraft(scene: Scene, d: Draft, whole: boolean): Promise<{ rest: Draft; error: Error | null }> {
-  // Each change, with what's left of the draft once it's made.
-  const changes: Change[] = [];
-  const rests: Draft[] = [];
-  let rest = d;
-  const then = (next: Draft, change?: Change) => {
-    rest = next;
-    if (!change) return;
-    changes.push(change);
-    rests.push(next);
-  };
-
-  const tone = roomtoneChanges(scene, d);
-  then({ ...rest, roomtone: {}, roomtoneCode: null }, Object.keys(tone).length > 0 ? { op: "roomtone", lights: tone, ...(d.roomtoneCode ? { code: d.roomtoneCode } : {}) } : undefined);
-
+export function opsOf(scene: Scene, d: Draft): Op[] {
+  const ops: Op[] = [];
+  for (const [id, ch] of Object.entries(roomtoneChanges(scene, d))) {
+    for (const [name, v] of Object.entries(ch)) ops.push([pathOf("roomtone", id, name), v]);
+  }
   const byKey = new Map(scene.shaders.map((s) => [s.key, s]));
   // The whole stack as you'd have it, top first, sketches you're adding included.
   const order = layersOf(scene, d).map((l) => l.key);
 
-  // Out, with whatever else was pending for them.
-  for (const key of d.removed) {
-    then({ ...rest, removed: rest.removed.filter((k) => k !== key), edits: omit(rest.edits, key) }, byKey.has(key) ? { op: "remove", key } : undefined);
-  }
+  for (const key of d.removed) if (byKey.has(key)) ops.push([pathOf("shaders", key)]);
 
   // In, each on its home, from its branch: as the build previewed (or
   // building), or the branch's head if none was asked for yet; switched as
@@ -532,49 +534,71 @@ async function sendDraft(scene: Scene, d: Draft, whole: boolean): Promise<{ rest
     const a = d.added.find((x) => x.key === key);
     if (!a) continue;
     const layer = layerOfAdding(a, d);
-    const under = order[order.indexOf(key) + 1];
-    then(
-      { ...rest, added: rest.added.filter((x) => x.key !== a.key), edits: omit(rest.edits, a.key) },
-      {
-        op: "add",
-        key: a.key,
-        sketch: a.sketchId,
-        branch: a.branch,
-        ...(a.build && a.build.state !== "failed" ? { build: a.build.id } : {}),
-        home: a.home,
-        muted: layer.muted,
-        mask: layer.mask,
-        ...(d.order ? { above: under ?? "" } : {}),
-      },
-    );
+    const under = order[order.indexOf(a.key) + 1];
+    const add: AddSpec = {
+      sketch: a.sketchId,
+      branch: a.branch,
+      ...(a.build && a.build.state !== "failed" ? { build: a.build.id } : {}),
+      home: a.home,
+      muted: layer.muted,
+      mask: layer.mask,
+      ...(d.order ? { above: under ?? "" } : {}),
+      pool: a.pool,
+    };
+    ops.push([pathOf("shaders", a.key), add]);
+    if (a.declared) ops.push([pathOf("pools", a.pool, "declared"), a.declared]);
+    ops.push(...paramOps(a.pool, a.declared, undefined, d.edits[a.key]?.params));
   }
 
-  // On its way in, vibes keeps the change for when it goes in; gone since,
-  // there's nothing left to change.
-  for (const [key, patch] of Object.entries(rest.edits)) {
+  // On its way in, vibes keeps the change for when it goes in; gone since, or
+  // being taken out, there's nothing left to change.
+  for (const [key, patch] of Object.entries(d.edits)) {
     const shader = byKey.get(key);
-    const target = shader && changeable(shader) ? shader : null;
-    const mute: Change | null = target && patch.muted !== undefined && patch.muted !== target.muted ? { op: "muted", key, muted: patch.muted } : null;
-    const mask: Change | null = target && patch.mask !== undefined && !sameMask(patch.mask, target.mask) ? { op: "mask", key, mask: patch.mask } : null;
-    // Unmuting, the mask goes first, so the shader never runs on lights it's
-    // meant to stay off; muting, the mute does. Its params after.
-    const sends = [...(patch.muted === false ? [mask, mute] : [mute, mask]).filter((c) => c !== null), ...(target ? paramChanges(target, patch.params) : [])];
-    for (const [i, change] of sends.entries()) then(i === sends.length - 1 ? { ...rest, edits: omit(rest.edits, key) } : rest, change);
-    if (sends.length === 0) then({ ...rest, edits: omit(rest.edits, key) });
+    if (!shader || !changeable(shader) || d.removed.includes(key)) continue;
+    if (patch.muted !== undefined && patch.muted !== shader.muted) ops.push([pathOf("shaders", key, "muted"), patch.muted]);
+    if (patch.mask !== undefined && !sameMask(patch.mask, shader.mask)) ops.push([pathOf("shaders", key, "mask"), patch.mask]);
+    if (shader.pool) {
+      const pool = scene.pools[shader.pool];
+      ops.push(...paramOps(shader.pool, pool?.declared ?? null, pool?.values, patch.params));
+    }
   }
 
   // The stack in your order, top first: vibes moves those in the room, places
   // those on their way in (and passes over any gone meanwhile, and leaves any
   // come since on top).
-  if (d.order !== null && order.filter((k) => byKey.has(k)).join() !== sceneKeys(scene, d).join()) then(EMPTY, { op: "stack", order });
+  if (d.order !== null && order.filter((k) => byKey.has(k)).join() !== sceneKeys(scene, d).join()) ops.push(["stack", order]);
+  return ops;
+}
 
-  if (changes.length === 0) return { rest: EMPTY, error: null };
-  try {
-    for (const [key, id] of Object.entries(await applyChanges(changes, whole))) madeAs.set(key, id);
-    return { rest: EMPTY, error: null };
-  } catch (err) {
-    if (!(err instanceof ApplyError)) return { rest: d, error: err as Error };
-    for (const [key, id] of Object.entries(err.made)) madeAs.set(key, id);
-    return { rest: err.at > 0 ? rests[err.at - 1]! : d, error: err };
+/**
+ * Make the room match the draft, in one update over the room socket.
+ * Answered, the draft's done with, unless it's been edited since it was sent
+ * (live mode sends again each time it changes, without waiting: the newest
+ * send's answer, with nothing edited since, clears it). Refused, it stays
+ * pending, to try again or discard, and why's thrown; whatever it does that's
+ * the same as the room by then (made before it stopped) isn't pending any more.
+ */
+export async function applyDraft(scene: Scene): Promise<void> {
+  const start = draft;
+  const ops = opsOf(scene, start);
+  let error: Error | null = null;
+  let made: Record<string, ShaderKey> = {};
+  if (ops.length > 0) {
+    try {
+      made = await sendUpdate(ops, start.roomtoneCode ?? undefined);
+    } catch (err) {
+      error = err as Error;
+      if (err instanceof UpdateError) made = err.made;
+    }
   }
+  for (const [key, id] of Object.entries(made)) madeAs.set(key, id);
+  // The tree showing what was made comes before the answer; with no answer
+  // (the connection lost), it's looked at again. A sketch added is added
+  // once: whatever went in comes out of the draft, however the draft changed
+  // meanwhile (left in, live mode would put it in again, and again).
+  if (error && !(error instanceof UpdateError)) await invalidateScene().catch(() => {});
+  const added = new Set(Object.keys(made));
+  if (!error && draft === start) set(EMPTY);
+  else if (draft.added.some((a) => added.has(a.key))) set({ ...draft, added: draft.added.filter((a) => !added.has(a.key)) });
+  if (error) throw error;
 }

@@ -8,6 +8,7 @@ import type { AuthEnv } from "./auth.ts";
 import { openDb, type Db } from "./db.ts";
 import { loadConfig } from "./env.ts";
 import { createInstances, instanceRoutes, type Instances } from "./instances.ts";
+import { createPools, type Pools } from "./pools.ts";
 import { createShaders, shaderRoutes } from "./shaders.ts";
 import { readStamp, stamp, stampAs } from "./stamp.ts";
 
@@ -25,7 +26,8 @@ let instances: Instances;
 let app: Hono<AuthEnv>;
 let finish: (id: string) => void;
 let changes: number;
-// The changes to params sent on to shaders, in order; and the instances said to be gone.
+let pools: Pools;
+// The changes to pools' params, as sent on to shaders, in order; and the pools of instances said to be gone.
 let sent: [string, string, Changes][];
 let gone: string[];
 // What builds.start answers next: built at once, or still building.
@@ -107,6 +109,8 @@ beforeEach(() => {
   };
   sent = [];
   gone = [];
+  pools = createPools({ db, publish: () => {}, lights: async () => INFO });
+  pools.onChange((pool, name, set) => sent.push([pool, name, set]));
   instances = createInstances({
     config,
     db,
@@ -114,9 +118,8 @@ beforeEach(() => {
     builds,
     lightIds: async () => LIGHTS,
     changed: () => changes++,
-    sendParams: (id, name, set) => sent.push([id, name, set]),
-    gone: (id) => gone.push(id),
-    lights: async () => INFO,
+    pools,
+    gone: (pool) => gone.push(pool),
   });
   app = new Hono<AuthEnv>()
     .use("*", async (c, next) => {
@@ -124,7 +127,7 @@ beforeEach(() => {
       await next();
     })
     .route("/", instanceRoutes(instances))
-    .route("/", shaderRoutes(createShaders({ config, arclamp, db, instances })));
+    .route("/", shaderRoutes(createShaders({ config, arclamp, db, instances, pools })));
   // A refusal thrown by a shader route is answered as the API answers it.
   app.onError(handleError);
 });
@@ -321,32 +324,51 @@ describe("an instance", () => {
   });
 });
 
-describe("an instance's params", () => {
+describe("an instance's params, in its pool", () => {
   const speed: ParamSpec = { kind: "number", name: "speed", label: "Speed", lights: {}, default: 7, min: 0, max: 20, step: 0.1 };
   const bands: ParamSpec = { kind: "number", name: "bands", label: "Bands", lights: { tags: ["rail"] }, default: 3, min: 1, max: 8, step: 1 };
   const tint: ParamSpec = { kind: "color", name: "tint", label: "Tint", lights: { kinds: ["color"] }, default: { a: 0, b: 0, lm: 300, fidelity: 1 } };
   const on: ParamSpec = { kind: "toggle", name: "on", label: "On", lights: { kinds: ["switch"] }, default: false };
   const put = (inst: Instance, name: string, set: unknown) => send("PUT", `/shaders/${inst.id}/params/${name}`, { set });
+  const poolOf = (inst: Instance) => db.instance(inst.id)!.pool_id;
 
   /** An instance, live, whose shader has said what its sketch declares (or hasn't, if not told to). */
   async function liveWithParams(declared: ParamSpec[] | null = [speed, bands, tint, on]): Promise<Instance> {
     nextBuild = { id: "bp", commit: "deadbeef".repeat(5), built: true };
     const inst = (await (await send("POST", "/instances", { sketch: SKETCH, home: [1, 2, 3, 5, 6] })).json()) as Instance;
-    if (declared) db.updateInstance(inst.id, { declared });
+    if (declared) pools.declare(poolOf(inst), declared, `instance:${inst.id}`);
     return inst;
   }
 
+  it("are in a pool of its own, which it owns: a new one, or the one it was previewed with", async () => {
+    nextBuild = { id: "bq", commit: "feedface".repeat(5), built: true };
+    const plain = (await (await send("POST", "/instances", { sketch: SKETCH, home: [1] })).json()) as Instance;
+    expect(pools.get(poolOf(plain))).toMatchObject({ owner: `instance:${plain.id}`, declared: null, values: {} });
+    // Previewed: made by whoever added it, with what it declared then, and values set on it.
+    const given = "9b2f0f8e-1d3c-4b6a-8f00-000000000001";
+    pools.declare(given, [speed], `user:${ada.id}`);
+    await pools.set(given, "speed", [[1, 9]], `user:${ada.id}`);
+    const inst = await instances.create(SKETCH, { branch: "main" }, [1], ada, "+previewed", {}, given);
+    if ("refused" in inst) throw new Error(inst.refused);
+    expect(poolOf(inst.instance)).toBe(given);
+    expect(pools.get(given)).toMatchObject({ owner: `instance:${inst.instance.id}`, declared: [speed], values: { speed: { "1": 9 } } });
+    // Its declarations are its shader's to say from then on.
+    expect(pools.mayDeclare(given, `user:${ada.id}`)).toBe(false);
+  });
+
   it("are set light by light, grouped by value, with the default left out; each change goes on to its shader", async () => {
     const inst = await liveWithParams();
-    expect(db.instance(inst.id)!.params).toEqual({});
+    const pool = poolOf(inst);
+    expect(pools.table(pool)).toEqual({});
     expect((await put(inst, "speed", [[9, [1, 2]], [30, [3]]])).status).toBe(204);
     // Kept within its range.
-    expect(db.instance(inst.id)!.params).toEqual({ speed: [[9, [1, 2]], [20, [3]]] });
+    expect(pools.table(pool)).toEqual({ speed: [[9, [1, 2]], [20, [3]]] });
     expect((await put(inst, "speed", [[null, [2]], [7, [3]]])).status).toBe(204);
-    expect(db.instance(inst.id)!.params).toEqual({ speed: [[9, [1]]] });
+    expect(pools.table(pool)).toEqual({ speed: [[9, [1]]] });
+    // Set to the default is back to the default.
     expect(sent).toEqual([
-      [inst.id, "speed", [[9, [1, 2]], [20, [3]]]],
-      [inst.id, "speed", [[null, [2]], [7, [3]]]],
+      [pool, "speed", [[9, [1, 2]], [20, [3]]]],
+      [pool, "speed", [[null, [2, 3]]]],
     ]);
     expect(db.activity(1)[0]).toMatchObject({ action: "shader.param", shaderName: "Warm wave", detail: { param: "speed", lights: 2 } });
     // A run of changes to one param (a slider dragged) is one entry in the history; another param's is its own.
@@ -361,7 +383,7 @@ describe("an instance's params", () => {
     expect((await put(inst, "on", [[true, [1, 6]]])).status).toBe(204);
     expect((await put(inst, "tint", [[red, [1, 6]]])).status).toBe(204);
     expect((await put(inst, "bands", [[4, [1, 5]]])).status).toBe(204);
-    expect(db.instance(inst.id)!.params).toEqual({ on: [[true, [6]]], tint: [[red, [1]]], bands: [[4, [5]]] });
+    expect(pools.table(poolOf(inst))).toEqual({ on: [[true, [6]]], tint: [[red, [1]]], bands: [[4, [5]]] });
     expect(sent.map(([, name, set]) => [name, set])).toEqual([
       ["on", [[true, [6]]]],
       ["tint", [[red, [1]]]],
@@ -373,7 +395,7 @@ describe("an instance's params", () => {
     expect(sent).toHaveLength(3);
     // A color without its fidelity is at fidelity 1, as the library has it.
     expect((await put(inst, "tint", [[{ a: 0.1, b: 0, lm: 200 }, [2]]])).status).toBe(204);
-    expect(db.instance(inst.id)!.params.tint).toEqual([
+    expect(pools.table(poolOf(inst)).tint).toEqual([
       [red, [1]],
       [{ a: 0.1, b: 0, lm: 200, fidelity: 1 }, [2]],
     ]);
@@ -396,9 +418,11 @@ describe("an instance's params", () => {
     expect(sent).toEqual([]);
   });
 
-  it("go with their instance: its shader's told it's gone", async () => {
+  it("go with their instance: its shader's told it's gone, and its pool's let go", async () => {
     const inst = await liveWithParams();
+    const pool = poolOf(inst);
     expect((await send("DELETE", `/shaders/${inst.id}`)).status).toBe(204);
-    expect(gone).toEqual([inst.id]);
+    expect(gone).toEqual([pool]);
+    expect(pools.get(pool)).toBeUndefined();
   });
 });

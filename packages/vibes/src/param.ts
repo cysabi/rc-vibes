@@ -22,7 +22,10 @@
 // sandbox carries on from them; the declarations are the script's own.
 //
 // The preview and the map's simulation have no stream: they hand values in
-// with __vibes.apply(), the same events the stream carries.
+// with __vibes.apply(), the same events the stream carries, and ask what's
+// declared with __vibes.params(). A preview updated in place (HMR, only the
+// modules edited run again) says which are about to run again (retire), and
+// that they have (settle): what they no longer declare goes then.
 
 import { color, type Color, type ColorInput, type ColorLike } from "./color.ts";
 import { field, type Field } from "./field.ts";
@@ -123,6 +126,23 @@ function kept(): Kept {
 /** This script's params, in the order declared. */
 const declared = new Map<string, ParamSpec>();
 
+/**
+ * Which module declared each param, where that can be told (a preview's
+ * sketch runs as its modules, each its own; a built script is all one); and
+ * those whose module is being run again (retire), till it's said what it
+ * declares now (settle): a param a module no longer declares goes, as it
+ * would on reloading.
+ */
+const origins = new Map<string, string | null>();
+const suspect = new Set<string>();
+
+/** The module that called param(), by the address its frames have in the stack; null if that can't be told. */
+function callerModule(): string | null {
+  const urls = (new Error().stack ?? "").split("\n").map((line) => /((?:[a-z][\w+.-]*:\/\/|\/)[^\s()]+?)(?::\d+){1,2}\)?\s*$/.exec(line.trim())?.[1] ?? null);
+  const own = urls.find((u) => u !== null);
+  return urls.find((u) => u !== null && u !== own) ?? null;
+}
+
 /** Each param's values by light, read from its groups once each time they change (colors as Colors). */
 const cache = new Map<string, { groups: unknown; spec: ParamSpec; byLight: Map<number, unknown> }>();
 
@@ -173,6 +193,8 @@ export function param(name: string, defaultValue: ColorLike, options?: ParamOpti
 export function param(name: string, defaultValue: unknown, options: ParamOptions = {}): Field<unknown> {
   const spec = specOf(name, defaultValue, options);
   declared.set(name, spec);
+  origins.set(name, callerModule());
+  suspect.delete(name);
   // Linked already (a new script in a linked sandbox): the stream, once the script's in.
   if (kept().link && !soon) {
     soon = true;
@@ -350,12 +372,36 @@ function connect(opts: unknown): { v: number; params?: number; error?: string } 
   return { v: PROTOCOL, params: declared.size };
 }
 
+/**
+ * Modules about to run again (a preview's, as its code's edited: by the ends
+ * of their addresses, or "*" for all of them): what they declared stays till
+ * settle(), and goes then unless they've declared it again.
+ */
+function retire(paths: readonly string[] | "*") {
+  for (const [name, module] of origins) {
+    if (paths === "*" || (module !== null && paths.some((p) => p !== "" && module.endsWith(p)))) suspect.add(name);
+  }
+}
+
+/** The modules run again have run: what they no longer declare, gone. */
+function settle() {
+  for (const name of suspect) {
+    declared.delete(name);
+    origins.delete(name);
+    cache.delete(name);
+  }
+  suspect.clear();
+}
+
 /** What vibes (in the room, by eval) and previews (in their workers) use: the script's own, so its params. */
 export interface VibesHost {
   v: number;
   connect(opts: unknown): { v: number; params?: number; error?: string };
   apply(event: string, data: unknown): boolean;
   params(): ParamSpec[];
+  /** Since 0.3.1 (a preview's hot reloads); an older library has neither. */
+  retire?(paths: readonly string[] | "*"): void;
+  settle?(): void;
 }
 
 // This script is the sandbox's newest: its library's the one to keep the stream.
@@ -366,4 +412,6 @@ kept().owner = me;
   connect,
   apply,
   params: () => [...declared.values()],
+  retire,
+  settle,
 } satisfies VibesHost;

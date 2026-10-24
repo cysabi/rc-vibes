@@ -8,7 +8,7 @@
 import type { LightInfo } from "./arclamp.ts";
 import { isBinary } from "./fixtures.ts";
 import { LUMENS_PER_BRIGHTNESS, type Lemtone } from "./lemtone.ts";
-import { passes, valuesOf, type ColorValue, type Groups, type LightFacts, type LightKind, type ParamSpec, type ParamTable, type ParamValue } from "../../packages/vibes/src/wire.ts";
+import { cleanValue, groupsOf, passes, valuesOf, type ColorValue, type Groups, type LightFacts, type LightKind, type ParamSpec, type ParamTable, type ParamValue } from "../../packages/vibes/src/wire.ts";
 
 export {
   checkSpec,
@@ -43,7 +43,7 @@ export {
   type ToggleSpec,
 } from "../../packages/vibes/src/wire.ts";
 
-/** A shader's params, as the feed has them: what its sketch said it declares (null until it has), and its values. */
+/** A shader's params, as a page shows them: what its sketch says it declares (null until something running it has), and its values. */
 export interface ShaderParams {
   declared: ParamSpec[] | null;
   values: ParamTable;
@@ -72,6 +72,22 @@ export function lightsFor(lights: readonly Facts[]): (spec: ParamSpec) => (id: n
     const f = facts.get(id);
     return f !== undefined && passes(spec.lights, f);
   };
+}
+
+/** A pool's values (by param, by light: shared/live.ts) as groups, for the params declared: values that aren't their param's left out. */
+export function tableOf(declared: readonly ParamSpec[], values: Record<string, Record<string, unknown>> | undefined): ParamTable {
+  const out: ParamTable = {};
+  for (const spec of declared) {
+    const byLight = values?.[spec.name];
+    if (!byLight) continue;
+    const m = new Map<number, ParamValue>();
+    for (const [id, v] of Object.entries(byLight)) {
+      const clean = cleanValue(spec, v);
+      if (clean !== null) m.set(Number(id), clean);
+    }
+    out[spec.name] = groupsOf(spec, m);
+  }
+  return out;
 }
 
 /** Each light's value, by id: its own, or the default. */

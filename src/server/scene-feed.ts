@@ -1,6 +1,7 @@
-// The room, as vibes pushes it to browsers (the room socket): the stack of
-// shaders as vibes has them (Shader, in shared/vibes.ts), top first, and the
-// room tone; sent whenever it's different. It's made from arclamp's scene,
+// The room, as vibes has it, for the live state (live.ts: its scene part,
+// which every page has): the stack of shaders as vibes has them (Shader, in
+// shared/vibes.ts), top first, and the room tone; made again whenever it may
+// be different, and handed on (subscribe). It's made from arclamp's scene,
 // followed as it changes (/v1/scene/events: the whole scene to start, then
 // each shader as it's added or changes, and each one removed), each shader
 // with its sketch (by its stamp), footprint and instance; and the instances
@@ -30,7 +31,6 @@
 
 import { createHash } from "node:crypto";
 import { decodeTouched, lightsOf, type LightsResponse, type RoomTemplate, type ShaderDescriptor } from "../shared/arclamp.ts";
-import type { ShaderParams } from "../shared/params.ts";
 import type { SceneFeed, Shader, ShaderSketch } from "../shared/vibes.ts";
 import { ArclampError, type Arclamp } from "./arclamp.ts";
 import type { Db, InstanceRow } from "./db.ts";
@@ -82,8 +82,6 @@ const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 const sorted = (ids: Iterable<number>) => [...ids].sort((a, b) => a - b);
 
 export function createSceneFeed({ config, db, arclamp, follow, layout, instances = () => null, onShaders, confirmMs = CONFIRM_MS }: FeedDeps) {
-  /** An instance's params: what its shader said its sketch declares (null until it has), with its values. */
-  const paramsOf = (row: InstanceRow): ShaderParams => ({ declared: row.declared, values: row.params });
   const shaders = new Map<number, Kept>();
   // Whether it's been told the whole scene yet.
   let whole = false;
@@ -189,7 +187,7 @@ export function createSceneFeed({ config, db, arclamp, follow, layout, instances
       const inst = byShader.get(n.id);
       const instance = inst && live ? live.view(inst) : null;
       if (inst && stampedFor.get(hash) === inst.id) {
-        ours.push({ instance: inst.id, shaderId: n.id, running: n.state === "running", respawns: n.respawns ?? 0, scriptHash: hash });
+        ours.push({ instance: inst.id, pool: inst.pool_id, shaderId: n.id, running: n.state === "running", respawns: n.respawns ?? 0, scriptHash: hash });
       }
       inRoom.push({
         key: inst ? inst.id : rclampKey(n.id),
@@ -205,7 +203,7 @@ export function createSceneFeed({ config, db, arclamp, follow, layout, instances
         by: n.created_by,
         footprint: sorted(footprintOf(n.id, hash || null).lights),
         scriptHash: hash || null,
-        params: inst ? paramsOf(inst) : null,
+        pool: inst ? inst.pool_id : null,
       });
     }
     onShaders?.(ours);
@@ -272,7 +270,7 @@ export function createSceneFeed({ config, db, arclamp, follow, layout, instances
       by: i.by.name,
       footprint: [],
       scriptHash: null,
-      params: paramsOf(row),
+      pool: row.pool_id,
     };
   }
 

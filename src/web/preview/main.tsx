@@ -3,14 +3,16 @@
 // sketch (its modules from the box's Vite, with their HMR updates, or each
 // build of it as a script); it runs them (runner.ts), on the same clock
 // throughout, and sends back what's logged and whether it's playing, for the
-// console beside it, the panel's buttons and the status bar.
+// console beside it, the panel's buttons and the status bar. Its knobs are
+// its own pool's on vibes, which the extension follows: turned here, they
+// change at once, and go on; turned elsewhere, they come back.
 //   pnpm build:box
 
 import { QueryClient, QueryClientProvider } from "@tanstack/react-query";
 import { useEffect, useRef, useState, useSyncExternalStore } from "react";
 import { createRoot } from "react-dom/client";
 import { color } from "../../../packages/vibes/src/color.ts";
-import { appliesTo, valuesAt } from "../../shared/params.ts";
+import { appliesTo, valuesAt, type ParamTable } from "../../shared/params.ts";
 import type { Lights } from "../../shared/vibes.ts";
 import { ParamControl, type ColorPickerProps } from "../components/ParamControl.tsx";
 import { FramesProvider, type FrameSource } from "../live.ts";
@@ -33,6 +35,8 @@ function Preview() {
   const [source, setSource] = useState<SketchSource | null>(null);
   const [runner, setRunner] = useState<SketchRunner | null>(null);
   const current = useRef<SketchRunner | null>(null);
+  // The pool's values as vibes last said, for a runner started afresh (on a new layout).
+  const pool = useRef<ParamTable>({});
 
   useEffect(() => {
     const onMessage = (e: MessageEvent<ToPreview>) => {
@@ -40,7 +44,10 @@ function Preview() {
       const r = current.current;
       if (m.type === "layout") setLayout(m.layout);
       else if (m.type === "source") setSource(m.source);
-      else if (m.type === "hmr") r?.hmr(m.payload);
+      else if (m.type === "pool") {
+        r?.remote(m);
+        pool.current = r ? r.values : m.event === "state" ? m.values : pool.current;
+      } else if (m.type === "hmr") r?.hmr(m.payload);
       else if (m.type === "restart") r?.restart();
       else if (m.type === "pause" || (m.type === "toggle" && r?.playing)) r?.pause();
       else if (r?.stopped) r.restart();
@@ -67,6 +74,9 @@ function Preview() {
     const next = new SketchRunner(source, layout.lights);
     next.onLine = (line) => vscode.postMessage({ type: "log", line });
     next.onHmr = (payload) => vscode.postMessage({ type: "hmr", payload });
+    next.onDeclared = (specs) => vscode.postMessage({ type: "declared", specs });
+    next.onSet = (name, changes) => vscode.postMessage({ type: "set", name, changes });
+    next.remote({ type: "pool", event: "state", values: r?.values ?? pool.current });
     current.current = next;
     setRunner(next);
   }, [layout, source]);
@@ -96,8 +106,8 @@ function Preview() {
 
 /**
  * The sketch's params as knobs over the map, one each, setting every light
- * it's for: the preview's own values, not the room's, handed to the sketch as
- * vibes' stream hands them over in the room.
+ * it's for: the preview's own pool's values, not the room's, handed to the
+ * sketch as vibes' stream hands them over in the room.
  */
 function Knobs({ runner }: { runner: SketchRunner }) {
   useSyncExternalStore(runner.watch, () => runner.version);

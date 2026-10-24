@@ -14,6 +14,10 @@
 // Its params are the panel's: what the sketch declares is told after each
 // load or update, and the knobs' values are handed to the library as vibes'
 // stream hands them over in the room (__vibes.apply; packages/vibes/src/param.ts).
+// A module updated in place runs again, and declares what it declares now:
+// the library's told which modules are to run again before an update
+// (retire), and that they have after it (settle), so a param one no longer
+// declares goes from the knobs, as it would on reloading.
 
 import { ESModulesEvaluator, ModuleRunner } from "vite/module-runner";
 import type { VibesHost } from "../../../packages/vibes/src/param.ts";
@@ -83,6 +87,7 @@ async function loadModules(from: string) {
   scope.__vibesNext = (next: { update?: unknown }) => {
     try {
       update = updateOf(next);
+      host()?.settle?.();
       tellParams();
     } catch (err) {
       reply({ type: "log", level: "error", text: `Couldn't update: ${message(err)}` });
@@ -119,8 +124,10 @@ async function loadModules(from: string) {
 async function reloadModules() {
   if (!runner) return;
   runner.clearCache();
+  host()?.retire?.("*");
   try {
     update = updateOf(await runner.import(entry));
+    host()?.settle?.();
     tellParams();
   } catch (err) {
     reply({ type: "log", level: "error", text: `Couldn't reload: ${message(err)}` });
@@ -157,7 +164,14 @@ scope.onmessage = (e: MessageEvent<ToSketch>) => {
     // Errors are the extension's to show (in Problems, and the console).
     if (m.payload.type === "error") return;
     if (m.payload.type === "full-reload") void reloadModules();
-    else deliver?.(m.payload);
+    else {
+      // The modules it updates run again: what they declare is as they say once they have.
+      const updates = (m.payload as { updates?: { path?: unknown }[] }).updates;
+      if (m.payload.type === "update" && Array.isArray(updates)) {
+        host()?.retire?.(updates.flatMap((u) => (typeof u.path === "string" ? [u.path.replace(/\?.*$/, "")] : [])));
+      }
+      deliver?.(m.payload);
+    }
     return;
   }
   // Still loading: nothing to show yet.

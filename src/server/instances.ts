@@ -22,8 +22,7 @@ import { zValidator } from "@hono/zod-validator";
 import { Hono, type Context } from "hono";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
-import type { LightInfo, ShaderDescriptor } from "../shared/arclamp.ts";
-import { cleanValue, lightsFor, withChanges, type Changes } from "../shared/params.ts";
+import type { ShaderDescriptor } from "../shared/arclamp.ts";
 import type { Instance, Me, Person } from "../shared/vibes.ts";
 import type { Arclamp } from "./arclamp.ts";
 import type { AuthEnv } from "./auth.ts";
@@ -31,13 +30,12 @@ import { plainText, type Builds } from "./builds.ts";
 import type { BuildRow, Db, InstanceRow, SketchRow } from "./db.ts";
 import type { Config } from "./env.ts";
 import { branchHead, isBranchName } from "./git.ts";
+import type { Pools } from "./pools.ts";
 import { shaderOfKey } from "./shaders.ts";
 import { readStamp, stampAs } from "./stamp.ts";
 
 const home = z.array(z.number().int()).min(1).max(2000);
 const branch = z.string().refine(isBranchName).default("main");
-// A run of changes to one param (a slider dragged) logs as one entry.
-const PARAM_LOG_WINDOW_MS = 15_000;
 
 type Status = 400 | 404 | 409 | 410 | 503;
 const refuse = (c: Context, status: Status, error: string, code: string) => c.json({ error, code }, status);
@@ -56,17 +54,15 @@ export interface InstanceDeps {
   lightIds: () => Promise<number[]>;
   /** Told when an instance changes, to show it (the scene feed). */
   changed?: () => void;
-  /** Told when an instance's params change, to send the change to its shader (params.ts). */
-  sendParams?: (id: string, name: string, set: Changes) => void;
-  /** Told when an instance is gone, to end its shader's stream of params (params.ts). */
-  gone?: (id: string) => void;
-  /** Every light arclamp has, for which lights a param's for. */
-  lights?: () => Promise<LightInfo[]>;
+  /** Its pool (pools.ts): taken on as it's made, and let go with it. */
+  pools?: Pick<Pools, "adopt" | "remove"> | null;
+  /** Told when an instance is gone, with its pool, to end its shader's stream of params (params.ts). */
+  gone?: (pool: string) => void;
 }
 
 type Refusal = { refused: string; status: Status; code: string };
 
-export function createInstances({ config, db, arclamp, builds, lightIds, changed = () => {}, sendParams = () => {}, gone = () => {}, lights = async () => [] }: InstanceDeps) {
+export function createInstances({ config, db, arclamp, builds, lightIds, changed = () => {}, pools = null, gone = () => {} }: InstanceDeps) {
   const refusal = (refused: string, status: Status, code: string): Refusal => ({ refused, status, code });
 
   function view(row: InstanceRow): Instance {
@@ -95,6 +91,12 @@ export function createInstances({ config, db, arclamp, builds, lightIds, changed
     const inside = new Set(home);
     return (await lightIds()).filter((id) => !inside.has(id));
   }
+
+  /** An instance gone: its shader's stream of params ended, and its pool let go. */
+  const letGo = (inst: InstanceRow) => {
+    gone(inst.pool_id);
+    pools?.remove(inst.pool_id);
+  };
 
   const failed = (id: string, error: string) => {
     db.updateInstance(id, { state: "failed", error });
@@ -247,7 +249,7 @@ export function createInstances({ config, db, arclamp, builds, lightIds, changed
     return { id: started.build.id, building: started.build.state === "building" };
   }
 
-  async function make(sketchId: string, from: From, homeLights: number[], user: Me, key: string | null, want: Want): Promise<Made> {
+  async function make(sketchId: string, from: From, homeLights: number[], user: Me, key: string | null, want: Want, pool: string | undefined): Promise<Made> {
     const sketch = db.sketch(sketchId);
     if (!sketch) return refusal("no such sketch", 404, "not_found");
     if (sketch.deleted_at !== null) return refusal("its sketch was deleted", 410, "deleted");
@@ -257,6 +259,7 @@ export function createInstances({ config, db, arclamp, builds, lightIds, changed
     if ("refused" in build) return refusal(build.refused, build.status, "cant_build");
     const id = randomUUID();
     const home = sorted(homeLights);
+    const poolId = pool ?? randomUUID();
     db.addInstance({
       id,
       sketch_id: sketchId,
@@ -270,7 +273,10 @@ export function createInstances({ config, db, arclamp, builds, lightIds, changed
       muted: want.muted ?? false,
       mask: sorted([...(want.mask ?? []), ...(await outside(home))]),
       above: want.above ?? null,
+      pool_id: poolId,
     });
+    // Its params: in the pool it was previewed with (and its values set then), or a new one.
+    pools?.adopt(poolId, `instance:${id}`);
     changed();
     if (!build.building) await place(id);
     return { instance: view(db.instance(id)!) };
@@ -288,16 +294,18 @@ export function createInstances({ config, db, arclamp, builds, lightIds, changed
      * With a key (the browser's, for its pending edit), it's put in once:
      * asked again with the same key, by the same person, it's the instance
      * that was made, so a browser that sends an edit twice can't put it in
-     * twice. Muted, masked or placed as `want` says, if it says.
+     * twice. Muted, masked or placed as `want` says, if it says. Its params
+     * in `pool`, if one's given (the one it was previewed with), with
+     * whatever's in it.
      */
-    async create(sketchId: string, from: From, homeLights: number[], user: Me, key?: string, want: Want = {}): Promise<Made> {
-      if (!key) return make(sketchId, from, homeLights, user, null, want);
+    async create(sketchId: string, from: From, homeLights: number[], user: Me, key?: string, want: Want = {}, pool?: string): Promise<Made> {
+      if (!key) return make(sketchId, from, homeLights, user, null, want, pool);
       const made = db.instanceOfKey(user.id, key);
       if (made) return { instance: view(made) };
       const id = `${user.id}\0${key}`;
       const already = making.get(id);
       if (already) return already;
-      const putting = make(sketchId, from, homeLights, user, key, want).finally(() => making.delete(id));
+      const putting = make(sketchId, from, homeLights, user, key, want, pool).finally(() => making.delete(id));
       making.set(id, putting);
       return putting;
     },
@@ -355,47 +363,6 @@ export function createInstances({ config, db, arclamp, builds, lightIds, changed
       return db.instance(id)?.shader_id === null || (await catchUp(id));
     },
 
-    /**
-     * A param of an instance changed (each value with its lights; null puts
-     * them back to the default), as its shader says its sketch declares it:
-     * kept, and sent to its shader at once. Lights the param isn't for are
-     * passed over, as a selection mixes them (none left is nothing to do). A
-     * param its sketch no longer has is gone (404), so a pending change to it
-     * is passed over too.
-     */
-    async setParam(id: string, name: string, set: Changes, user: Person): Promise<{ instance: Instance } | Refusal> {
-      const forLights = lightsFor(await lights());
-      // Read and written with nothing awaited between: nothing since is lost.
-      const inst = db.instance(id);
-      if (!inst) return refusal("no such instance", 404, "not_found");
-      const spec = inst.declared?.find((p) => p.name === name);
-      if (!spec) return refusal(inst.declared ? `its sketch has no param ${name}` : "it hasn't said what params it has yet", 404, "no_param");
-      const isFor = forLights(spec);
-      const kept: Changes = [];
-      for (const [raw, ids] of set) {
-        const value = raw === null ? null : cleanValue(spec, raw);
-        if (raw !== null && value === null) return refusal(`${spec.label} is a ${spec.kind}`, 400, "bad_value");
-        const these = ids.filter(isFor);
-        if (these.length > 0) kept.push([value, these]);
-      }
-      if (kept.length === 0) return { instance: view(inst) };
-      db.updateInstance(id, { params: { ...inst.params, [name]: withChanges(spec, inst.params[name], kept) } });
-      db.logCoalesced(
-        {
-          user,
-          action: "shader.param",
-          ...(inst.shader_id !== null ? { shaderId: inst.shader_id } : {}),
-          shaderName: db.sketch(inst.sketch_id)?.name ?? null,
-          detail: { instance: id, param: name, lights: kept.reduce((n, [, ids]) => n + ids.length, 0) },
-        },
-        PARAM_LOG_WINDOW_MS,
-        (last) => last?.instance === id && last?.param === name,
-      );
-      changed();
-      sendParams(id, name, kept);
-      return { instance: view(db.instance(id)!) };
-    },
-
     /** An instance that isn't in yet, to go just above the shader with this key ("" the bottom; null the top). */
     setAbove(id: string, above: string | null) {
       const inst = db.instance(id);
@@ -418,7 +385,7 @@ export function createInstances({ config, db, arclamp, builds, lightIds, changed
       }
       db.deleteInstance(id);
       db.log({ user, action: "shader.delete", ...(inst.shader_id !== null ? { shaderId: inst.shader_id } : {}), shaderName: db.sketch(inst.sketch_id)?.name ?? null, detail: { instance: id } });
-      gone(id);
+      letGo(inst);
       changed();
       return true;
     },
@@ -434,7 +401,7 @@ export function createInstances({ config, db, arclamp, builds, lightIds, changed
       const inst = db.instanceOfShader(shaderId);
       if (!inst) return;
       db.deleteInstance(inst.id);
-      gone(inst.id);
+      letGo(inst);
       changed();
     },
   };

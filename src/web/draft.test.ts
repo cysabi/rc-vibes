@@ -1,50 +1,56 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
-import type { Change, Instance } from "../shared/vibes.ts";
+import type { Op, Pool } from "../shared/live.ts";
+import type { ParamSpec } from "../shared/params.ts";
+import type { Instance } from "../shared/vibes.ts";
 import type { Scene, SceneShader } from "./scene.ts";
 
-// What was sent, as each apply's changes.
-const sent: Change[] = [];
-// Refuses the first change this says, as vibes would.
-let failOn: ((c: Change) => boolean) | null = null;
-// Something done while an apply is on its way (an edit mid-apply).
+// What was sent: each update's changes, and what it said it's for.
+const sent: { ops: Op[]; note?: string }[] = [];
+// Refuses at the first change this says, as vibes would.
+let failOn: ((op: Op) => boolean) | null = null;
+// Something done while an update is on its way (an edit mid-send).
 let during: (() => void) | null = null;
 
 vi.mock("./scene.ts", () => {
-  class ApplyError extends Error {
-    at: number;
+  class UpdateError extends Error {
+    code: string;
     made: Record<string, string>;
-    constructor(message: string, at: number, made: Record<string, string>) {
+    constructor(message: string, code: string, made: Record<string, string>) {
       super(message);
-      this.at = at;
+      this.code = code;
       this.made = made;
     }
   }
   return {
-    ApplyError,
+    UpdateError,
     invalidateScene: vi.fn(async () => {}),
-    applyChanges: vi.fn(async (changes: Change[]) => {
-      sent.push(...changes);
+    sendUpdate: vi.fn(async (ops: Op[], note?: string) => {
+      sent.push({ ops, ...(note ? { note } : {}) });
       if (during) {
         const meanwhile = during;
         during = null;
         meanwhile();
       }
       const made: Record<string, string> = {};
-      for (const [at, c] of changes.entries()) {
-        if (failOn?.(c)) throw new ApplyError("arclamp said no", at, made);
-        // An instance, made: its id vibes' own.
-        if (c.op === "add") made[c.key] = `made${c.key}`;
+      for (const op of ops) {
+        if (failOn?.(op)) throw new UpdateError("arclamp said no", "refused", made);
+        // A sketch put in: an instance, its id vibes' own.
+        const add = /^shaders\/(\+[^/]+)$/.exec(op[0]);
+        if (add && op.length === 2) made[add[1]!] = `made${add[1]}`;
       }
       return made;
     }),
   };
 });
 
-const { applyDraft, currentDraft, drafts, EMPTY, keyNow, layerOf, layersOf, pendingCount, reachOf, reorderWithin, roomtoneChanges, switchEverywhere, switchFor, switchState, templateOf } =
+const { applyDraft, currentDraft, drafts, EMPTY, keyNow, layerOf, layersOf, opsOf, pendingCount, reachOf, reorderWithin, roomtoneChanges, switchEverywhere, switchFor, switchState, templateOf } =
   await import("./draft.ts");
-const { applyChanges } = await import("./scene.ts");
+const { sendUpdate } = await import("./scene.ts");
 
-/** A shader in the room, as vibes sends it (with its script fetched): arclamp's shader `id`, put in some other way. */
+/** Every change sent, in all its updates. */
+const ops = () => sent.flatMap((s) => s.ops);
+
+/** A shader in the room, as vibes has it (with its script fetched): arclamp's shader `id`, put in some other way. */
 function shader(id: number, extra: Partial<SceneShader> = {}): SceneShader {
   return {
     key: `rclamp-${id}`,
@@ -60,19 +66,22 @@ function shader(id: number, extra: Partial<SceneShader> = {}): SceneShader {
     footprint: [],
     scriptHash: `h${id}`,
     script: `function update() { return { lights: [] }; } // ${id}`,
-    params: null,
+    pool: null,
     ...extra,
   };
 }
 
 const roomtone = { lights: { "1": { a: 0.0600728851, b: 0.134711643, brightness: 0.7, fidelity: 1 }, "64": { on: 0 } } };
-/** The room: its shaders, top first. */
-const room = (...shaders: SceneShader[]): Scene => ({ shaders, roomtone });
+/** The room: its shaders, top first, and its pools. */
+const room = (...shaders: SceneShader[]): Scene => ({ shaders, roomtone, pools: {} });
+const withPools = (scene: Scene, pools: Record<string, Pool>): Scene => ({ ...scene, pools });
 
 const instance: Instance = { id: "i", sketchId: "s", sketchName: "Wave", commit: "c", buildId: "b", branch: "main", head: "c", home: [1, 2, 3], state: "live", error: null, next: null, by: { id: "u", name: "U" }, at: 0 };
 /** One put in from a sketch in vibes, still building: its key its instance's. */
 const coming = (extra: Partial<SceneShader> = {}) =>
   shader(0, { key: "i1", stage: "building", name: "Wave", state: null, script: undefined, scriptHash: null, by: "U", instance: { ...instance, id: "i1", home: [1], state: "building" }, ...extra });
+
+const speed: ParamSpec = { kind: "number", name: "speed", label: "Speed", lights: {}, default: 7, min: 0, max: 20, step: 0.1 };
 
 // Live: shader 12 on top of 11.
 const live = room(shader(12), shader(11));
@@ -170,8 +179,12 @@ describe("shaders on their way in", () => {
     expect(pendingCount(scene, currentDraft())).toBe(2);
     await applyDraft(scene);
     expect(sent).toEqual([
-      { op: "muted", key: "i1", muted: true },
-      { op: "stack", order: ["rclamp-12", "i1", "rclamp-11"] },
+      {
+        ops: [
+          ["shaders/i1/muted", true],
+          ["stack", ["rclamp-12", "i1", "rclamp-11"]],
+        ],
+      },
     ]);
     expect(currentDraft()).toBe(EMPTY);
   });
@@ -188,7 +201,7 @@ describe("shaders on their way in", () => {
     drafts.remove("i1");
     expect(pendingCount(scene, currentDraft())).toBe(1);
     await applyDraft(scene);
-    expect(sent).toEqual([{ op: "remove", key: "i1" }]);
+    expect(ops()).toEqual([["shaders/i1"]]);
   });
 });
 
@@ -208,38 +221,36 @@ describe("room tone with pending edits", () => {
   });
 });
 
-describe("apply", () => {
-  it("sends room tone, then mutes and masks, then the order, as one apply", async () => {
-    drafts.setRoomtone({ "64": { on: 1 } }, "on");
-    drafts.patchShader("rclamp-12", { muted: true });
-    drafts.reorder(["rclamp-11", "rclamp-12"]);
-    await applyDraft(live);
-    expect(sent).toEqual([
-      { op: "roomtone", lights: { "64": { on: 1 } }, code: "on" },
-      { op: "muted", key: "rclamp-12", muted: true },
-      { op: "stack", order: ["rclamp-11", "rclamp-12"] },
-    ]);
-    expect(currentDraft()).toBe(EMPTY);
+describe("a shader's params, in its pool", () => {
+  const pooled = withPools(room(shader(12, { pool: "p1" }), shader(11)), { p1: { declared: [speed], values: { speed: { "1": 2 } } } });
+
+  it("are what its pool declares, with its values by light grouped, and none for a shader with no pool (or one not there yet)", () => {
+    expect(layerOf(pooled, EMPTY, "rclamp-12")!.params).toEqual({ declared: [speed], values: { speed: [[2, [1]]] } });
+    expect(layerOf(pooled, EMPTY, "rclamp-11")!.params).toBeNull();
+    expect(layerOf(room(shader(12, { pool: "p9" })), EMPTY, "rclamp-12")!.params).toBeNull();
+    // Nothing declared yet: no values to show.
+    expect(layerOf(withPools(room(shader(12, { pool: "p1" })), { p1: { declared: null, values: { speed: { "1": 2 } } } }), EMPTY, "rclamp-12")!.params).toEqual({ declared: null, values: {} });
   });
 
-  it("keeps a param's change as a pending edit, light by light, previews it, and sends what actually changes", async () => {
-    const speed = { kind: "number", name: "speed", label: "Speed", lights: {}, default: 7, min: 0, max: 20, step: 0.1 } as const;
-    const withParams = room(shader(12, { params: { declared: [speed], values: { speed: [[2, [1]]] } } }), shader(11));
+  it("are kept as pending edits, light by light, previewed, and only what actually changes is sent", async () => {
     drafts.setParam("rclamp-12", "speed", [
       [1, 9],
       [2, 9],
     ]);
-    expect(pendingCount(withParams, currentDraft())).toBe(1);
-    expect(layerOf(withParams, currentDraft(), "rclamp-12")!.params).toEqual({ declared: [speed], values: { speed: [[9, [1, 2]]] } });
+    expect(pendingCount(pooled, currentDraft())).toBe(1);
+    expect(layerOf(pooled, currentDraft(), "rclamp-12")!.params).toEqual({ declared: [speed], values: { speed: [[9, [1, 2]]] } });
     // A later change goes over the first, light by light; null is back to the default.
     drafts.setParam("rclamp-12", "speed", [
       [2, 3],
       [3, null],
     ]);
-    expect(layerOf(withParams, currentDraft(), "rclamp-12")!.params!.values).toEqual({ speed: [[9, [1]], [3, [2]]] });
-    await applyDraft(withParams);
+    expect(layerOf(pooled, currentDraft(), "rclamp-12")!.params!.values).toEqual({ speed: [[9, [1]], [3, [2]]] });
+    await applyDraft(pooled);
     // Light 3 was at the default already: nothing to send for it.
-    expect(sent).toEqual([{ op: "params", key: "rclamp-12", name: "speed", set: [[9, [1]], [3, [2]]] }]);
+    expect(ops()).toEqual([
+      ["pools/p1/values/speed/1", 9],
+      ["pools/p1/values/speed/2", 3],
+    ]);
     expect(currentDraft()).toBe(EMPTY);
     // Back to what's live: nothing to send.
     sent.length = 0;
@@ -247,18 +258,50 @@ describe("apply", () => {
       [1, 2],
       [2, null],
     ]);
-    expect(pendingCount(withParams, currentDraft())).toBe(0);
-    await applyDraft(withParams);
+    expect(pendingCount(pooled, currentDraft())).toBe(0);
+    await applyDraft(pooled);
     expect(sent).toEqual([]);
   });
 
-  it("masks before unmuting, so a shader switched on for some lights never runs on the rest", async () => {
+  it("back to the default takes the light's value away", () => {
+    drafts.setParam("rclamp-12", "speed", [[1, null]]);
+    expect(opsOf(pooled, currentDraft())).toEqual([["pools/p1/values/speed/1"]]);
+  });
+
+  it("passes over a param its pool doesn't declare", () => {
+    drafts.setParam("rclamp-12", "gone", [[1, 3]]);
+    expect(opsOf(pooled, currentDraft())).toEqual([]);
+    expect(pendingCount(pooled, currentDraft())).toBe(0);
+  });
+});
+
+describe("apply", () => {
+  it("sends room tone, mutes and masks, and the order, as one update, saying what the room tone's for", async () => {
+    drafts.setRoomtone({ "64": { on: 1 } }, "on");
+    drafts.patchShader("rclamp-12", { muted: true });
+    drafts.reorder(["rclamp-11", "rclamp-12"]);
+    await applyDraft(live);
+    expect(sent).toEqual([
+      {
+        ops: [
+          ["roomtone/64/on", 1],
+          ["shaders/rclamp-12/muted", true],
+          ["stack", ["rclamp-11", "rclamp-12"]],
+        ],
+        note: "on",
+      },
+    ]);
+    expect(currentDraft()).toBe(EMPTY);
+  });
+
+  it("sends a mask and a mute together, for vibes to make in the order that keeps the room right", async () => {
     const muted = room(shader(12), shader(11, { muted: true }));
     drafts.patchShader("rclamp-11", { muted: false, mask: [64] });
     await applyDraft(muted);
-    expect(sent).toEqual([
-      { op: "mask", key: "rclamp-11", mask: [64] },
-      { op: "muted", key: "rclamp-11", muted: false },
+    expect(sent).toHaveLength(1);
+    expect(ops()).toEqual([
+      ["shaders/rclamp-11/muted", false],
+      ["shaders/rclamp-11/mask", [64]],
     ]);
   });
 
@@ -267,16 +310,13 @@ describe("apply", () => {
     drafts.patchShader("rclamp-11", { muted: true });
     drafts.remove("rclamp-12");
     await applyDraft(live);
-    expect(sent).toEqual([
-      { op: "remove", key: "rclamp-12" },
-      { op: "muted", key: "rclamp-11", muted: true },
-    ]);
+    expect(ops()).toEqual([["shaders/rclamp-12"], ["shaders/rclamp-11/muted", true]]);
     expect(currentDraft()).toBe(EMPTY);
   });
 
   it("leaves a shader it couldn't take out pending", async () => {
     drafts.remove("rclamp-12");
-    failOn = (c) => c.op === "remove";
+    failOn = (op) => op[0] === "shaders/rclamp-12" && op.length === 1;
     await expect(applyDraft(live)).rejects.toThrow("arclamp said no");
     expect(currentDraft().removed).toEqual(["rclamp-12"]);
   });
@@ -285,11 +325,11 @@ describe("apply", () => {
     drafts.reorder(["rclamp-12", "rclamp-11"]);
     drafts.patchShader("rclamp-11", { muted: true });
     await applyDraft(live);
-    expect(sent).toEqual([{ op: "muted", key: "rclamp-11", muted: true }]);
+    expect(ops()).toEqual([["shaders/rclamp-11/muted", true]]);
     sent.length = 0;
     drafts.reorder(["rclamp-11", "rclamp-12"]);
     await applyDraft(live);
-    expect(sent).toEqual([{ op: "stack", order: ["rclamp-11", "rclamp-12"] }]);
+    expect(ops()).toEqual([["stack", ["rclamp-11", "rclamp-12"]]]);
   });
 
   it("lets go of edits to a shader that's gone", async () => {
@@ -308,23 +348,22 @@ describe("apply", () => {
     expect(currentDraft().roomtone).toEqual({ "1": { brightness: 0.3 } });
   });
 
-  it("sends live mode's whole drafts without waiting: only the newest's answer, with nothing edited since, clears it", async () => {
+  it("sends live mode's drafts without waiting: only the newest's answer, with nothing edited since, clears it", async () => {
     const answers: (() => void)[] = [];
-    const usual = vi.mocked(applyChanges).getMockImplementation()!;
-    vi.mocked(applyChanges).mockImplementation((changes, whole) => {
-      sent.push(...changes);
-      expect(whole).toBe(true);
+    const usual = vi.mocked(sendUpdate).getMockImplementation()!;
+    vi.mocked(sendUpdate).mockImplementation((updateOps, note) => {
+      sent.push({ ops: updateOps, ...(note ? { note } : {}) });
       return new Promise((done) => answers.push(() => done({})));
     });
     try {
       drafts.setRoomtone({ "1": { brightness: 0.2 } }, "dim");
-      const first = applyDraft(live, { whole: true });
+      const first = applyDraft(live);
       drafts.setRoomtone({ "1": { brightness: 0.3 } }, "dim");
-      const second = applyDraft(live, { whole: true });
-      // Both on their way at once, each with everything pending as it was then.
+      const second = applyDraft(live);
+      // Both on their way at once, each with what was pending then.
       expect(sent).toEqual([
-        { op: "roomtone", lights: { "1": { brightness: 0.2 } }, code: "dim" },
-        { op: "roomtone", lights: { "1": { brightness: 0.3 } }, code: "dim" },
+        { ops: [["roomtone/1/brightness", 0.2]], note: "dim" },
+        { ops: [["roomtone/1/brightness", 0.3]], note: "dim" },
       ]);
       answers[0]!();
       await first;
@@ -333,18 +372,22 @@ describe("apply", () => {
       await second;
       expect(currentDraft()).toBe(EMPTY);
     } finally {
-      vi.mocked(applyChanges).mockImplementation(usual);
+      vi.mocked(sendUpdate).mockImplementation(usual);
     }
   });
 
-  it("leaves just what didn't land pending when a step fails", async () => {
+  it("keeps the draft pending when it's refused; what landed before it stopped isn't pending once the room shows it", async () => {
     drafts.setRoomtone({ "1": { brightness: 0.2 } }, "dim");
     drafts.patchShader("rclamp-12", { muted: true });
-    failOn = (c) => c.op === "muted" && c.key === "rclamp-12";
+    failOn = (op) => op[0] === "shaders/rclamp-12/muted";
     await expect(applyDraft(live)).rejects.toThrow("arclamp said no");
     const left = currentDraft();
-    expect(left.roomtone).toEqual({});
+    expect(left.roomtone).toEqual({ "1": { brightness: 0.2 } });
     expect(left.edits).toEqual({ "rclamp-12": { muted: true } });
+    // The room tone landed: only the mute's pending.
+    const landed: Scene = { ...live, roomtone: { lights: { ...roomtone.lights, "1": { ...roomtone.lights["1"], brightness: 0.2 } } } };
+    expect(pendingCount(landed, left)).toBe(1);
+    expect(opsOf(landed, left)).toEqual([["shaders/rclamp-12/muted", true]]);
   });
 });
 
@@ -352,6 +395,7 @@ describe("adding a sketch", () => {
   const aurora = () => drafts.add({ sketchId: "s1", sketchName: "Aurora", branch: "main", home: [1, 2], mask: [64] });
   const rain = () => drafts.add({ sketchId: "s2", sketchName: "Rain", branch: "ada/try", home: [1], mask: [2, 64] });
   const built = { id: "b1", commit: "abc1234def", state: "built" as const, error: null };
+  const poolOf = (key: string) => currentDraft().added.find((a) => a.key === key)!.pool;
 
   it("goes on top, the latest topmost, each counted once", () => {
     const first = aurora();
@@ -361,6 +405,14 @@ describe("adding a sketch", () => {
     const [top] = layersOf(live, currentDraft());
     expect(top).toMatchObject({ name: "Rain", mask: [2, 64], script: "", adding: { sketchId: "s2" } });
     expect(reachOf(top!)).toEqual([1]);
+  });
+
+  it("has a pool of its own from the start, and no params until its preview says what it declares", () => {
+    const first = aurora();
+    const second = rain();
+    expect(poolOf(first)).toMatch(/^[0-9a-f-]{36}$/);
+    expect(poolOf(first)).not.toBe(poolOf(second));
+    expect(layerOf(live, currentDraft(), first)).toMatchObject({ pool: poolOf(first), params: null });
   });
 
   it("is previewed once it's built, with its script", () => {
@@ -380,52 +432,79 @@ describe("adding a sketch", () => {
     expect(pendingCount(live, currentDraft())).toBe(0);
   });
 
-  it("goes in on its home, from its branch: as the build previewed, or the branch's head if none was asked for yet", async () => {
+  it("goes in on its home, from its branch, with its pool: as the build previewed, or the branch's head if none was asked for yet", async () => {
     const first = aurora();
     drafts.built(first, built, "function update() {}");
     const second = rain();
     await applyDraft(live);
-    expect(sent).toEqual([
-      { op: "add", key: first, sketch: "s1", branch: "main", build: "b1", home: [1, 2], muted: false, mask: [64] },
-      { op: "add", key: second, sketch: "s2", branch: "ada/try", home: [1], muted: false, mask: [2, 64] },
+    // The lowest first.
+    expect(ops()).toEqual([
+      [`shaders/${first}`, { sketch: "s1", branch: "main", build: "b1", home: [1, 2], muted: false, mask: [64], pool: expect.any(String) }],
+      [`shaders/${second}`, { sketch: "s2", branch: "ada/try", home: [1], muted: false, mask: [2, 64], pool: expect.any(String) }],
     ]);
     expect(currentDraft()).toBe(EMPTY);
   });
 
   it("is switched like any other, and goes in that way", async () => {
     const key = aurora();
+    const pool = poolOf(key);
     drafts.patchShader(key, { mask: [2, 64] });
     expect(layersOf(live, currentDraft())[0]!.mask).toEqual([2, 64]);
     // Still one change.
     expect(pendingCount(live, currentDraft())).toBe(1);
     drafts.patchShader(key, { muted: true });
     await applyDraft(live);
-    expect(sent).toEqual([{ op: "add", key, sketch: "s1", branch: "main", home: [1, 2], muted: true, mask: [2, 64] }]);
+    expect(ops()).toEqual([[`shaders/${key}`, { sketch: "s1", branch: "main", home: [1, 2], muted: true, mask: [2, 64], pool }]]);
     expect(currentDraft()).toBe(EMPTY);
+  });
+
+  it("has the params its preview says it declares, set like any other's, and goes in with them in its pool", async () => {
+    const key = aurora();
+    const pool = poolOf(key);
+    drafts.declared(key, [speed]);
+    expect(layerOf(live, currentDraft(), key)!.params).toEqual({ declared: [speed], values: {} });
+    // Said again, the same: the draft's as it was.
+    const before = currentDraft();
+    drafts.declared(key, [speed]);
+    expect(currentDraft()).toBe(before);
+    drafts.setParam(key, "speed", [
+      [1, 9],
+      [2, 7],
+    ]);
+    expect(layerOf(live, currentDraft(), key)!.params!.values).toEqual({ speed: [[9, [1]]] });
+    await applyDraft(live);
+    // What it declares, and the values set (2 is at the default: nothing to send).
+    expect(ops()).toEqual([
+      [`shaders/${key}`, { sketch: "s1", branch: "main", home: [1, 2], muted: false, mask: [64], pool }],
+      [`pools/${pool}/declared`, [speed]],
+      [`pools/${pool}/values/speed/1`, 9],
+    ]);
   });
 
   it("goes in where you put it, just above the one under it, the lowest first", async () => {
     const first = aurora();
     const second = rain();
+    const [p1, p2] = [poolOf(first), poolOf(second)];
     // Rain under the rest; Aurora between the room's two.
     drafts.reorder(["rclamp-12", first, "rclamp-11", second]);
     expect(pendingCount(live, currentDraft())).toBe(2);
     await applyDraft(live);
-    expect(sent).toEqual([
-      { op: "add", key: second, sketch: "s2", branch: "ada/try", home: [1], muted: false, mask: [2, 64], above: "" },
-      { op: "add", key: first, sketch: "s1", branch: "main", home: [1, 2], muted: false, mask: [64], above: "rclamp-11" },
+    expect(ops()).toEqual([
+      [`shaders/${second}`, { sketch: "s2", branch: "ada/try", home: [1], muted: false, mask: [2, 64], above: "", pool: p2 }],
+      [`shaders/${first}`, { sketch: "s1", branch: "main", home: [1, 2], muted: false, mask: [64], above: "rclamp-11", pool: p1 }],
     ]);
   });
 
   it("goes in above another you're adding, by that one's key; and the stack's sent with them", async () => {
     const first = aurora();
     const second = rain();
+    const [p1, p2] = [poolOf(first), poolOf(second)];
     drafts.reorder([first, second, "rclamp-11", "rclamp-12"]);
     await applyDraft(live);
-    expect(sent).toEqual([
-      { op: "add", key: second, sketch: "s2", branch: "ada/try", home: [1], muted: false, mask: [2, 64], above: "rclamp-11" },
-      { op: "add", key: first, sketch: "s1", branch: "main", home: [1, 2], muted: false, mask: [64], above: second },
-      { op: "stack", order: [first, second, "rclamp-11", "rclamp-12"] },
+    expect(ops()).toEqual([
+      [`shaders/${second}`, { sketch: "s2", branch: "ada/try", home: [1], muted: false, mask: [2, 64], above: "rclamp-11", pool: p2 }],
+      [`shaders/${first}`, { sketch: "s1", branch: "main", home: [1, 2], muted: false, mask: [64], above: second, pool: p1 }],
+      ["stack", [first, second, "rclamp-11", "rclamp-12"]],
     ]);
     // What's open on one stays open on the shader it's become.
     expect(keyNow(first)).toBe(`made${first}`);
@@ -440,7 +519,7 @@ describe("adding a sketch", () => {
       drafts.setRoomtone({ "1": { brightness: 0.3 } }, "dimmer");
     };
     await applyDraft(live);
-    expect(sent.filter((c) => c.op === "add")).toHaveLength(1);
+    expect(ops().filter(([path]) => path.startsWith("shaders/+"))).toHaveLength(1);
     expect(currentDraft().added).toEqual([]);
     expect(currentDraft().roomtone).toEqual({ "1": { brightness: 0.3 } });
     expect(pendingCount(live, currentDraft())).toBe(1);
@@ -458,15 +537,15 @@ describe("adding a sketch", () => {
 
   it("stays pending if it couldn't go in", async () => {
     aurora();
-    failOn = (c) => c.op === "add";
+    failOn = (op) => op[0].startsWith("shaders/+");
     await expect(applyDraft(live)).rejects.toThrow("arclamp said no");
     expect(currentDraft().added).toMatchObject([{ sketchId: "s1" }]);
   });
 
-  it("comes out of the draft once it's in, though the apply stops after it", async () => {
+  it("comes out of the draft once it's in, though the update stops after it", async () => {
     const key = aurora();
     drafts.patchShader("rclamp-12", { muted: true });
-    failOn = (c) => c.op === "muted";
+    failOn = (op) => op[0].endsWith("/muted");
     await expect(applyDraft(live)).rejects.toThrow("arclamp said no");
     expect(currentDraft().added).toEqual([]);
     expect(currentDraft().edits).toEqual({ "rclamp-12": { muted: true } });

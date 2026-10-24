@@ -7,17 +7,22 @@
 // restart sit in the panel's title bar, and the clock in the status bar.
 //
 // The lights' layout comes from vibes (VIBES_URL), asked with the box's own
-// token (VIBES_BOX_TOKEN), so the webview never needs vibes' cookies.
+// token (VIBES_BOX_TOKEN), so the webview never needs vibes' cookies. So do
+// the preview's params: a pool of its own on vibes (one each time this
+// starts), followed here as a shader in the room follows its own (the same
+// stream: src/server/params.ts), with each knob turned in the preview sent on.
 //
 // Opened at <BOX_COMMITS_FOLDER>/<commit>/sketch (vibes' page does that for a
 // sketch at one commit), it first makes that folder: a checkout of just that
 // commit, beside the clone, which it's left alone.
 
 import { execFile } from "node:child_process";
+import { randomUUID } from "node:crypto";
 import fs from "node:fs";
 import path from "node:path";
 import { promisify } from "node:util";
 import * as vscode from "vscode";
+import type { Changes, ParamSpec, ParamTable, ParamValue } from "../../../src/shared/params.ts";
 import { BOX_COMMITS_FOLDER, type Lights } from "../../../src/shared/vibes.ts";
 import type { FromPreview, LogLine, SketchSource, ToPreview } from "../../../src/web/preview/protocol.ts";
 import { DevLoop } from "./dev.ts";
@@ -49,6 +54,10 @@ export function activate(context: vscode.ExtensionContext) {
   status.tooltip = "The sketch's preview: play or pause";
   const consoleView = new ConsoleView();
   const preview = new PreviewView(context.extensionUri, consoleView, status);
+  const pool = new PoolLink((m) => preview.post(m), (text) => consoleView.add({ kind: "error", text }));
+  preview.onDeclared = (specs) => pool.declare(specs);
+  preview.onSet = (name, changes) => pool.set(name, changes);
+  context.subscriptions.push({ dispose: () => pool.stop() });
 
   const retain = { webviewOptions: { retainContextWhenHidden: true } };
   context.subscriptions.push(
@@ -139,6 +148,123 @@ async function keepLayout(preview: PreviewView, consoleView: ConsoleView) {
 
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 
+// The pool's stream: opened again after a break (1 s, doubling to 30 s).
+const POOL_FIRST_WAIT_MS = 1000;
+const POOL_MOST_WAIT_MS = 30_000;
+
+/**
+ * The preview's params on vibes: a pool of its own, made (and a token for it
+ * had) once the sketch says what it declares, then followed: vibes' values
+ * (all of them, then each change, as the stream sends them) handed to the
+ * preview, and opened again with each change to what it declares. Knobs
+ * turned in the preview go to vibes as they're turned.
+ */
+class PoolLink {
+  /** The pool: this run of the extension's own. */
+  readonly id = randomUUID();
+  private declared: ParamSpec[] | null = null;
+  private stream: AbortController | null = null;
+  private wait = POOL_FIRST_WAIT_MS;
+  private stopped = false;
+  private failing = false;
+  private readonly url = process.env.VIBES_URL;
+  private readonly token = process.env.VIBES_BOX_TOKEN;
+
+  private readonly tell: (m: Extract<ToPreview, { type: "pool" }>) => void;
+  private readonly warn: (text: string) => void;
+
+  constructor(tell: (m: Extract<ToPreview, { type: "pool" }>) => void, warn: (text: string) => void) {
+    this.tell = tell;
+    this.warn = warn;
+  }
+
+  declare(specs: ParamSpec[]) {
+    if (JSON.stringify(specs) === JSON.stringify(this.declared)) return;
+    this.declared = specs;
+    this.wait = POOL_FIRST_WAIT_MS;
+    void this.follow();
+  }
+
+  /** A knob turned in the preview, to vibes. */
+  set(name: string, changes: [number, ParamValue | null][]) {
+    if (!this.url || !this.token || this.declared === null) return;
+    void fetch(new URL(`/box-api/pools/${this.id}/values`, this.url), {
+      method: "POST",
+      headers: { Authorization: `Bearer ${this.token}`, "Content-Type": "application/json" },
+      body: JSON.stringify({ name, changes }),
+    }).catch(() => {
+      // vibes is away: the preview has it anyway, and the stream's state, when it's back, says what vibes kept.
+    });
+  }
+
+  stop() {
+    this.stopped = true;
+    this.stream?.abort();
+  }
+
+  /** The pool's stream, from scratch: a token (making the pool, the first time), then what's declared, then every value and each change. */
+  private async follow() {
+    if (!this.url || !this.token || this.stopped) return;
+    this.stream?.abort();
+    const ctl = new AbortController();
+    this.stream = ctl;
+    try {
+      const made = await fetch(new URL("/box-api/pools", this.url), {
+        method: "POST",
+        headers: { Authorization: `Bearer ${this.token}`, "Content-Type": "application/json" },
+        body: JSON.stringify({ pool: this.id }),
+        signal: ctl.signal,
+      });
+      if (!made.ok) throw new Error(`vibes answered ${made.status}`);
+      const { token } = (await made.json()) as { token: string };
+      const res = await fetch(new URL("/shader-api/params", this.url), {
+        method: "POST",
+        headers: { Authorization: `Bearer ${token}`, "Content-Type": "application/json", Accept: "text/event-stream" },
+        body: JSON.stringify({ v: 1, params: this.declared }),
+        signal: ctl.signal,
+      });
+      if (!res.ok || !res.body) throw new Error(`vibes answered ${res.status}`);
+      this.failing = false;
+      this.wait = POOL_FIRST_WAIT_MS;
+      const reader = res.body.getReader();
+      const decoder = new TextDecoder();
+      let text = "";
+      for (;;) {
+        const { done, value } = await reader.read();
+        if (done) break;
+        text += decoder.decode(value, { stream: true });
+        for (let at = text.indexOf("\n\n"); at >= 0; at = text.indexOf("\n\n")) {
+          this.take(text.slice(0, at));
+          text = text.slice(at + 2);
+        }
+      }
+    } catch (err) {
+      if (ctl.signal.aborted) return;
+      if (!this.failing) this.warn(`Couldn't follow the preview's params on vibes: ${(err as Error).message}. Trying again.`);
+      this.failing = true;
+    }
+    if (this.stream !== ctl || this.stopped) return;
+    // Broken, or ended: again, after a while.
+    await sleep(this.wait);
+    this.wait = Math.min(POOL_MOST_WAIT_MS, this.wait * 2);
+    if (this.stream === ctl) void this.follow();
+  }
+
+  /** One event from the stream, to the preview. */
+  private take(block: string) {
+    let event = "message";
+    const data: string[] = [];
+    for (const line of block.split("\n")) {
+      if (line.startsWith("event:")) event = line.slice(6).trim();
+      else if (line.startsWith("data:")) data.push(line.slice(5).trimStart());
+    }
+    if (data.length === 0) return;
+    const d = JSON.parse(data.join("\n")) as { values?: ParamTable; name?: string; set?: Changes };
+    if (event === "state" && d.values) this.tell({ type: "pool", event: "state", values: d.values });
+    else if (event === "change" && d.name && d.set) this.tell({ type: "pool", event: "change", name: d.name, set: d.set });
+  }
+}
+
 /** The preview: src/web/preview's bundle in a webview, fed the layout and the sketch. */
 class PreviewView implements vscode.WebviewViewProvider {
   private readonly media: vscode.Uri;
@@ -150,6 +276,9 @@ class PreviewView implements vscode.WebviewViewProvider {
   private source: SketchSource | null = null;
   /** What the preview's module runner sends the box's Vite. */
   onHmr: ((payload: unknown) => void) | null = null;
+  /** What the sketch declares, as the preview says; and each knob turned there. */
+  onDeclared: ((specs: ParamSpec[]) => void) | null = null;
+  onSet: ((name: string, changes: [number, ParamValue | null][]) => void) | null = null;
 
   constructor(extensionUri: vscode.Uri, consoleView: ConsoleView, status: vscode.StatusBarItem) {
     this.media = vscode.Uri.joinPath(extensionUri, "media", "preview");
@@ -187,6 +316,10 @@ class PreviewView implements vscode.WebviewViewProvider {
       if (this.source) this.post({ type: "source", source: this.source });
     } else if (m.type === "hmr") {
       this.onHmr?.(m.payload);
+    } else if (m.type === "declared") {
+      this.onDeclared?.(m.specs);
+    } else if (m.type === "set") {
+      this.onSet?.(m.name, m.changes);
     } else if (m.type === "log") {
       this.console.add({ kind: m.line.level, at: m.line.at, text: m.line.text });
     } else {

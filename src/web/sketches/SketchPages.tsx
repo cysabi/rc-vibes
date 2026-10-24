@@ -11,12 +11,12 @@ import {
   useCreateSketch,
   useDeletedSketches,
   useDeleteSketch,
-  useLights,
   useRestoreSketch,
   useSketch,
   useSketches,
   useStatus,
 } from "../api.ts";
+import { useLights } from "../scene.ts";
 import { Brand } from "../components/Brand.tsx";
 import { UserMenu } from "../components/UserMenu.tsx";
 import { ChevronUpIcon, PlusIcon, TrashIcon } from "../icons.tsx";

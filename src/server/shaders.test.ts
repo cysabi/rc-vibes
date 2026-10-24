@@ -200,7 +200,7 @@ describe("the stack", () => {
 
   it("places those not in yet: each just above the one under it, or at the bottom", async () => {
     const id = await putIn([1], false);
-    db.addInstance({ id: "i2", sketch_id: SKETCH, build_id: "b1", home: [1], by_id: ada.id, by_name: ada.name, at: 1 });
+    db.addInstance({ id: "i2", sketch_id: SKETCH, build_id: "b1", home: [1], by_id: ada.id, by_name: ada.name, at: 1, pool_id: "p2" });
     expect((await send("PUT", "/stack", { order: ["rclamp-12", id, "rclamp-11", "rclamp-10", "i2"] })).status).toBe(204);
     expect(db.instance(id)!.above).toBe("rclamp-11");
     expect(db.instance("i2")!.above).toBe("");

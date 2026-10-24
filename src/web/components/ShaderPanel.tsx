@@ -20,7 +20,8 @@ import { request, useBranchHead } from "../api.ts";
 import { drafts, reachOf, switchEverywhere, switchState, type Adding, type Layer } from "../draft.ts";
 import { ChevronLeftIcon, OpenIcon, TrashIcon } from "../icons.tsx";
 import { navigate } from "../route.ts";
-import { invalidateScene } from "../scene.ts";
+import { pathOf } from "../../shared/live.ts";
+import { invalidateScene, sendUpdate } from "../scene.ts";
 import { useLiveMode } from "../settings.ts";
 import { commitName, count, listOf, ordinal } from "../words.ts";
 
@@ -184,8 +185,8 @@ function Home({ instance, lights, selected }: { instance: Instance; lights: Ligh
   const move = async () => {
     setMoving(true);
     try {
-      await request("PUT", `/api/instances/${instance.id}/home`, { home: selected });
-      await invalidateScene();
+      // Answered once the tree here shows it.
+      await sendUpdate([[pathOf("shaders", instance.id, "instance", "home"), selected]]);
     } finally {
       setMoving(false);
     }

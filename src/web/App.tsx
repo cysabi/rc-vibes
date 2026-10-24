@@ -1,8 +1,8 @@
 import { useCallback, useEffect, useLayoutEffect, useMemo, useRef, useState } from "react";
 import type { Rail } from "../shared/arclamp.ts";
 import { useAddingBuilds } from "./adding.ts";
-import { useLights, useMe, useStreetViews } from "./api.ts";
-import { useScene, type Scene } from "./scene.ts";
+import { useMe, useStreetViews } from "./api.ts";
+import { useLights, useScene, type Scene } from "./scene.ts";
 import { applyDraft, keyNow, layerOf, layersOf, pendingCount, reachOf, templateOf, useDraft, type Draft, type LayerKey } from "./draft.ts";
 import { Banners } from "./components/Banners.tsx";
 import { ColorPreview } from "./components/ColorPreview.tsx";
@@ -23,7 +23,7 @@ import { SplitHandle, StreetView } from "./components/StreetView.tsx";
 import { SketchesLink, SketchPages } from "./sketches/SketchPages.tsx";
 
 const NO_RAILS: Rail[] = [];
-const NO_SCENE: Scene = { shaders: [], roomtone: null };
+const NO_SCENE: Scene = { shaders: [], roomtone: null, pools: {} };
 
 export function App() {
   const me = useMe();
@@ -66,10 +66,11 @@ function Shell() {
   // Pending edits put vibes in simulated mode: the map shows the preview of
   // them until they're applied or discarded. So does peeking at the room
   // tone, with every shader set aside while it's held. In live mode there's
-  // no preview: edits go to the room as they're made, everything pending
-  // sent again each time it changes, without waiting for the last send to
-  // land (vibes makes the newest: scene.ts), so the room keeps up with a
-  // drag. Only a failed send shows them as pending, to try again or drop.
+  // no preview: edits go to the room as they're made, what's pending sent
+  // again each time it changes, without waiting for the last send to land
+  // (vibes makes what comes while it's busy together, the latest winning:
+  // updates.ts), so the room keeps up with a drag. Only a failed send shows
+  // them as pending, to try again or drop.
   const draft = useDraft();
   const live = scene.data ?? NO_SCENE;
   const pending = scene.data ? pendingCount(live, draft) : 0;
@@ -82,7 +83,7 @@ function Shell() {
     // After a failed send, it waits for Apply or Discard rather than trying again and again.
     if (!liveMode || pending === 0 || liveError || draft === lastSent.current) return;
     lastSent.current = draft;
-    applyDraft(live, { whole: true }).catch((err: Error) => setLiveError(err.message));
+    applyDraft(live).catch((err: Error) => setLiveError(err.message));
   }, [liveMode, pending, draft, live, liveError]);
   // Nothing pending, or live mode switched, starts clean.
   useEffect(() => {

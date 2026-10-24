@@ -5,9 +5,10 @@
 // the device can hold that too.
 
 import { useEffect, useRef, useState, type RefObject } from "react";
-import { useLights, useStreetViews } from "../api.ts";
+import { useStreetViews } from "../api.ts";
 import { CloseIcon } from "../icons.tsx";
 import { useFrames } from "../live.ts";
+import { useLights } from "../scene.ts";
 import { loadBasis, pickEncoding, pickTiers, type Basis, type Manifest, type Tier } from "../streetview/basis.ts";
 import { Relighter, type Look } from "../streetview/render.ts";
 import { bulbsOf, sameWeights, weightsOf } from "../streetview/weights.ts";

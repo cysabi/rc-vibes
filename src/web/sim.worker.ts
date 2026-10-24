@@ -11,9 +11,11 @@
 //
 // A shader's params come as they would from vibes' stream in the room: all of
 // them, handed to the library with __vibes.apply (packages/vibes/src/param.ts).
+// What it declares goes the other way, once it's loaded: for a sketch being
+// added, that's how the page knows its params before it's in the room.
 
 import type { VibesHost } from "../../packages/vibes/src/param.ts";
-import type { ParamTable } from "../shared/params.ts";
+import type { ParamSpec, ParamTable } from "../shared/params.ts";
 
 const scope = self as unknown as DedicatedWorkerGlobalScope & Record<string, unknown>;
 
@@ -43,7 +45,11 @@ export type ToWorker =
   | { type: "tick"; seq: number; prev: unknown; now: number; initial: number }
   /** Its params' values, all of them, as vibes' stream sends them. */
   | { type: "params"; values: ParamTable };
-export type FromWorker = { type: "loaded" } | { type: "out"; seq: number; out: unknown } | { type: "error"; seq?: number; message: string };
+export type FromWorker =
+  /** Loaded, with what it declares as params (as the library has them; none without one). */
+  | { type: "loaded"; declared: ParamSpec[] }
+  | { type: "out"; seq: number; out: unknown }
+  | { type: "error"; seq?: number; message: string };
 
 scope.onmessage = (e: MessageEvent<ToWorker>) => {
   const m = e.data;
@@ -57,7 +63,7 @@ scope.onmessage = (e: MessageEvent<ToWorker>) => {
       // Indirect eval: global scope, not strict, like a script tag.
       (0, eval)(m.script);
       if (typeof scope.update !== "function") throw new Error("the script doesn't define an update() function");
-      reply({ type: "loaded" });
+      reply({ type: "loaded", declared: (scope.__vibes as VibesHost | undefined)?.params() ?? [] });
     } catch (err) {
       reply({ type: "error", message: message(err) });
     }

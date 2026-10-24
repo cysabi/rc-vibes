@@ -400,21 +400,40 @@ ever be built from one of its commits. On while `SKETCHES=1`.
   in, failing, updating), its home (moved to the selection with a button),
   and offers its code, an update to its sketch's latest commit, and taking it
   out.
-- **The scene is pushed** (`src/server/scene-feed.ts`, `src/web/scene.ts`).
-  vibes looks at arclamp's scene twice a second (learning footprints as it
-  goes) and pushes it to browsers over the room socket
-  (`/api/scene/ws`) whenever it's different: the stack of shaders as
-  vibes has them (below), each with its sketch, footprint and instance, but
-  not its script (a hash says which; the preview fetches scripts it hasn't
-  got, `/api/scene/scripts`). Anything changed through vibes is looked at
-  again at once. A ping every 10 s lets a page tell a quiet socket from a
-  dead one and open it again (a restarting vibes, behind a proxy that keeps
-  the connection, never says). Pending edits go the other way, as applies:
-  live mode sends everything pending each time it changes, without waiting
-  for the last to land (a whole apply, standing for any whole one still
-  waiting: vibes makes just the newest), so the room keeps up with a drag
-  at the cost of one trip there, not a round trip a step. Their answers,
-  and the scenes a run of changes makes, go out at most every 10 ms.
+- **The live state** (`src/shared/live.ts`, `src/server/live.ts`,
+  `src/web/scene.ts`). Everything a page shows or changes of the room is one
+  tree, each value at a path: room tone (`roomtone/<light>/<channel>`), the
+  shaders as vibes has them (below) and their order (`stack`), the params'
+  pools (`pools/<pool>`, below) and the map's layout (`layout`). vibes
+  holds it; each page keeps a copy, over the room socket (`/api/scene/ws`):
+  the whole tree once it says hello, then each change as it's made, small
+  (a room tone step is ~130 bytes, where the whole scene was 10.5 KiB), and
+  numbered, so a page that reconnects says the last it had (and which run
+  of vibes it was from) and gets just what it missed. The scene's part is
+  made from arclamp's (followed as it changes, footprints learned from the
+  light stream: `src/server/scene-feed.ts`), each shader with its sketch,
+  footprint, instance and pool, but not its script (a hash says which; the
+  preview fetches scripts it hasn't got, `/api/scene/scripts`). A ping every
+  10 s lets a page tell a quiet socket from a dead one and open it again (a
+  restarting vibes, behind a proxy that keeps the connection, never says).
+- **Updates** (`src/server/updates.ts`). A page changes the tree only by
+  sending an update: some paths and their new values (or a path taken away),
+  checked all at once and refused whole if any isn't one a page can change.
+  vibes makes them one page's at a time, area by area, in the order that
+  keeps the room right (room tone; shaders out; sketches in, their pools
+  first; each shader's home, mute and mask, the mask before it's unmuted;
+  params; the stack; the layout), those that come while one's being made
+  together, the latest of each path winning; and answers each once the tree
+  shows it. Room tone, each shader and the stack are each changed in arclamp
+  one call at a time, whatever comes meanwhile merged into the next, so the
+  room keeps up with anyone's drag without a queue. Pending edits stay in the
+  page (its draft) until vibes says they're made: Apply sends them as one
+  update; live mode sends them as they change, without waiting for the last
+  to land, so the room keeps up at the cost of one trip there, not a round
+  trip a step. Room tone is held by arclamp, a pool's values are saved a
+  second after they last changed, and the history notes a run of changes as
+  one entry. The map's own edits (lights moved, turned, tagged; rails) are
+  updates too.
 
 Still to come: VS Code's own defaults that only its product configuration
 sets (no AI chat; the welcome page is skipped from VS Code's address), its
@@ -470,16 +489,15 @@ of the mediating, ids and positions included, is the server's.
   itself: one put in just before vibes stopped is found by its stamp, not
   put in again. A panel open on a sketch you're adding stays open on the
   shader it becomes.
-- **Phase 3** (done; `src/server/apply.ts`, `src/web/scene.ts`): one
-  socket between browser and server (`/api/scene/ws`), for the stack and
-  for what's asked of it. Apply is one message, the draft's changes in
-  order (room tone, shaders out, sketches in, mutes and masks, the stack),
-  which the server makes as one run, naming what it adds by the keys of the
-  edits that add them (so a later change, in it or a later apply, can name
-  them too). It's answered once the scene showing it has gone out: applied,
-  or refused at one change, the ones before it made, and the browser keeps
-  the rest pending. A shader gone meanwhile has nothing left to change, so
-  that isn't refused. It isn't all or nothing, since rclamp has no batch
+- **Phase 3** (done, then made the live state's: above): one socket between
+  browser and server (`/api/scene/ws`), for the stack and for what's asked of
+  it. Apply is one update, the draft's changes, which the server makes as one
+  run, naming what it adds by the keys of the edits that add them (so a later
+  change, in it or a later update, can name them too). It's answered once the
+  tree shows it: done, or refused, and the browser keeps it pending; refused
+  part way in arclamp, what was made before stays made (and so isn't pending
+  any more). A shader gone meanwhile has nothing left to change, so that isn't
+  refused. It isn't all or nothing in the room, since rclamp has no batch
   (with one, were it to land, it could be). The socket's origin is checked
   as every request's is; a refused one (a foreign origin, no session) is
   answered, not left hanging. The routes by key stay, for the panel's own
@@ -498,43 +516,61 @@ within a part), so a toggle can be for old bulbs alone; a color is for
 color lights only. The rules on both ends are the library's
 (`packages/vibes/src/wire.ts`, re-exported by `src/shared/params.ts`).
 
+- **In pools** (`src/server/pools.ts`). Params live in a pool: what's
+  declared, and each param's values, by light (`pools/<pool>/declared`,
+  `pools/<pool>/values/<param>/<light>` in the live state). Every running copy
+  of a sketch's code has one, whatever runs it: each shader put in from a
+  sketch (its instance's), a sketch being added (minted in the page that's
+  adding it, which it takes into the room with it), and each preview of one
+  in its box. A pool's id is whoever needs one's to mint. Anyone may set its
+  values; only its owner may say what it declares: an instance's is its
+  shader in the room's, otherwise whoever made it. Values are saved a second
+  after they last changed; pools nothing has used for a day go.
 - **Values are by light, and only by light.** There's no value for
-  everywhere: setting one everywhere is setting it on every light. An
-  instance keeps them (`instances.params`, by name) grouped by value,
-  `[[value, [ids]], …]`, leaving out lights at the default.
+  everywhere: setting one everywhere is setting it on every light. A value
+  is kept if it's one of its param's kind, for a light the param's for (or,
+  before anything's said what it declares, any value a param could have);
+  one that stops being its param's is passed over wherever it's read.
   `PUT /api/shaders/<key>/params/<name>` takes `{ set: [[value, [ids]], …] }`
-  (null back to the default), and so does a `params` change in an apply;
-  lights the param isn't for are passed over. Each change is logged, a run
-  of changes to one param (a slider dragged) as one entry.
-- **Declared by the room.** What a sketch declares is what its shader says
-  as it runs in arclamp, not what anything else makes of the script, so no
-  other engine's differences can lose a param (`instances.declared`; null
-  until its shader has said).
-- **Over a stream from the shader** (`src/server/params.ts`). vibes links
-  each instance's shader (by its stamp) once in its sandbox's life: an eval
-  in arclamp, generated with JSON for data, calls `__vibes.connect` with
-  where vibes is (`VIBES_SHADER_URL`) and a token of the instance's (its id
-  and link number, signed; linking again makes older ones no good). The
-  library opens `POST /shader-api/params`, saying what it declares, and
-  vibes answers with an event stream: every value first (`state`), then each
-  change in order (`change`), and something every 15 s. A new script in the
-  same sandbox keeps the link and opens its own stream; a new sandbox (a
-  respawn) is linked again. A stream that breaks opens again with every
-  value, and one whose shader can't keep up is dropped, never a change; so
-  nothing's lost. A sandbox with no library to link (or one too old) isn't
-  tried again until its script or sandbox is new.
-- **Shown and set.** The scene feed carries each instance's params (what
-  its shader said it declares, with its values). The shader panel has a
-  control for each, for the lights selected that it lights and the param is
-  for: a slider, room tone's color editor, or on and off. A change is a
-  pending edit like a mute or a mask: the simulation hands the values to
-  the shader's worker as the stream would (`__vibes.apply`), so it shows
-  them before they're applied, and live mode applies them as they move. The
-  editor's Sketch panel has knobs of its own, for every light, straight
-  into its worker.
+  (null back to the default), as updates to the pool do. A run of changes to
+  one param of a shader in the room (a slider dragged) is logged as one entry.
+- **Declared by whatever runs it.** What a sketch declares is what its code
+  says as it runs, not what anything else makes of the script: in the room,
+  its shader (so no other engine's differences can lose a param there); for
+  a sketch you're adding, its preview on the map (`src/web/sim.ts`), so its
+  knobs are there before it's in, and what's set on them goes in with it;
+  in the editor, its preview in the box. A preview updated in place by HMR
+  (only the modules edited run again) declares what those modules declare
+  now: the library is told which are about to run again, and drops what they
+  no longer declare (`retire`, `settle`; packages/vibes 0.3.1).
+- **Over a stream** (`src/server/params.ts`). vibes links each instance's
+  shader (by its stamp) once in its sandbox's life: an eval in arclamp,
+  generated with JSON for data, calls `__vibes.connect` with where vibes is
+  (`VIBES_SHADER_URL`) and a token of its pool's (its id and link number,
+  signed; linking again makes older ones no good). The library opens
+  `POST /shader-api/params`, saying what it declares, and vibes answers with
+  an event stream: every value first (`state`), then each change in order
+  (`change`), and something every 15 s. A new script in the same sandbox
+  keeps the link and opens its own stream; a new sandbox (a respawn) is
+  linked again. A stream that breaks opens again with every value, and one
+  whose code can't keep up is dropped, never a change; so nothing's lost. A
+  sandbox with no library to link (or one too old) isn't tried again until
+  its script or sandbox is new. A preview in a box follows its own pool the
+  same way: its extension gets a token from `/box-api/pools`, and sends each
+  knob turned to `/box-api/pools/<pool>/values`, so the pool's the same on
+  vibes as in the preview (and a page could turn its knobs too).
+- **Shown and set.** The selection's panel has a control for each param a
+  shader (or a sketch being added) has, for the lights selected that it
+  lights and the param is for: a slider, room tone's color editor, or on and
+  off. A change is a pending edit like a mute or a mask: the simulation hands
+  the values to the shader's worker as the stream would (`__vibes.apply`), so
+  it shows them before they're applied, and live mode applies them as they
+  move. The editor's Sketch panel has knobs of its own, for every light: they
+  change its preview at once, and its pool after.
 
 Still to come: a shader that drops some of what it declares (or won't say)
-only says so in vibes' log, not in the panel.
+only says so in vibes' log, not in the panel; and a page to turn a box
+preview's knobs from elsewhere (a phone), which its pool already allows.
 
 ## Gaps in arclamp (PRs to rclamp)
 

@@ -3,7 +3,9 @@
 // param it has for any of those lights (the ones it lights, that the param's
 // filter lets through: kinds, tags, ids), each setting just them. A change is
 // a pending edit like any other (the simulation shows it; Apply sends it, or
-// live mode at once). Every light selected sets it everywhere.
+// live mode at once). Every light selected sets it everywhere. What it has is
+// what its pool says it declares: as it runs in the room, or, for a sketch
+// you're adding, as its preview here does (sim.ts), before it's in.
 
 import type { LightInfo } from "../../shared/arclamp.ts";
 import { appliesTo, valuesAt, type ParamSpec } from "../../shared/params.ts";
@@ -18,10 +20,10 @@ export interface ParamRow {
   lights: LightInfo[];
 }
 
-/** Its params for these lights (none until it's in the room and has said what they are). */
+/** Its params for these lights (none until something running it has said what they are, or if it couldn't go in). */
 export function paramRowsOf(layer: Layer, selected: LightInfo[]): ParamRow[] {
   const declared = layer.params?.declared;
-  if (!declared || layer.stage !== "live") return [];
+  if (!declared || layer.stage === "failed") return [];
   const reach = new Set(reachOf(layer));
   const here = selected.filter((l) => reach.has(l.id));
   return declared.flatMap((spec) => {

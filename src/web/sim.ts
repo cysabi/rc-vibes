@@ -11,12 +11,13 @@
 // It differs from arclamp in running ~30 times a second rather than 100, on
 // the browser's JS engine, with browser rules for fetch (CORS), and without
 // udp. A shader's params, pending edits and all, are handed to it as vibes'
-// stream hands them over in the room.
+// stream hands them over in the room. What a sketch being added declares, its
+// preview here says (drafts.declared), so its knobs are there before it's in.
 
 import { useEffect, useRef, useSyncExternalStore } from "react";
 import type { Channels, LightInfo } from "../shared/arclamp.ts";
-import type { ShaderParams } from "../shared/params.ts";
-import type { Layer, LayerKey } from "./draft.ts";
+import type { ParamSpec, ShaderParams } from "../shared/params.ts";
+import { drafts, type Layer, type LayerKey } from "./draft.ts";
 import { pushSimFrame, setSimulated } from "./live.ts";
 import type { FromWorker, ToWorker } from "./sim.worker.ts";
 
@@ -94,12 +95,15 @@ class ShaderWorker {
 
   readonly script: string;
 
-  constructor(script: string) {
+  constructor(script: string, onDeclared: (specs: ParamSpec[]) => void) {
     this.script = script;
     this.worker = new Worker(new URL("./sim.worker.ts", import.meta.url), { type: "module" });
     this.worker.onmessage = (e: MessageEvent<FromWorker>) => {
       const m = e.data;
-      if (m.type === "loaded") return;
+      if (m.type === "loaded") {
+        onDeclared(m.declared);
+        return;
+      }
       // The script itself failed to load.
       if (m.type === "error" && m.seq === undefined) {
         this.stop();
@@ -231,7 +235,13 @@ class Simulation {
     }
     for (const [key, layer] of wanted) {
       let w = this.workers.get(key);
-      if (!w) this.workers.set(key, (w = new ShaderWorker(layer.script)));
+      if (!w) {
+        // A sketch being added: what it declares, as its pool's, till it's in the room to say so itself.
+        const declared = (specs: ParamSpec[]) => {
+          if (this.inputs.layers.find((l) => l.key === key)?.stage === "adding") drafts.declared(key, specs);
+        };
+        this.workers.set(key, (w = new ShaderWorker(layer.script, declared)));
+      }
       w.sendParams(layer.params);
     }
     for (const key of this.seen.keys()) if (!wanted.has(key)) this.seen.delete(key);

@@ -2,7 +2,7 @@
 // in vibes, plus an activity log. arclamp sees every vibes action as the
 // single "vibes" token.
 
-import type { ParamSpec, ParamTable } from "../shared/params.ts";
+import type { ParamSpec, ParamValue } from "../shared/params.ts";
 import { DatabaseSync } from "node:sqlite";
 import type { RailShape } from "../shared/rails.ts";
 import type { ActivityAction, ActivityEntry, CameraView, Me, Person, Spot } from "../shared/vibes.ts";
@@ -161,6 +161,20 @@ export function openDb(path: string) {
       by_name TEXT NOT NULL,
       at TEXT NOT NULL
     );
+    -- Pools (pools.ts): params as some running code declares them (a JSON
+    -- array, null until it has), and their values (JSON: by param, by light).
+    -- owner says who may say what's declared: instance:<id> (its shader in
+    -- the room), user:<id>, or box:<id> (a preview). link_epoch counts the
+    -- links made to it from the room: only the last one's token is good.
+    CREATE TABLE IF NOT EXISTS pools (
+      id TEXT PRIMARY KEY,
+      owner TEXT NOT NULL,
+      declared TEXT,
+      vals TEXT NOT NULL,
+      link_epoch INTEGER NOT NULL DEFAULT 0,
+      at INTEGER NOT NULL,
+      touched INTEGER NOT NULL
+    );
   `);
 
   const placementColumns = db.prepare("PRAGMA table_info(placements)").all() as { name: string }[];
@@ -187,6 +201,29 @@ export function openDb(path: string) {
     db.exec("ALTER TABLE instances ADD COLUMN params TEXT; ALTER TABLE instances ADD COLUMN declared TEXT; ALTER TABLE instances ADD COLUMN link_epoch INTEGER NOT NULL DEFAULT 0");
   }
   db.exec("CREATE UNIQUE INDEX IF NOT EXISTS instances_by_client_key ON instances (by_id, client_key)");
+  // Its pool: its params, kept with it before there were pools (in params,
+  // declared and link_epoch, left as they were), moved into one of its own.
+  if (!instanceColumns.some((c) => c.name === "pool_id")) {
+    db.exec("ALTER TABLE instances ADD COLUMN pool_id TEXT");
+    const old = db.prepare("SELECT id, params, declared, link_epoch, at FROM instances").all() as {
+      id: string;
+      params: string | null;
+      declared: string | null;
+      link_epoch: number;
+      at: number;
+    }[];
+    const insert = db.prepare("INSERT OR IGNORE INTO pools (id, owner, declared, vals, link_epoch, at, touched) VALUES (?, ?, ?, ?, ?, ?, ?)");
+    const link = db.prepare("UPDATE instances SET pool_id = ? WHERE id = ?");
+    for (const r of old) {
+      const values: Record<string, Record<string, unknown>> = {};
+      for (const [name, groups] of Object.entries((r.params ? JSON.parse(r.params) : {}) as Record<string, [unknown, number[]][]>)) {
+        values[name] = {};
+        for (const [v, ids] of groups) for (const id of ids) values[name][String(id)] = v;
+      }
+      insert.run(r.id, `instance:${r.id}`, r.declared, JSON.stringify(values), r.link_epoch, r.at, Date.now());
+      link.run(r.id, r.id);
+    }
+  }
 
   const selectPlacements = db.prepare("SELECT light_id, mm_x, mm_y, floor, rail_id, mm_along FROM placements");
   const upsertPlacement = db.prepare(`
@@ -247,8 +284,16 @@ export function openDb(path: string) {
   const selectBuilding = db.prepare("SELECT * FROM builds WHERE state = 'building'");
   const updateBuild = db.prepare("UPDATE builds SET state = ?, finished_at = ?, plan = ?, error = ?, log = ?, script = ? WHERE id = ? AND state = 'building'");
   const insertInstance = db.prepare(
-    "INSERT INTO instances (id, sketch_id, branch, build_id, home, shader_id, state, error, next_build_id, by_id, by_name, at, client_key, muted, mask, above) VALUES (?, ?, ?, ?, ?, NULL, 'building', NULL, NULL, ?, ?, ?, ?, ?, ?, ?)",
+    "INSERT INTO instances (id, sketch_id, branch, build_id, home, shader_id, state, error, next_build_id, by_id, by_name, at, client_key, muted, mask, above, pool_id) VALUES (?, ?, ?, ?, ?, NULL, 'building', NULL, NULL, ?, ?, ?, ?, ?, ?, ?, ?)",
   );
+  const selectPools = db.prepare("SELECT * FROM pools");
+  const upsertPool = db.prepare(`
+    INSERT INTO pools (id, owner, declared, vals, link_epoch, at, touched) VALUES (?, ?, ?, ?, ?, ?, ?)
+    ON CONFLICT (id) DO UPDATE SET
+      owner = excluded.owner, declared = excluded.declared, vals = excluded.vals,
+      link_epoch = excluded.link_epoch, touched = excluded.touched
+  `);
+  const deletePoolRow = db.prepare("DELETE FROM pools WHERE id = ?");
   const selectInstanceOfKey = db.prepare("SELECT * FROM instances WHERE by_id = ? AND client_key = ?");
   const selectInstance = db.prepare("SELECT * FROM instances WHERE id = ?");
   const selectInstances = db.prepare("SELECT * FROM instances ORDER BY at");
@@ -494,7 +539,7 @@ export function openDb(path: string) {
 
     /** A new instance, building: from main, unless it says otherwise. */
     addInstance(
-      i: Pick<InstanceRow, "id" | "sketch_id" | "build_id" | "home" | "by_id" | "by_name" | "at"> &
+      i: Pick<InstanceRow, "id" | "sketch_id" | "build_id" | "home" | "by_id" | "by_name" | "at" | "pool_id"> &
         Partial<Pick<InstanceRow, "branch" | "client_key" | "muted" | "mask" | "above">>,
     ) {
       insertInstance.run(
@@ -510,7 +555,30 @@ export function openDb(path: string) {
         i.muted ? 1 : 0,
         i.mask ? JSON.stringify(i.mask) : null,
         i.above ?? null,
+        i.pool_id,
       );
+    },
+
+    /** Every pool, as kept. */
+    pools: () =>
+      (selectPools.all() as unknown as RawPool[]).map(
+        (r): PoolRow => ({
+          id: r.id,
+          owner: r.owner,
+          declared: r.declared ? (JSON.parse(r.declared) as ParamSpec[]) : null,
+          values: JSON.parse(r.vals) as PoolRow["values"],
+          link_epoch: r.link_epoch,
+          at: r.at,
+          touched: r.touched,
+        }),
+      ),
+
+    savePool(p: PoolRow) {
+      upsertPool.run(p.id, p.owner, p.declared ? JSON.stringify(p.declared) : null, JSON.stringify(p.values), p.link_epoch, p.at, p.touched);
+    },
+
+    deletePool(id: string) {
+      deletePoolRow.run(id);
     },
 
     /** The instance someone put in with a key of theirs, if there is one. */
@@ -527,11 +595,11 @@ export function openDb(path: string) {
     /** Changes some of an instance. */
     updateInstance(
       id: string,
-      patch: Partial<Pick<InstanceRow, "build_id" | "home" | "shader_id" | "state" | "error" | "next_build_id" | "muted" | "mask" | "above" | "params" | "declared" | "link_epoch">>,
+      patch: Partial<Pick<InstanceRow, "build_id" | "home" | "shader_id" | "state" | "error" | "next_build_id" | "muted" | "mask" | "above">>,
     ) {
       const cols = Object.keys(patch) as (keyof typeof patch)[];
       if (cols.length === 0) return;
-      const json = new Set<string>(["home", "mask", "params", "declared"]);
+      const json = new Set<string>(["home", "mask"]);
       const values = cols.map((c) => (json.has(c) ? (patch[c] ? JSON.stringify(patch[c]) : null) : c === "muted" ? (patch.muted ? 1 : 0) : (patch[c] ?? null)));
       db.prepare(`UPDATE instances SET ${cols.map((c) => `${c} = ?`).join(", ")} WHERE id = ?`).run(...(values as (string | number | null)[]), id);
     },
@@ -633,33 +701,46 @@ export interface InstanceRow {
   muted: boolean;
   mask: number[] | null;
   above: string | null;
-  /** Its params' values, by name (params.ts). */
-  params: ParamTable;
-  /** What its shader last said its sketch declares; null until it has. */
-  declared: ParamSpec[] | null;
-  /** How many times its shader's been linked for params: only the last link's token is good. */
-  link_epoch: number;
+  /** Its pool: its params (pools.ts). */
+  pool_id: string;
 }
 
-type RawInstance = Omit<InstanceRow, "home" | "muted" | "mask" | "params" | "declared"> & {
+type RawInstance = Omit<InstanceRow, "home" | "muted" | "mask"> & {
   home: string;
   muted: number;
   mask: string | null;
-  params: string | null;
-  declared: string | null;
+  // Kept before pools, and moved into them: not read.
+  params?: unknown;
+  declared?: unknown;
+  link_epoch?: unknown;
 };
 
 function instanceOf(raw: unknown): InstanceRow | undefined {
   if (!raw) return undefined;
-  const r = raw as RawInstance;
+  const { params: _params, declared: _declared, link_epoch: _link, ...r } = raw as RawInstance;
   return {
     ...r,
     home: JSON.parse(r.home) as number[],
     muted: r.muted === 1,
     mask: r.mask ? (JSON.parse(r.mask) as number[]) : null,
-    params: r.params ? (JSON.parse(r.params) as ParamTable) : {},
-    declared: r.declared ? (JSON.parse(r.declared) as ParamSpec[]) : null,
   };
 }
+
+/** A pool (pools.ts), as kept. */
+export interface PoolRow {
+  id: string;
+  /** Who may say what it declares: instance:<id> (its shader in the room), user:<id>, or box:<id> (a preview). */
+  owner: string;
+  declared: ParamSpec[] | null;
+  /** Each param's values, by light id. */
+  values: Record<string, Record<string, ParamValue>>;
+  /** How many times it's been linked from the room: only the last link's token is good. */
+  link_epoch: number;
+  /** When it was made, and last changed, in ms. */
+  at: number;
+  touched: number;
+}
+
+type RawPool = Omit<PoolRow, "declared" | "values"> & { declared: string | null; vals: string };
 
 export type Db = ReturnType<typeof openDb>;

@@ -2,23 +2,8 @@
 
 import { QueryCache, QueryClient, useMutation, useQuery } from "@tanstack/react-query";
 import type { HealthResponse } from "../shared/arclamp.ts";
-import type {
-  ApiError,
-  ApiToken,
-  BoxState,
-  CameraView,
-  Lights,
-  LoginOptions,
-  Me,
-  Placement,
-  RailChange,
-  RoomRequest,
-  Sketch,
-  Status,
-  StreetView,
-  TagChange,
-  TypeChange,
-} from "../shared/vibes.ts";
+import type { RoomRequest } from "../shared/live.ts";
+import type { ApiError, ApiToken, BoxState, CameraView, LoginOptions, Me, Sketch, Status, StreetView } from "../shared/vibes.ts";
 
 export class RequestError extends Error {
   readonly status: number;
@@ -145,9 +130,6 @@ export const useMe = () =>
 export const useStatus = () =>
   useQuery({ queryKey: ["status"], queryFn: () => request<Status>("GET", "/api/status"), refetchInterval: 5000 });
 
-export const useLights = () =>
-  useQuery({ queryKey: ["lights"], queryFn: () => request<Lights>("GET", "/api/lights"), staleTime: 60_000 });
-
 /** The streetview cameras; none where vibes has no photographs (ROOMSTAGE_DIR unset). */
 export const useStreetViews = () =>
   useQuery({
@@ -174,7 +156,7 @@ export function useMoveCamera() {
   });
 }
 
-// The scene: scene.ts (pushed by vibes, not polled).
+// The scene and the lights, and changing them: scene.ts (the live state, pushed by vibes, not polled).
 
 export const useHealth = () =>
   useQuery({ queryKey: ["health"], queryFn: () => request<HealthResponse>("GET", "/api/health"), refetchInterval: 2000 });
@@ -265,26 +247,3 @@ export const useBox = (sketchId: string, enabled: boolean) =>
     refetchInterval: (q) => (q.state.data?.state === "starting" ? 500 : q.state.data?.state === "ready" ? 30_000 : false),
     refetchOnWindowFocus: "always",
   });
-
-const invalidateLights = () => queryClient.invalidateQueries({ queryKey: ["lights"] });
-
-/** A change to the map: rails drawn or moved, lights moved, turned to another orientation, and/or tagged. */
-export interface LayoutChange {
-  rails?: RailChange[];
-  placements?: Placement[];
-  types?: TypeChange[];
-  tags?: TagChange[];
-}
-
-export function useChangeLayout() {
-  return useMutation({
-    // Rails first, so lights can be put on a rail drawn in the same change.
-    mutationFn: async ({ rails, placements, types, tags }: LayoutChange) => {
-      if (rails?.length) await request<void>("PUT", "/api/rails", { rails });
-      if (placements?.length) await request<void>("PUT", "/api/placements", { placements });
-      if (types?.length) await request<void>("PUT", "/api/light-types", { lights: types });
-      if (tags?.length) await request<void>("PUT", "/api/light-tags", { lights: tags });
-    },
-    onSettled: invalidateLights,
-  });
-}
