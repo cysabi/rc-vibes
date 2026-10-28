@@ -56,6 +56,8 @@ export function createArclamp(baseUrl: string, key: string) {
     shader: (id: number) => call<ShaderDescriptor>("GET", `/v1/shader/${id}`),
     lights: () => call<LightsResponse>("GET", "/v1/lights"),
     health: () => call<HealthResponse>("GET", "/v1/scene/health"),
+    /** arclamp's clock, the one its frames are stamped with (ms since 1970, to the microsecond): for rclamp-time.ts. */
+    time: () => call<{ now_ms: number }>("GET", "/v1/time"),
     // Appends after every other shader, so it renders last (on top), unless
     // given a position (1 the bottom; past the last is the top). Muted and
     // masked as `initial` says from its first frame; an arclamp from before

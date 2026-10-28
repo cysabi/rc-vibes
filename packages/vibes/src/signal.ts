@@ -7,6 +7,7 @@
 //   osc(4).rotate(beat.every(4).seq([0, 45, 90, 135])).color(palettes.dusk).boost(beat.every(1).env(), 0.8)
 
 import { field, type Field } from "./field.ts";
+import type { Here } from "./here.ts";
 import { fract } from "./shape.ts";
 
 export interface Every {
@@ -32,17 +33,30 @@ export interface Clock {
 
 /** A clock at `bpm` beats a minute, starting with the sketch. */
 export function clock(bpm: number): Clock {
-  const beats = field(({ t }) => (t * bpm) / 60);
+  return beatClock(({ t }) => (t * bpm) / 60, () => bpm);
+}
+
+/**
+ * A clock on beats counted elsewhere: `beats` so far (a field), at `bpm` now
+ * (0 with no tempo, which holds it at its last mark). clock()'s, and the
+ * show's (show.clock), whose beats are the room's.
+ */
+export function beatClock(beats: (here: Here) => number, bpm: () => number): Clock {
+  const counted = field(beats);
   return {
-    bpm,
-    beats,
+    get bpm() {
+      return bpm();
+    },
+    beats: counted,
     every(n: number): Every {
-      const at = (t: number) => (t * bpm) / 60 / n;
-      const seconds = (60 / bpm) * n;
-      const since = field(({ t }) => fract(at(t)) * seconds);
+      const at = (here: Here) => counted(here) / n;
+      const since = field((here) => {
+        const b = bpm();
+        return b > 0 ? fract(at(here)) * (60 / b) * n : 0;
+      });
       return {
-        count: field(({ t }) => Math.floor(at(t))),
-        ramp: field(({ t }) => fract(at(t))),
+        count: field((here) => Math.floor(at(here))),
+        ramp: field((here) => fract(at(here))),
         since,
         env({ attack = 0.01, release = 0.3 } = {}) {
           return field((here) => {
@@ -54,8 +68,8 @@ export function clock(bpm: number): Clock {
         },
         seq<T>(list: readonly T[]) {
           if (list.length === 0) throw new Error("seq(): give it at least one value");
-          return field(({ t }) => {
-            const i = Math.floor(at(t)) % list.length;
+          return field((here) => {
+            const i = Math.floor(at(here)) % list.length;
             return list[i < 0 ? i + list.length : i]!;
           });
         },

@@ -261,7 +261,8 @@ export type ActivityAction =
   | "lights.turn"
   | "lights.tag"
   | "rails.change"
-  | "streetview.move";
+  | "streetview.move"
+  | "show.clock";
 
 export interface ActivityEntry {
   id: number;

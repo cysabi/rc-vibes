@@ -2,6 +2,7 @@ import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { LightInfo } from "../shared/arclamp.ts";
 import type { Op } from "../shared/live.ts";
 import type { ParamSpec } from "../shared/params.ts";
+import type { ShowClock } from "../shared/show.ts";
 import { ArclampError } from "./arclamp.ts";
 import { openDb, type Db } from "./db.ts";
 import { createParamLinks, declarationsOf, linkOfToken, linkToken, type ParamLinks, type SeenShader } from "./params.ts";
@@ -236,6 +237,27 @@ describe("linking shaders to their pools, and the pools' streams", () => {
     await pools.set("q", "speed", [[1, 4]], "user:u");
     await pools.set("p", "speed", [[1, 5]], "user:u");
     expect(await next()).toEqual({ event: "change", data: { name: "speed", set: [[5, [1]]] } });
+  });
+
+  it("sends the show clock after the values, and down every stream as it changes", async () => {
+    let clock: ShowClock = { playing: true, at: 1000, t: 0, bpm: 120, beat: 0, nudge: 0 };
+    const withClock = createParamLinks({ pools, arclamp: { evalShader: async () => ({ ok: true }) }, secret: SECRET, url: "https://vibes.test/shader-api/params", showClock: () => clock });
+    pools.ensure("q", "box:b");
+    const open = (pool: string) =>
+      withClock
+        .routes()
+        .request("/shader-api/params", { method: "POST", headers: { authorization: `Bearer ${linkToken(SECRET, pool, pools.relink(pool))}`, "content-type": "application/json" }, body: '{"v":1,"params":[]}' });
+    const p = events(await open("p"));
+    const q = events(await open("q"));
+    expect((await p())!.event).toBe("state");
+    expect(await p()).toEqual({ event: "clock", data: { v: 1, clock } });
+    await q();
+    await q();
+    clock = { ...clock, playing: false, at: 2000, t: 1 };
+    withClock.tellClock(clock);
+    expect(await p()).toEqual({ event: "clock", data: { v: 1, clock } });
+    expect(await q()).toEqual({ event: "clock", data: { v: 1, clock } });
+    withClock.stop();
   });
 
   it("keeps the values as they are when what's declared changes: saying what it declares can't take any away", async () => {

@@ -176,6 +176,11 @@ export function openDb(path: string, { background = false }: { background?: bool
       at INTEGER NOT NULL,
       touched INTEGER NOT NULL
     );
+    -- Things vibes keeps one of, as JSON, by name (the show clock: show.ts).
+    CREATE TABLE IF NOT EXISTS settings (
+      key TEXT PRIMARY KEY,
+      value TEXT NOT NULL
+    );
   `);
 
   const placementColumns = db.prepare("PRAGMA table_info(placements)").all() as { name: string }[];
@@ -299,6 +304,8 @@ export function openDb(path: string, { background = false }: { background?: bool
     "INSERT INTO footprints (shader_id, script_hash, lights) VALUES (?, ?, ?) ON CONFLICT (shader_id) DO UPDATE SET script_hash = excluded.script_hash, lights = excluded.lights",
   );
   const deleteFootprintRow = db.prepare("DELETE FROM footprints WHERE shader_id = ?");
+  const selectSetting = db.prepare("SELECT value FROM settings WHERE key = ?");
+  const upsertSetting = db.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value");
 
   // Nests: an inner transaction just joins the outer one.
   let depth = 0;
@@ -575,6 +582,15 @@ export function openDb(path: string, { background = false }: { background?: bool
 
     deleteFootprint(shaderId: number) {
       deleteFootprintRow.run(shaderId);
+    },
+
+    /** A setting's JSON, by name; null if it's never been set. */
+    setting(key: string): string | null {
+      return (selectSetting.get(key) as { value: string } | undefined)?.value ?? null;
+    },
+
+    setSetting(key: string, value: string) {
+      upsertSetting.run(key, value);
     },
 
     /** Closed, and its history once that's kept (its thread's last checkpoint with it). */

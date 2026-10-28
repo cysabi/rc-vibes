@@ -13,6 +13,10 @@
 // stream loses the stream, not a change. A sketch's preview, in its box,
 // follows its own pool the same way (a token from /box-api/pools: sketches.ts).
 //
+// The show clock (show.ts) goes down every stream too (clock): after the
+// values, and each time it changes. A preview runs on its browser's own
+// clock, so its beat is only as near the room's as that clock is to arclamp's.
+//
 // The token is the pool's id and its link's number, signed: linking again
 // counts up, so older tokens stop working. A shader's is in arclamp's audit
 // log (with the eval). Whoever can read that can read its values, say what
@@ -25,6 +29,7 @@ import { Hono } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { z } from "zod";
 import { checkSpec, MAX_PARAMS, PROTOCOL, type ColorValue, type EndEvent, type ParamSpec } from "../shared/params.ts";
+import type { ShowClock } from "../shared/show.ts";
 import type { Arclamp } from "./arclamp.ts";
 import type { Pools } from "./pools.ts";
 
@@ -157,6 +162,8 @@ export interface LinkDeps {
   secret: string;
   /** Where shaders reach vibes' stream (…/shader-api/params). */
   url: string;
+  /** The show clock as it is now, for a stream as it opens (show.ts). */
+  showClock?: () => ShowClock | null;
   now?: () => number;
 }
 
@@ -164,7 +171,7 @@ export interface LinkDeps {
 // changed is the new one's, not the old's.
 const STALE_SLACK_MS = 2_000;
 
-export function createParamLinks({ pools, arclamp, secret, url, now = Date.now }: LinkDeps) {
+export function createParamLinks({ pools, arclamp, secret, url, showClock = () => null, now = Date.now }: LinkDeps) {
   // Each pool's stream: one at a time.
   const streams = new Map<string, Stream>();
   // When each pool's stream opened, and when the scene last said its shader's sandbox or script changed.
@@ -264,6 +271,12 @@ export function createParamLinks({ pools, arclamp, secret, url, now = Date.now }
     /** Whether a pool's code has its stream open. */
     linked: (pool: string) => streams.has(pool),
 
+    /** The show clock, changed: down every stream. */
+    tellClock(clock: ShowClock) {
+      const text = eventText("clock", { v: PROTOCOL, clock });
+      for (const s of streams.values()) s.write(text);
+    },
+
     routes() {
       return new Hono().post(
         "/shader-api/params",
@@ -296,6 +309,8 @@ export function createParamLinks({ pools, arclamp, secret, url, now = Date.now }
           opened.set(p.id, now());
           tries.delete(p.id);
           stream.write(eventText("state", { v: PROTOCOL, values: pools.table(p.id) }));
+          const clock = showClock();
+          if (clock) stream.write(eventText("clock", { v: PROTOCOL, clock }));
           return response;
         },
       );

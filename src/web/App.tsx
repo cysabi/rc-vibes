@@ -20,6 +20,7 @@ import { savedFloor, saveFloor, useLiveMode } from "./settings.ts";
 import { useSimulation } from "./sim.ts";
 import { navigate, usePath, useQueryParam } from "./route.ts";
 import { SplitHandle, StreetView } from "./components/StreetView.tsx";
+import { Transport } from "./components/Transport.tsx";
 import { SketchesLink, SketchPages } from "./sketches/SketchPages.tsx";
 
 const NO_RAILS: Rail[] = [];
@@ -265,6 +266,7 @@ function Shell() {
           ) : (
             <TagChips lights={here} selected={selectedHere} onSelect={selectByTag} />
           )}
+          <Transport />
           <SketchesLink />
           <UserMenu />
         </div>

@@ -7,13 +7,17 @@
 // stack of shaders, top first, the room tone, and the pools) and the lights'
 // layout (useLayout). The tree leaves scripts out (scriptHash says which
 // each shader's is); the preview needs them to run pending edits, so they're
-// fetched once each, by hash, and put back.
+// fetched once each, by hash, and put back. And the show clock (useShowClock,
+// sendTransport), with arclamp's time to read it by, asked of vibes on the
+// same socket (rtime.ts).
 
 import { useCallback, useState, useSyncExternalStore } from "react";
 import type { RoomTemplate } from "../shared/arclamp.ts";
 import { fanOps, pathOf, unfanOps, withOps, type LiveTree, type Op, type Pool, type RoomMessage, type RoomRequest } from "../shared/live.ts";
+import { STOPPED, type ShowClock, type TransportAction } from "../shared/show.ts";
 import type { Lights, Placement, RailChange, Shader, ShaderKey, TagChange, TypeChange } from "../shared/vibes.ts";
 import { apiSocket, request } from "./api.ts";
+import { heard as heardTime, pageNow } from "./rtime.ts";
 
 /** A shader as vibes has it, with its script once that's here. */
 export interface SceneShader extends Shader {
@@ -32,9 +36,11 @@ interface State {
   scene: Scene | undefined;
   layout: Lights | undefined;
   error: Error | null;
+  /** The show clock (shared/show.ts). */
+  clock: ShowClock;
 }
 
-let state: State = { scene: undefined, layout: undefined, error: null };
+let state: State = { scene: undefined, layout: undefined, error: null, clock: STOPPED };
 let tree: LiveTree | null = null;
 // The last change the copy here has, of which run of vibes.
 let rev: number | null = null;
@@ -77,7 +83,7 @@ function publish() {
         }
       : undefined;
   }
-  state = { scene, layout, error: null };
+  state = { scene, layout, error: null, clock: tree.show?.clock ?? STOPPED };
   for (const l of listeners) l();
 }
 
@@ -155,6 +161,35 @@ function open() {
   );
 }
 
+// arclamp's time (rtime.ts), asked of vibes on this socket: a few at once as
+// it opens (and as the page comes back into view), then one every few
+// seconds, each answer timed by this page's clock.
+const ASK_EVERY_MS = 5_000;
+const BURST = 8;
+const BURST_GAP_MS = 100;
+const askedAt = new Map<number, number>();
+let asks = 0;
+let asking: number | undefined;
+
+function askOnce(ws: WebSocket) {
+  if (socket !== ws || ws.readyState !== WebSocket.OPEN) return;
+  const id = ++asks;
+  askedAt.set(id, pageNow());
+  ws.send(JSON.stringify({ type: "time", id } satisfies RoomRequest));
+}
+
+function askTime(ws: WebSocket) {
+  for (let i = 0; i < BURST; i++) window.setTimeout(() => askOnce(ws), i * BURST_GAP_MS);
+  window.clearInterval(asking);
+  asking = window.setInterval(() => askOnce(ws), ASK_EVERY_MS);
+}
+
+if (typeof document !== "undefined") {
+  document.addEventListener("visibilitychange", () => {
+    if (document.visibilityState === "visible" && socket) askTime(socket);
+  });
+}
+
 function connect(url: string, hello: string | null, greet: (ws: WebSocket) => void) {
   const ws = new WebSocket(url);
   socket = ws;
@@ -169,11 +204,17 @@ function connect(url: string, hello: string | null, greet: (ws: WebSocket) => vo
     // The tree, or what's changed since the copy here.
     ws.send(JSON.stringify({ type: "hello", rev, ...(epoch ? { epoch } : {}), fans: true } satisfies RoomRequest));
     greet(ws);
+    askTime(ws);
   };
   ws.onmessage = (e: MessageEvent<string>) => {
+    const answered = pageNow();
     heard = Date.now();
     const m = JSON.parse(e.data) as RoomMessage;
-    if (m.type === "state") {
+    if (m.type === "time") {
+      const asked = askedAt.get(m.id);
+      askedAt.delete(m.id);
+      if (asked !== undefined) heardTime(asked, answered, m.r, m.e);
+    } else if (m.type === "state") {
       tree = m.tree;
       rev = m.rev;
       epoch = m.epoch;
@@ -202,6 +243,8 @@ function connect(url: string, hello: string | null, greet: (ws: WebSocket) => vo
     if (socket !== ws) return;
     socket = null;
     window.clearInterval(watchdog);
+    window.clearInterval(asking);
+    askedAt.clear();
     // Updates with no answer now: made, or not, or some of them. Sending
     // them again is safe (a sketch is added once, however often it's sent).
     for (const [id, asked] of waiting) {
@@ -266,6 +309,17 @@ export function useLights(): { data: Lights | undefined; error: Error | null } {
   const s = useState_();
   return { data: s.layout, error: s.scene ? null : s.error };
 }
+
+/** The show clock (shared/show.ts), as vibes last said it. */
+export function useShowClock(): ShowClock {
+  return useSyncExternalStore(subscribe, () => state.clock);
+}
+
+/** The show clock as vibes last said it, outside React (the map's simulation). */
+export const showClockNow = () => state.clock;
+
+/** Something done to the show clock, at once whatever the mode (it's the room's: never a pending edit). */
+export const sendTransport = (action: TransportAction) => sendUpdate([[pathOf("show", "transport"), action]]);
 
 /** A change to the map: rails drawn or moved, lights moved, turned to another orientation, and/or tagged. */
 export interface LayoutChange {

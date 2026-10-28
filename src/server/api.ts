@@ -23,8 +23,10 @@ import type { LayoutEdits } from "./layout.ts";
 import { applyEdits, lightsFile } from "./lights.ts";
 import type { LiveState } from "./live.ts";
 import type { Pools } from "./pools.ts";
+import type { RclampTime } from "./rclamp-time.ts";
 import type { SceneFeedSource } from "./scene-feed.ts";
 import { createShaders, Refused, shaderRoutes } from "./shaders.ts";
+import type { Show } from "./show.ts";
 import type { StreamRelay } from "./stream.ts";
 import { streetviewPublicFiles, streetviewRoutes } from "./streetview.ts";
 import { createUpdates, MAX_OPS } from "./updates.ts";
@@ -56,6 +58,10 @@ export interface ApiDeps {
   instances?: Instances | null;
   /** arclamp's health, followed (without it, it's asked for each time). */
   health?: HealthWatch | null;
+  /** arclamp's time, as vibes keeps up with it (rclamp-time.ts): told to each page that asks. Without it, vibes' own. */
+  rtime?: Pick<RclampTime, "rNow" | "state"> | null;
+  /** The show clock, for pages to act on (show.ts). */
+  show?: Show | null;
 }
 
 // An event stream says something at least this often (a ping, if nothing
@@ -68,6 +74,7 @@ const op = z.union([z.tuple([z.string().max(300)]), z.tuple([z.string().max(300)
 const roomRequest = z.discriminatedUnion("type", [
   z.object({ type: z.literal("hello"), rev: z.number().int().nullable(), epoch: z.string().max(100).optional(), fans: z.boolean().optional() }),
   z.object({ type: z.literal("update"), id: z.string().min(1).max(100), ops: z.array(op).max(MAX_OPS), note: z.string().max(60).optional() }),
+  z.object({ type: z.literal("time"), id: z.number().int() }),
   // A page from before the live state, asking the old way.
   z.object({ type: z.literal("apply"), id: z.string().max(100) }).passthrough(),
 ]);
@@ -161,7 +168,7 @@ const badBody = (result: { success: boolean; error?: unknown }, c: Context) => {
   }
 };
 
-export function apiRoutes({ config, arclamp, db, relay, origins, lights, feed, live, pools, layout, sketches, instances = null, health = null }: ApiDeps) {
+export function apiRoutes({ config, arclamp, db, relay, origins, lights, feed, live, pools, layout, sketches, instances = null, health = null, rtime = null, show = null }: ApiDeps) {
   const api = new Hono<AuthEnv>();
   api.onError(handleError);
   // Browsers already refuse cross-site JSON requests without CORS headers,
@@ -229,6 +236,7 @@ export function apiRoutes({ config, arclamp, db, relay, origins, lights, feed, l
     layout,
     setRoomtone,
     shown: (soon) => (soon ? feed.soon() : feed.now()),
+    show,
     logParam(pool, name, lights, user) {
       // A param of a shader in the room (its instance's pool), in the history: a drag's run as one.
       const owner = pools.get(pool)?.owner ?? "";
@@ -357,6 +365,8 @@ export function apiRoutes({ config, arclamp, db, relay, origins, lights, feed, l
             ping = setInterval(() => say('{"type":"ping"}'), STREAM_PING_MS);
           },
           onMessage(evt) {
+            // arclamp's time as it came, for a page asking it (web/rtime.ts): as near its arrival as can be.
+            const arrived = rtime ? rtime.rNow() : Date.now();
             const text = typeof evt.data === "string" && evt.data.length <= MAX_UPDATE_BYTES ? evt.data : "";
             // Who's there, first (from another of vibes' addresses).
             if (on?.take(text) === null || !session) return;
@@ -371,7 +381,9 @@ export function apiRoutes({ config, arclamp, db, relay, origins, lights, feed, l
               return;
             }
             const m = asked.data;
-            if (m.type === "hello") {
+            if (m.type === "time") {
+              answer({ type: "time", id: m.id, r: arrived, e: rtime?.state().error ?? null });
+            } else if (m.type === "hello") {
               // The tree, or what's changed since the page had it, then every change: nothing between them lost.
               unsubscribe();
               const fans = m.fans === true;

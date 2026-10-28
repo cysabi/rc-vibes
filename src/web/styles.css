@@ -136,7 +136,8 @@ p {
 .drawer-sheet.open,
 .map-note,
 .pending,
-.hover-card {
+.hover-card,
+.transport {
   background: var(--glass);
   -webkit-backdrop-filter: var(--blur);
   backdrop-filter: var(--blur);
@@ -2417,6 +2418,156 @@ button.layer-chevron:hover {
 .menu-item:hover {
   background: var(--fill-2);
   color: var(--ink);
+}
+
+.menu-note {
+  padding: 6px 10px 8px;
+  color: var(--mute);
+  font-size: 11.5px;
+  line-height: 1.45;
+}
+
+/* The show clock's transport (Transport.tsx): one glass pill along the top,
+   its time and tempo in the mono face, a dot for each beat of a bar. */
+.transport {
+  display: inline-flex;
+  flex: none;
+  align-items: center;
+  gap: 2px;
+  height: 38px;
+  padding: 0 5px;
+  border-radius: 13px;
+}
+
+.transport-button {
+  display: inline-grid;
+  place-items: center;
+  min-width: 28px;
+  height: 28px;
+  padding: 0 8px;
+  border-radius: 9px;
+  background: none;
+  color: var(--ink-2);
+  font-weight: 550;
+  white-space: nowrap;
+  transition:
+    background 0.15s,
+    color 0.15s;
+}
+
+.transport-button.play,
+.transport-button.more {
+  padding: 0;
+}
+
+.transport-button:hover:not(:disabled),
+.transport-button[aria-expanded="true"] {
+  background: var(--fill-2);
+  color: var(--ink);
+}
+
+.transport-button:active:not(:disabled) {
+  background: var(--fill-3);
+}
+
+.transport-button:disabled {
+  color: var(--mute);
+  cursor: default;
+}
+
+.transport-time,
+.transport-bpm input {
+  font: 500 12.5px/1 var(--mono-font);
+  font-variant-numeric: tabular-nums;
+  font-variation-settings: "MONO" 1;
+  color: var(--ink);
+}
+
+.transport-time {
+  min-width: 52px;
+  padding: 0 4px;
+}
+
+.transport-beats {
+  display: inline-flex;
+  gap: 4px;
+  padding: 0 6px;
+}
+
+.transport-beats > span {
+  width: 6px;
+  height: 6px;
+  border-radius: 50%;
+  background: var(--fill-3);
+  transition: background 0.08s;
+}
+
+.transport-beats > .on {
+  background: var(--ink-2);
+}
+
+.transport-beats.fresh > .on {
+  background: var(--ink);
+  box-shadow: 0 0 6px rgb(255 255 255 / 0.55);
+}
+
+.transport-beats.none > span {
+  background: var(--fill-2);
+}
+
+.transport-bpm {
+  display: inline-flex;
+  align-items: baseline;
+  gap: 4px;
+  padding: 0 4px 0 2px;
+  color: var(--mute);
+  font-size: 10.5px;
+  font-weight: 600;
+  letter-spacing: 0.04em;
+}
+
+.transport-bpm input {
+  width: 42px;
+  padding: 4px 4px;
+  border: none;
+  border-radius: 7px;
+  background: none;
+  text-align: right;
+}
+
+.transport-bpm input:hover,
+.transport-bpm input:focus {
+  background: var(--fill-2);
+  outline: none;
+}
+
+.menu-field > .transport-nudge {
+  display: flex;
+  gap: 6px;
+}
+
+.transport-nudge .transport-button {
+  width: 44px;
+  background: var(--fill-2);
+}
+
+.transport-error {
+  max-width: 180px;
+  padding: 0 6px;
+  overflow: hidden;
+  color: var(--bad);
+  font-size: 11.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+/* A phone: the time, play and tap; the rest's a desktop's. */
+@media (max-width: 640px) {
+  .transport-beats,
+  .transport-bpm span,
+  .transport-error {
+    display: none;
+  }
 }
 
 /* Segmented controls: a recessed track, equal-width options, and a raised

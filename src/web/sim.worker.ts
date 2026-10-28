@@ -16,6 +16,7 @@
 
 import type { VibesHost } from "../../packages/vibes/src/param.ts";
 import type { ParamSpec, ParamTable } from "../shared/params.ts";
+import type { ShowClock } from "../shared/show.ts";
 
 const scope = self as unknown as DedicatedWorkerGlobalScope & Record<string, unknown>;
 
@@ -44,7 +45,9 @@ export type ToWorker =
   | { type: "load"; script: string }
   | { type: "tick"; seq: number; prev: unknown; now: number; initial: number }
   /** Its params' values, all of them, as vibes' stream sends them. */
-  | { type: "params"; values: ParamTable };
+  | { type: "params"; values: ParamTable }
+  /** The show clock, as vibes' stream sends it. */
+  | { type: "clock"; clock: ShowClock };
 export type FromWorker =
   /** Loaded, with what it declares as params (as the library has them; none without one). */
   | { type: "loaded"; declared: ParamSpec[] }
@@ -56,6 +59,10 @@ scope.onmessage = (e: MessageEvent<ToWorker>) => {
   const reply = (r: FromWorker) => scope.postMessage(r);
   if (m.type === "params") {
     (scope.__vibes as VibesHost | undefined)?.apply("state", { v: 1, values: m.values });
+    return;
+  }
+  if (m.type === "clock") {
+    (scope.__vibes as VibesHost | undefined)?.apply("clock", { v: 1, clock: m.clock });
     return;
   }
   if (m.type === "load") {
