@@ -17,6 +17,12 @@
 // values, and each time it changes. A preview runs on its browser's own
 // clock, so its beat is only as near the room's as that clock is to arclamp's.
 //
+// A shader running in the room, linked, takes its changes another way: each
+// in a frame, through arclamp's schedule (timeline.ts), so the room shows
+// it in that frame. Its stream keeps every value for when it opens (and the
+// clock); a change only goes down it if the frame's way fails. A preview,
+// or a shader not running yet, takes its changes down its stream as ever.
+//
 // The token is the pool's id and its link's number, signed: linking again
 // counts up, so older tokens stop working. A shader's is in arclamp's audit
 // log (with the eval). Whoever can read that can read its values, say what
@@ -32,6 +38,7 @@ import { checkSpec, MAX_PARAMS, PROTOCOL, type ColorValue, type EndEvent, type P
 import type { ShowClock } from "../shared/show.ts";
 import type { Arclamp } from "./arclamp.ts";
 import type { Pools } from "./pools.ts";
+import type { Timeline } from "./timeline.ts";
 
 const KEEP_ALIVE_MS = 15_000;
 // More than this waiting for a shader to read, and its stream goes.
@@ -164,6 +171,8 @@ export interface LinkDeps {
   url: string;
   /** The show clock as it is now, for a stream as it opens (show.ts). */
   showClock?: () => ShowClock | null;
+  /** Changes to shaders running in the room, each in its frame; without it, every change goes down its stream. */
+  timeline?: Timeline | null;
   now?: () => number;
 }
 
@@ -171,7 +180,7 @@ export interface LinkDeps {
 // changed is the new one's, not the old's.
 const STALE_SLACK_MS = 2_000;
 
-export function createParamLinks({ pools, arclamp, secret, url, showClock = () => null, now = Date.now }: LinkDeps) {
+export function createParamLinks({ pools, arclamp, secret, url, showClock = () => null, timeline = null, now = Date.now }: LinkDeps) {
   // Each pool's stream: one at a time.
   const streams = new Map<string, Stream>();
   // When each pool's stream opened, and when the scene last said its shader's sandbox or script changed.
@@ -188,8 +197,18 @@ export function createParamLinks({ pools, arclamp, secret, url, showClock = () =
 
   const keyOf = (s: SeenShader) => `${s.shaderId}:${s.respawns}:${s.scriptHash}`;
 
-  // Each change to a pool's values, to the code running with it.
-  const unlisten = pools.onChange((pool, name, set) => streams.get(pool)?.write(eventText("change", { name, set })));
+  // Each change to a pool's values, to the code running with it: in its
+  // frame, to a shader running in the room that's linked; down its stream
+  // otherwise, or if that fails.
+  const unlisten = pools.onChange((pool, name, set) => {
+    const s = seen.get(pool);
+    const text = eventText("change", { name, set });
+    if (timeline && s?.running && streams.has(pool) && !stale(pool)) {
+      timeline.soon(s.shaderId, { name, set }).catch(() => streams.get(pool)?.write(text));
+      return;
+    }
+    streams.get(pool)?.write(text);
+  });
 
   /** Whether a pool's stream is from before its shader's sandbox or script changed, with none since: dead, if still open on this end. */
   function stale(pool: string): boolean {

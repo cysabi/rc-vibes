@@ -24,6 +24,7 @@ import { createLiveState } from "./live.ts";
 import { createParamLinks } from "./params.ts";
 import { createPools } from "./pools.ts";
 import { createRclampTime } from "./rclamp-time.ts";
+import { createTimeline } from "./timeline.ts";
 import { createSceneFeed } from "./scene-feed.ts";
 import { createShow } from "./show.ts";
 import { boxApiRoutes, sketchRoutes } from "./sketches.ts";
@@ -81,10 +82,15 @@ live.replace([["show", show.tree()]]);
 // Base Color always among them, at the bottom (base-color.ts).
 let instances: Instances | null = null;
 let baseColor: BaseColor | null = null;
-// Pools' streams: each shader linked once (an eval), then a stream from it, taking each change.
-// Only where shaders can reach vibes (VIBES_SHADER_URL; env.ts).
+// Pools' streams: each shader linked once (an eval), then a stream from it,
+// taking every value; each change to a shader running in the room goes in
+// its frame (timeline.ts). Only where shaders can reach vibes
+// (VIBES_SHADER_URL; env.ts).
+const timeline = createTimeline({ arclamp, rNow: rtime.rNow });
 const params =
-  builds && config.shaderUrl ? createParamLinks({ pools, arclamp, secret: config.sessionSecret, url: `${config.shaderUrl}/shader-api/params`, showClock: show.clock }) : null;
+  builds && config.shaderUrl
+    ? createParamLinks({ pools, arclamp, secret: config.sessionSecret, url: `${config.shaderUrl}/shader-api/params`, showClock: show.clock, timeline })
+    : null;
 const feed = createSceneFeed({
   config,
   db,
