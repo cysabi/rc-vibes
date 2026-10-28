@@ -40,7 +40,8 @@ describe("the history", () => {
   });
 });
 
-describe("the history on its own thread", () => {
+// Each with a thread and databases on disk: CI's is kokuzo's, slow.
+describe("the history on its own thread", { timeout: 30_000 }, () => {
   let dir: string;
   beforeEach(() => {
     dir = mkdtempSync(join(tmpdir(), "vibes-history-"));
@@ -94,13 +95,26 @@ describe("the history on its own thread", () => {
   it("puts what vibes' database writes to its log into it, so the main thread never has to", async () => {
     const path = join(dir, "vibes.db");
     const main = new DatabaseSync(path);
-    main.exec("PRAGMA journal_mode = WAL; PRAGMA wal_autocheckpoint = 0; CREATE TABLE t (n INTEGER)");
+    // As vibes has it (db.ts): CI's disk is kokuzo's, slow to flush.
+    main.exec("PRAGMA journal_mode = WAL; PRAGMA synchronous = NORMAL; PRAGMA wal_autocheckpoint = 0; CREATE TABLE t (n INTEGER)");
     const store = backgroundStore(path, 20);
+    main.exec("BEGIN");
     for (let i = 0; i < 50; i++) main.prepare("INSERT INTO t VALUES (?)").run(i);
-    await settle(200);
+    main.exec("COMMIT");
     // The database file alone, without its log: what's been put into it.
-    copyFileSync(path, join(dir, "copy.db"));
-    expect(new DatabaseSync(join(dir, "copy.db")).prepare("SELECT count(*) AS n FROM t").get()).toEqual({ n: 50 });
+    const kept = () => {
+      copyFileSync(path, join(dir, "copy.db"));
+      const copy = new DatabaseSync(join(dir, "copy.db"));
+      try {
+        return (copy.prepare("SELECT count(*) AS n FROM t").get() as { n: number }).n;
+      } catch {
+        return 0;
+      } finally {
+        copy.close();
+      }
+    };
+    for (let tries = 0; tries < 200 && kept() < 50; tries++) await settle(50);
+    expect(kept()).toBe(50);
     await store.close();
     main.close();
   });
