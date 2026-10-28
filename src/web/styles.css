@@ -2362,10 +2362,24 @@ button.layer-chevron:hover {
   right: 0;
 }
 
+/* A button along the bottom: its panel opens above it. */
+.menu.above .menu-panel {
+  top: auto;
+  bottom: calc(100% + 8px);
+  animation-name: pop-up;
+}
+
 @keyframes pop-in {
   from {
     opacity: 0;
     transform: translateY(-4px) scale(0.98);
+  }
+}
+
+@keyframes pop-up {
+  from {
+    opacity: 0;
+    transform: translateY(4px) scale(0.98);
   }
 }
 
@@ -2426,8 +2440,16 @@ button.layer-chevron:hover {
 }
 
 /* The show clock's dock, along the bottom of the map (Transport.tsx): one
-   bar, the transport and the tempo each a pill in it. */
+   bar, the transport, the tempo and its menu each a pill in it, each pill's
+   controls round in it. Every curve is the one inside it plus the space
+   between them, so they all run alongside: a control is round
+   (--dock-control tall), its pill round, --dock-inset bigger all round, and
+   the dock's corners --dock-pad more again. */
 .show-dock {
+  --dock-control: 28px;
+  --dock-inset: 3px;
+  --dock-pill: calc(var(--dock-control) + 2 * var(--dock-inset));
+  --dock-pad: 6px;
   position: absolute;
   right: var(--inset-right);
   bottom: var(--gap);
@@ -2435,7 +2457,7 @@ button.layer-chevron:hover {
   z-index: 9;
   display: flex;
   flex-direction: column;
-  border-radius: var(--radius);
+  border-radius: calc(var(--dock-pill) / 2 + var(--dock-pad));
   background: var(--glass-strong);
   -webkit-backdrop-filter: var(--blur);
   backdrop-filter: var(--blur);
@@ -2450,35 +2472,54 @@ button.layer-chevron:hover {
   align-items: center;
   gap: 8px;
   min-width: 0;
-  padding: 7px 8px 7px 10px;
+  padding: var(--dock-pad);
 }
 
 .dock-spacer {
   flex: 1;
 }
 
-/* The transport (the show clock): play or stop, the time (click to set), back to the start. */
-.transport {
+/* A pill in the dock: the transport (play or stop, the time, back to the
+   start), the tempo (its light, the BPM, Tap, Sync), and the menu. */
+.transport,
+.tempo,
+.dock-more {
   display: flex;
   align-items: center;
   gap: 2px;
-  min-height: 34px;
-  padding: 0 6px;
+  height: var(--dock-pill);
+  padding: var(--dock-inset);
   border-radius: 999px;
   background: var(--well);
 }
 
 .transport-button,
-.transport-time {
-  min-width: 28px;
-  height: 28px;
-  padding: 0 6px;
+.transport-time,
+.tempo-bpm,
+.tempo-tap,
+.tempo-sync {
+  display: inline-grid;
+  place-items: center;
+  min-width: var(--dock-control);
+  height: var(--dock-control);
+  padding: 0 8px;
   border: 0;
   border-radius: 999px;
   background: transparent;
   color: inherit;
   font: inherit;
+  font-size: 12.5px;
+  line-height: 1;
   cursor: pointer;
+}
+
+.transport-button {
+  padding: 0;
+}
+
+/* ⟲ is drawn small in the face: as big as ▶ looks. */
+.transport-button.restart {
+  font-size: 17px;
 }
 
 .transport-button:hover,
@@ -2488,7 +2529,7 @@ button.layer-chevron:hover {
 }
 
 .transport-time {
-  width: 60px;
+  width: 64px;
   font-variant-numeric: tabular-nums;
   text-align: center;
 }
@@ -2498,21 +2539,17 @@ input.transport-time {
   outline: none;
 }
 
-/* The tempo: a light on the beat (warm on the downbeat), the BPM, Tap, Sync. */
-.tempo {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  min-height: 34px;
-  padding: 0 4px 0 10px;
-  border-radius: 999px;
-  background: var(--well);
+/* The light on the beat (warm on the downbeat), in a control's room. */
+.tempo-light-slot {
+  display: grid;
+  place-items: center;
+  width: var(--dock-control);
+  height: var(--dock-control);
 }
 
 .tempo-light {
   width: 9px;
   height: 9px;
-  margin-right: 4px;
   border-radius: 50%;
   background: var(--ink);
   opacity: 0.15;
@@ -2522,23 +2559,11 @@ input.transport-time {
   background: var(--warn);
 }
 
-.tempo-bpm,
-.tempo-tap,
-.tempo-sync {
-  height: 26px;
-  padding: 0 8px;
-  border: 0;
-  border-radius: 999px;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  font-size: 12.5px;
-  cursor: pointer;
-}
-
 /* The same width whatever the tempo, so the bar doesn't change size as it's tapped. */
 .tempo-bpm {
+  display: inline-block;
   width: 82px;
+  line-height: var(--dock-control);
   font-variant-numeric: tabular-nums;
   text-align: center;
 }
@@ -2583,8 +2608,10 @@ input.tempo-bpm {
   gap: 6px;
 }
 
+/* In the menu, as its items are: rounded as they are, not pills. */
 .dock-nudge .transport-button {
   width: 44px;
+  border-radius: 9px;
   background: var(--fill-2);
 }
 

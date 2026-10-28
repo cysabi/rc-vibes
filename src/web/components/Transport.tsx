@@ -167,12 +167,14 @@ export function Transport({ onHeight }: { onHeight: (px: number) => void }) {
               aria-label="The time, m:ss"
             />
           )}
-          <button className="transport-button" onClick={(e) => void act({ do: "seek", at: rOfEvent(e), t: 0 })} aria-label="Back to the start" title="Back to the start">
+          <button className="transport-button restart" onClick={(e) => void act({ do: "seek", at: rOfEvent(e), t: 0 })} aria-label="Back to the start" title="Back to the start">
             ⟲
           </button>
         </div>
         <div className="tempo" role="group" aria-label="Tempo">
-          <span ref={light} className="tempo-light" aria-hidden="true" />
+          <span className="tempo-light-slot" aria-hidden="true">
+            <span ref={light} className="tempo-light" />
+          </span>
           {typedBpm === null ? (
             <button className="tempo-bpm mono" onClick={() => setTypedBpm(clock.bpm === null ? "120" : bpmText(clock.bpm))} title="The tempo, in beats a minute: click to type one">
               {clock.bpm === null ? "—" : bpmText(clock.bpm)}
@@ -204,24 +206,26 @@ export function Transport({ onHeight }: { onHeight: (px: number) => void }) {
           </span>
         )}
         <span className="dock-spacer" />
-        <Menu align="end" className="transport-button" title="Nudge the show clock" label={<MoreIcon />}>
-          <p className="menu-heading">Show clock</p>
-          <div className="menu-field">
-            <span>
-              Nudge: {clock.nudge > 0 ? "+" : ""}
-              {clock.nudge} ms
-              <small>Moves the room's beat later, for sound that reaches the room late (or earlier).</small>
-            </span>
-            <span className="dock-nudge">
-              <button className="transport-button" onClick={() => void act({ do: "nudge", ms: clock.nudge - NUDGE_STEP_MS })} aria-label="Earlier">
-                −
-              </button>
-              <button className="transport-button" onClick={() => void act({ do: "nudge", ms: clock.nudge + NUDGE_STEP_MS })} aria-label="Later">
-                +
-              </button>
-            </span>
-          </div>
-        </Menu>
+        <div className="dock-more">
+          <Menu align="end" side="above" className="transport-button" title="Nudge the show clock" label={<MoreIcon />}>
+            <p className="menu-heading">Show clock</p>
+            <div className="menu-field">
+              <span>
+                Nudge: {clock.nudge > 0 ? "+" : ""}
+                {clock.nudge} ms
+                <small>Moves the room's beat later, for sound that reaches the room late (or earlier).</small>
+              </span>
+              <span className="dock-nudge">
+                <button className="transport-button" onClick={() => void act({ do: "nudge", ms: clock.nudge - NUDGE_STEP_MS })} aria-label="Earlier">
+                  −
+                </button>
+                <button className="transport-button" onClick={() => void act({ do: "nudge", ms: clock.nudge + NUDGE_STEP_MS })} aria-label="Later">
+                  +
+                </button>
+              </span>
+            </div>
+          </Menu>
+        </div>
       </div>
     </div>
   );
