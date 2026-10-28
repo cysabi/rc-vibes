@@ -234,9 +234,13 @@ export function createInstances({ config, db, arclamp, builds, lightIds, changed
       // it's noted, want catches up), or all of it, from an arclamp that
       // doesn't take them on create.
       await bringTo(d, await want());
-      db.updateInstance(id, { state: "live", error: null });
+      // Moved to another build while it went in (Base Color's, as vibes
+      // starts with new code for it): in as this one, and that one swapped in.
+      const moved = db.instance(id)?.build_id;
+      db.updateInstance(id, { state: "live", error: null, ...(moved !== build.id ? { build_id: build.id, next_build_id: moved ?? null } : {}) });
       if (held) wentIn(id, d);
       db.log({ user: { id: inst.by_id, name: inst.by_name }, action: "shader.create", shaderId: d.id, shaderName: sketch.name, detail: { ...detail(build, sketch), home: inst.home.length } });
+      if (moved !== undefined && moved !== build.id) void swap(id);
       changed();
     } catch (err) {
       failed(id, `couldn't put it in: ${(err as Error).message}`);

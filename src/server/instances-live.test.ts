@@ -39,6 +39,8 @@ let calls: string[];
 // Whether the fake arclamp takes mute and mask on create, as arclamp has since
 // they were added; one from before ignores them.
 let createTakesInitial: boolean;
+// Called as arclamp's asked to create a shader: for what happens while one goes in.
+let onCreate: (() => void) | null;
 
 const scriptOf = (commit: string) => stamp(`function update(p) { return p; } // ${commit}\n`, { sketch: SKETCH, commit, builder: "1" }, KEY);
 
@@ -73,6 +75,7 @@ beforeEach(() => {
     // As arclamp does: put in at `position` (on top without one), the rest
     // above it moving up; muted and masked as asked, unless it's from before.
     createShader: async (script: string, position?: number, initial?: { muted: boolean; mask: number[] }) => {
+      onCreate?.();
       const stack = [...shaders.values()].sort((a, b) => a.position - b.position);
       const at = Math.min(Math.max(position ?? stack.length + 1, 1), stack.length + 1);
       for (const s of stack) if (s.position >= at) shaders.set(s.id, { ...s, position: s.position + 1 });
@@ -108,6 +111,7 @@ beforeEach(() => {
   asked = [];
   calls = [];
   createTakesInitial = true;
+  onCreate = null;
   const builds = {
     start: async (_sketch: string, rev: string, user: Me) => {
       asked.push(rev);
@@ -149,6 +153,20 @@ const send = (method: string, path: string, body?: unknown) =>
   app.request(path, { method, headers: { "content-type": "application/json" }, ...(body === undefined ? {} : { body: JSON.stringify(body) }) });
 
 describe("an instance", () => {
+  it("moved to another build while it goes in, goes in as the one it started with, then that one's swapped in", async () => {
+    addBuild("b2", "b".repeat(40), true);
+    nextBuild = { id: "b1", commit: "a".repeat(40), built: true };
+    // As Base Color's is when vibes starts with new code for it, and arclamp's scene is empty.
+    onCreate = () => {
+      for (const i of db.instances()) db.updateInstance(i.id, { build_id: "b2" });
+    };
+    const inst = (await (await send("POST", "/instances", { sketch: SKETCH, home: [2] })).json()) as Instance;
+    onCreate = null;
+    await settle();
+    expect(db.instance(inst.id)).toMatchObject({ state: "live", build_id: "b2", next_build_id: null });
+    expect(shaders.get(shaderOf(inst)!)!.script).toBe(stampAs(scriptOf("b".repeat(40)), inst.id, KEY));
+  });
+
   it("of a built commit goes straight in, masked off everything outside its home", async () => {
     nextBuild = { id: "b1", commit: "a".repeat(40), built: true };
     const res = await send("POST", "/instances", { sketch: SKETCH, home: [2, 3, 3] });
