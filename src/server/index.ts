@@ -100,6 +100,7 @@ const feed = createSceneFeed({
   instances: () => instances,
   onShaders: (shaders) => params?.scene(shaders),
   onScene: (shaders) => baseColor?.scene(shaders),
+  rNow: rtime.rNow,
 });
 feed.subscribe((scene) => live.scene(scene));
 relay.subscribe((frame) => feed.touched(frame));

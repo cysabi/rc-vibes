@@ -71,6 +71,8 @@ export interface FeedDeps {
   /** Told every shader in the scene (not the room tone), each time it's made: for keeping Base Color (base-color.ts). */
   onScene?: (shaders: SceneShader[]) => void;
   confirmMs?: number;
+  /** arclamp's time now (rclamp-time.ts): when a change put off for a frame is shown. */
+  rNow?: () => number;
 }
 
 /**
@@ -84,7 +86,7 @@ const keep = ({ script: _script, changing: _changing, ...rest }: ShaderDescripto
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 const sorted = (ids: Iterable<number>) => [...ids].sort((a, b) => a - b);
 
-export function createSceneFeed({ config, db, arclamp, follow, layout, instances = () => null, onShaders, onScene, confirmMs = CONFIRM_MS }: FeedDeps) {
+export function createSceneFeed({ config, db, arclamp, follow, layout, instances = () => null, onShaders, onScene, confirmMs = CONFIRM_MS, rNow = Date.now }: FeedDeps) {
   const shaders = new Map<number, Kept>();
   // Whether it's been told the whole scene yet.
   let whole = false;
@@ -412,11 +414,16 @@ export function createSceneFeed({ config, db, arclamp, follow, layout, instances
     });
   }
 
+  // Changes put off for a frame, waiting to be shown then: by their schedule ids.
+  const putOff = new Map<string, ReturnType<typeof setTimeout>>();
+
   /**
    * arclamp as vibes changes it, each change shown at once: the same client,
    * its writes told to the feed as each one lands (ahead of its event). It's
    * sent on with whatever comes in the same moment (putting an instance in is
    * a shader made, masked and noted), and straight away to whoever asks (now).
+   * A change put off for a frame is shown when the frame comes, not before;
+   * one another takes the place of before then (emplaced) is never shown.
    */
   function noting(a: Arclamp): Arclamp {
     const then = <T>(change: () => void, value: T) => {
@@ -445,6 +452,24 @@ export function createSceneFeed({ config, db, arclamp, follow, layout, instances
         return then(() => answered(d), d);
       },
       setMuted: async (id, muted) => then(() => patch(id, { muted }), await a.setMuted(id, muted)),
+      setMutedAt: async (id, muted, schedule) => {
+        const frame = await a.setMutedAt(id, muted, schedule);
+        if (schedule.emplace) {
+          clearTimeout(putOff.get(schedule.emplace));
+          putOff.delete(schedule.emplace);
+        }
+        // Its time had passed: it went in at once.
+        if (frame === null) return then(() => patch(id, { muted }), frame);
+        const show = setTimeout(
+          () => {
+            if (schedule.id) putOff.delete(schedule.id);
+            then(() => patch(id, { muted }), undefined);
+          },
+          Math.max(0, frame - rNow()),
+        );
+        if (schedule.id) putOff.set(schedule.id, show);
+        return frame;
+      },
       setMask: async (id, mask) => then(() => patch(id, { mask: sorted(new Set(mask)) }), await a.setMask(id, mask)),
       moveShader: async (id, position) => then(() => move(id, position), await a.moveShader(id, position)),
       deleteShader: async (id) => {
@@ -565,6 +590,7 @@ export function createSceneFeed({ config, db, arclamp, follow, layout, instances
       following.stop();
       clearTimeout(gathering);
       clearTimeout(confirming);
+      for (const t of putOff.values()) clearTimeout(t);
       clearInterval(writing);
       write();
     },
