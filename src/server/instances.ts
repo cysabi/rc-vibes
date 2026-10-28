@@ -178,12 +178,14 @@ export function createInstances({ config, db, arclamp, builds, lightIds, changed
         const read = s.type === "js" && s.script !== undefined ? readStamp(s.script, config.signingKey) : null;
         return read?.verified && read.stamp.shader === id;
       });
-      d ??= await arclamp.createShader(script, positionOf(inst.above, scene));
+      // Muted and masked as it goes in, so its first frame lights only what
+      // it may: arclamp's shaders render as soon as they're in.
+      d ??= await arclamp.createShader(script, positionOf(inst.above, scene), await wanted(id));
       // Its shader, noted at once, so the scene shows it as this instance (not someone else's shader) from the start.
       db.updateInstance(id, { shader_id: d.id });
-      // Masked and muted at once (as wanted when it's noted: anything wanted
-      // after is caught up by want): its sandbox takes longer than this to
-      // start, so it never lights anything it shouldn't.
+      // Brought to what's wanted now: anything wanted while it went in (after
+      // it's noted, want catches up), or all of it, from an arclamp that
+      // doesn't take them on create.
       await bringTo(d, await wanted(id));
       db.updateInstance(id, { state: "live", error: null });
       db.log({ user: { id: inst.by_id, name: inst.by_name }, action: "shader.create", shaderId: d.id, shaderName: sketch.name, detail: { ...detail(build, sketch), home: inst.home.length } });

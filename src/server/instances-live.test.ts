@@ -36,6 +36,9 @@ let nextBuild: { id: string; commit: string; built: boolean };
 let asked: string[];
 // What arclamp was asked to do to shaders' mutes and masks, in order.
 let calls: string[];
+// Whether the fake arclamp takes mute and mask on create, as arclamp has since
+// they were added; one from before ignores them.
+let createTakesInitial: boolean;
 
 const scriptOf = (commit: string) => stamp(`function update(p) { return p; } // ${commit}\n`, { sketch: SKETCH, commit, builder: "1" }, KEY);
 
@@ -67,12 +70,21 @@ beforeEach(() => {
       if (!d) throw Object.assign(new Error("no such shader"), { status: 404 });
       return d;
     },
-    // As arclamp does: put in at `position` (on top without one), the rest above it moving up.
-    createShader: async (script: string, position?: number) => {
+    // As arclamp does: put in at `position` (on top without one), the rest
+    // above it moving up; muted and masked as asked, unless it's from before.
+    createShader: async (script: string, position?: number, initial?: { muted: boolean; mask: number[] }) => {
       const stack = [...shaders.values()].sort((a, b) => a.position - b.position);
       const at = Math.min(Math.max(position ?? stack.length + 1, 1), stack.length + 1);
       for (const s of stack) if (s.position >= at) shaders.set(s.id, { ...s, position: s.position + 1 });
       const d: ShaderDescriptor = { id: next++, type: "js", position: at, script, state: "running", muted: false, created_by: "vibes", modified_by: "vibes" };
+      if (createTakesInitial && initial) {
+        d.muted = initial.muted;
+        // No mask, arclamp leaves out.
+        if (initial.mask.length > 0) d.mask = initial.mask;
+        calls.push(`create ${d.id} muted ${initial.muted} mask ${initial.mask.join(",")}`);
+      } else {
+        calls.push(`create ${d.id}`);
+      }
       shaders.set(d.id, d);
       return d;
     },
@@ -95,6 +107,7 @@ beforeEach(() => {
   };
   asked = [];
   calls = [];
+  createTakesInitial = true;
   const builds = {
     start: async (_sketch: string, rev: string, user: Me) => {
       asked.push(rev);
@@ -254,7 +267,7 @@ describe("an instance", () => {
     expect(await instances.within(42, [3])).toEqual([3]);
   });
 
-  it("goes in as it's wanted meanwhile: muted before it's masked, and just above another shader", async () => {
+  it("goes in as it's wanted meanwhile, muted and masked as it goes in, and just above another shader", async () => {
     shaders.set(10, { id: 10, type: "js", position: 1, script: "a", state: "running", muted: false, created_by: "x", modified_by: "x" });
     shaders.set(11, { id: 11, type: "js", position: 2, script: "b", state: "running", muted: false, created_by: "x", modified_by: "x" });
     nextBuild = { id: "b12", commit: "6".repeat(40), built: false };
@@ -267,13 +280,21 @@ describe("an instance", () => {
     const d = shaders.get(shaderOf(inst)!)!;
     expect(d.position).toBe(2);
     expect(shaders.get(11)!.position).toBe(3);
-    expect(calls).toEqual([`mask ${d.id} 2,3,4,5,6`]);
+    expect(calls).toEqual([`create ${d.id} muted false mask 2,3,4,5,6`]);
   });
 
-  it("going in muted, is muted first", async () => {
+  it("going in muted, goes in muted and masked: nothing after", async () => {
     nextBuild = { id: "b13", commit: "7".repeat(40), built: true };
     const inst = (await (await send("POST", "/instances", { sketch: SKETCH, home: [1], muted: true })).json()) as Instance;
-    expect(calls).toEqual([`muted ${shaderOf(inst)} true`, `mask ${shaderOf(inst)} 2,3,4,5,6`]);
+    expect(calls).toEqual([`create ${shaderOf(inst)} muted true mask 2,3,4,5,6`]);
+  });
+
+  it("from an arclamp that doesn't take them on create, is muted first, then masked, just after", async () => {
+    createTakesInitial = false;
+    nextBuild = { id: "b13", commit: "7".repeat(40), built: true };
+    const inst = (await (await send("POST", "/instances", { sketch: SKETCH, home: [1], muted: true })).json()) as Instance;
+    const id = shaderOf(inst);
+    expect(calls).toEqual([`create ${id}`, `muted ${id} true`, `mask ${id} 2,3,4,5,6`]);
   });
 
   it("goes in at the bottom, or above one still on its way in, where that's to go", async () => {

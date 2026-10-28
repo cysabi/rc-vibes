@@ -425,8 +425,8 @@ export function createSceneFeed({ config, db, arclamp, follow, layout, instances
     return {
       ...a,
       // Put in at a position, the rest above it move up.
-      createShader: async (script, position) => {
-        const d = await a.createShader(script, position);
+      createShader: async (script, position, initial) => {
+        const d = await a.createShader(script, position, initial);
         return then(() => {
           answered(d);
           move(d.id, d.position);
