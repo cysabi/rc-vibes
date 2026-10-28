@@ -119,7 +119,7 @@ describe("shaders, by key", () => {
     expect((await send("POST", "/shaders/rclamp-11/muted", { muted: true })).status).toBe(204);
     expect((await send("POST", "/shaders/rclamp-11/mask", { mask: [3, 1, 1] })).status).toBe(204);
     expect(calls).toEqual(["muted 11 true", "mask 11 1,3"]);
-    expect(db.activity(2).map((a) => [a.action, a.shaderId, a.shaderName])).toEqual([
+    expect((await db.activity(2)).map((a) => [a.action, a.shaderId, a.shaderName])).toEqual([
       ["shader.mask", 11, "Shader #11"],
       ["shader.mute", 11, "Shader #11"],
     ]);
@@ -131,7 +131,7 @@ describe("shaders, by key", () => {
     calls = [];
     expect((await send("POST", `/shaders/${id}/mask`, { mask: [2] })).status).toBe(204);
     expect(calls).toEqual([`mask ${shader} 2,3,4`]);
-    expect(db.activity(1)[0]).toMatchObject({ action: "shader.mask", shaderName: "Warm wave" });
+    expect((await db.activity(1))[0]).toMatchObject({ action: "shader.mask", shaderName: "Warm wave" });
   });
 
   it("not in the room yet, keep what's wanted of them, to go in that way", async () => {
@@ -140,7 +140,7 @@ describe("shaders, by key", () => {
     expect((await send("POST", `/shaders/${id}/mask`, { mask: [2] })).status).toBe(204);
     expect(db.instance(id)).toMatchObject({ muted: true, mask: [2, 3, 4] });
     expect(calls).toEqual([]);
-    expect(db.activity(2).map((a) => [a.action, a.shaderId, a.shaderName])).toEqual([
+    expect((await db.activity(2)).map((a) => [a.action, a.shaderId, a.shaderName])).toEqual([
       ["shader.mask", null, "Warm wave"],
       ["shader.mute", null, "Warm wave"],
     ]);
@@ -158,7 +158,7 @@ describe("shaders, by key", () => {
 
   it("come out of the room: anyone's, and an instance, building or in", async () => {
     expect((await send("DELETE", "/shaders/rclamp-11")).status).toBe(204);
-    expect(db.activity(1)[0]).toMatchObject({ action: "shader.delete", shaderId: 11 });
+    expect((await db.activity(1))[0]).toMatchObject({ action: "shader.delete", shaderId: 11 });
     const building = await putIn([1], false);
     expect((await send("DELETE", `/shaders/${building}`)).status).toBe(204);
     expect(db.instance(building)).toBeUndefined();
@@ -177,7 +177,7 @@ describe("the stack", () => {
   it("is put in the order asked, top first", async () => {
     expect((await send("PUT", "/stack", { order: ["rclamp-10", "rclamp-12", "rclamp-11"] })).status).toBe(204);
     expect(stack()).toEqual(["11@1", "12@2", "10@3"]);
-    expect(db.activity(10).filter((a) => a.action === "shader.move").map((a) => [a.shaderId, a.detail])).toEqual(
+    expect((await db.activity(10)).filter((a) => a.action === "shader.move").map((a) => [a.shaderId, a.detail])).toEqual(
       expect.arrayContaining([
         [10, { from: 1, to: 3 }],
         [11, { from: 2, to: 1 }],

@@ -410,9 +410,9 @@ export function apiRoutes({ config, arclamp, db, relay, origins, lights, feed, l
 
     .get("/health", async (c) => c.json(health?.latest() ?? (await arclamp.health())))
 
-    .get("/activity", (c) => {
+    .get("/activity", async (c) => {
       const limit = Math.min(Math.max(Number(c.req.query("limit")) || 100, 1), 500);
-      return c.json(db.activity(limit));
+      return c.json(await db.activity(limit));
     })
 
     .put(

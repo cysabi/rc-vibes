@@ -160,7 +160,7 @@ describe("an instance", () => {
     expect(d.script).toBe(stampAs(scriptOf("a".repeat(40)), inst.id, KEY));
     expect(readStamp(d.script!, KEY)).toMatchObject({ verified: true, stamp: { shader: inst.id } });
     expect(d.mask).toEqual([1, 4, 5, 6]);
-    expect(db.activity(1)[0]).toMatchObject({ action: "shader.create", shaderName: "Warm wave" });
+    expect((await db.activity(1))[0]).toMatchObject({ action: "shader.create", shaderName: "Warm wave" });
   });
 
   it("is only in vibes while it builds, and goes in once built", async () => {
@@ -391,11 +391,11 @@ describe("an instance's params, in its pool", () => {
       [pool, "speed", [[9, [1, 2]], [20, [3]]]],
       [pool, "speed", [[null, [2, 3]]]],
     ]);
-    expect(db.activity(1)[0]).toMatchObject({ action: "shader.param", shaderName: "Warm wave", detail: { param: "speed", lights: 2 } });
+    expect((await db.activity(1))[0]).toMatchObject({ action: "shader.param", shaderName: "Warm wave", detail: { param: "speed", lights: 2 } });
     // A run of changes to one param (a slider dragged) is one entry in the history; another param's is its own.
-    expect(db.activity(10).filter((a) => a.action === "shader.param")).toHaveLength(1);
+    expect((await db.activity(10)).filter((a) => a.action === "shader.param")).toHaveLength(1);
     expect((await put(inst, "bands", [[5, [5]]])).status).toBe(204);
-    expect(db.activity(10).filter((a) => a.action === "shader.param").map((a) => a.detail?.param)).toEqual(["bands", "speed"]);
+    expect((await db.activity(10)).filter((a) => a.action === "shader.param").map((a) => a.detail?.param)).toEqual(["bands", "speed"]);
   });
 
   it("only reach the lights each param is for, passing the rest over", async () => {

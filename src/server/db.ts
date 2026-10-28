@@ -1,35 +1,35 @@
 // vibes' own records: the lights' positions, rails, orientations and tags set
-// in vibes, plus an activity log. arclamp sees every vibes action as the
-// single "vibes" token.
+// in vibes, plus an activity log (history.ts). arclamp sees every vibes
+// action as the single "vibes" token.
+//
+// The disk may be slow (kokuzo's is), and this is all on the main thread, so
+// nothing here waits for it: a commit only appends to the write-ahead log
+// (synchronous = NORMAL: a power cut can lose the last moments, but never
+// corrupts it), and the log is put into the database by another thread
+// (`background`: db-background.ts), never by a commit here. The history's
+// kept on that thread too, in a database of its own.
 
 import type { ParamSpec, ParamValue } from "../shared/params.ts";
 import { DatabaseSync } from "node:sqlite";
 import type { RailShape } from "../shared/rails.ts";
-import type { ActivityAction, ActivityEntry, CameraView, Me, Person, Spot } from "../shared/vibes.ts";
+import type { CameraView, Me, Person, Spot } from "../shared/vibes.ts";
+import { backgroundStore } from "./db-background.ts";
+import { createHistory, memoryStore } from "./history.ts";
 
-interface ActivityRow {
-  id: number;
-  ts: string;
-  user_id: string;
-  user_name: string;
-  action: ActivityAction;
-  shader_id: number | null;
-  shader_name: string | null;
-  detail: string | null;
-}
+export type { LogInput } from "./history.ts";
 
-export interface LogInput {
-  user: Person;
-  action: ActivityAction;
-  shaderId?: number;
-  shaderName?: string | null;
-  detail?: Record<string, unknown>;
-}
-
-export function openDb(path: string) {
+/**
+ * vibes' database at `path`; with `background`, its checkpoints and its
+ * history on a thread of their own (the history beside it, in a database of
+ * its own), else its history in memory (tests).
+ */
+export function openDb(path: string, { background = false }: { background?: boolean } = {}) {
   const db = new DatabaseSync(path);
+  const own = background && path !== ":memory:";
   db.exec(`
     PRAGMA journal_mode = WAL;
+    PRAGMA synchronous = NORMAL;
+    PRAGMA wal_autocheckpoint = ${own ? 0 : 1000};
     -- Light positions set in vibes, until exported into arclamp's lights.json.
     -- A light is on a rail when rail_id is set, otherwise at mm_x, mm_y on
     -- floor; all of them null means "taken off the plan".
@@ -71,6 +71,7 @@ export function openDb(path: string) {
       by_name TEXT NOT NULL,
       at TEXT NOT NULL
     );
+    -- The history as it was kept before it had a database of its own (db-worker.ts moves it there once).
     CREATE TABLE IF NOT EXISTS activity (
       id INTEGER PRIMARY KEY AUTOINCREMENT,
       ts TEXT NOT NULL,
@@ -258,13 +259,7 @@ export function openDb(path: string) {
     INSERT INTO light_tags (light_id, tags, by_id, by_name, at) VALUES (?, ?, ?, ?, ?)
     ON CONFLICT (light_id) DO UPDATE SET tags = excluded.tags, by_id = excluded.by_id, by_name = excluded.by_name, at = excluded.at
   `);
-  const insertActivity = db.prepare(`
-    INSERT INTO activity (ts, user_id, user_name, action, shader_id, shader_name, detail)
-    VALUES (?, ?, ?, ?, ?, ?, ?)
-  `);
-  const selectActivity = db.prepare("SELECT * FROM activity ORDER BY id DESC LIMIT ?");
-  const lastActivity = db.prepare("SELECT * FROM activity ORDER BY id DESC LIMIT 1");
-  const updateActivity = db.prepare("UPDATE activity SET ts = ?, detail = ? WHERE id = ?");
+  const history = createHistory(own ? backgroundStore(path) : memoryStore());
   const selectSketches = db.prepare("SELECT * FROM sketches WHERE deleted_at IS NULL ORDER BY at DESC");
   const selectDeletedSketches = db.prepare("SELECT * FROM sketches WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC");
   const markSketchDeleted = db.prepare("UPDATE sketches SET deleted_at = ?, deleted_by_id = ?, deleted_by_name = ? WHERE id = ? AND deleted_at IS NULL");
@@ -430,52 +425,10 @@ export function openDb(path: string) {
       });
     },
 
-    log(entry: LogInput) {
-      insertActivity.run(
-        new Date().toISOString(),
-        entry.user.id,
-        entry.user.name,
-        entry.action,
-        entry.shaderId ?? null,
-        entry.shaderName ?? null,
-        entry.detail ? JSON.stringify(entry.detail) : null,
-      );
-    },
-
-    /**
-     * Log an entry, or fold it into the previous one when the same person did
-     * the same thing moments ago (dragging a color picker sends a stream of
-     * room tone changes; the history should show one). With `same`, only
-     * when the previous entry was about the same thing too, by its detail
-     * (the same param of the same shader, say).
-     */
-    logCoalesced(entry: LogInput, windowMs: number, same?: (lastDetail: Record<string, unknown> | null) => boolean) {
-      const last = lastActivity.get() as ActivityRow | undefined;
-      const now = new Date();
-      if (
-        last &&
-        last.user_id === entry.user.id &&
-        last.action === entry.action &&
-        now.getTime() - new Date(last.ts).getTime() < windowMs &&
-        (!same || same(last.detail ? (JSON.parse(last.detail) as Record<string, unknown>) : null))
-      ) {
-        updateActivity.run(now.toISOString(), entry.detail ? JSON.stringify(entry.detail) : null, last.id);
-        return;
-      }
-      this.log(entry);
-    },
-
-    activity(limit: number): ActivityEntry[] {
-      return (selectActivity.all(limit) as unknown as ActivityRow[]).map((r) => ({
-        id: r.id,
-        ts: r.ts,
-        user: { id: r.user_id, name: r.user_name },
-        action: r.action,
-        shaderId: r.shader_id,
-        shaderName: r.shader_name,
-        detail: r.detail ? (JSON.parse(r.detail) as Record<string, unknown>) : null,
-      }));
-    },
+    // The history (history.ts): handed over, never waited for; read back when asked.
+    log: history.log,
+    logCoalesced: history.logCoalesced,
+    activity: history.activity,
 
     /** Every sketch that isn't deleted, newest first. */
     sketches: () => selectSketches.all() as unknown as SketchRow[],
@@ -624,7 +577,11 @@ export function openDb(path: string) {
       deleteFootprintRow.run(shaderId);
     },
 
-    close: () => db.close(),
+    /** Closed, and its history once that's kept (its thread's last checkpoint with it). */
+    close(): Promise<void> {
+      db.close();
+      return history.close();
+    },
   };
 }
 

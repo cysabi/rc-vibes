@@ -32,7 +32,8 @@ const LAYOUT_REFRESH_MS = 60_000;
 
 const config = loadConfig();
 const arclamp = createArclamp(config.arclamp.baseUrl, config.arclamp.key);
-const db = openDb(config.databasePath);
+// Its checkpoints and history on a thread of their own: a slow disk holds nothing up.
+const db = openDb(config.databasePath, { background: true });
 const relay = createStreamRelay(arclamp.streamUrl(), arclamp.key);
 const lights = createLights(arclamp, db);
 
@@ -181,11 +182,11 @@ function shutdown() {
   builds?.stop();
   for (const ws of sockets.clients) ws.terminate();
   server.close(() => {
-    db.close();
-    process.exit(0);
+    void db.close().finally(() => process.exit(0));
   });
   if ("closeAllConnections" in server) server.closeAllConnections();
-  setTimeout(() => process.exit(0), 2000).unref();
+  // Long enough for the history's thread to keep what it's been handed (db-background.ts).
+  setTimeout(() => process.exit(0), 6000).unref();
 }
 process.on("SIGINT", shutdown);
 process.on("SIGTERM", shutdown);
