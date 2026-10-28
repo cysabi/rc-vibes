@@ -120,16 +120,3 @@ export function lumensText(brightness: number): string {
   const lm = brightness * LUMENS_PER_BRIGHTNESS;
   return `${lm >= 9.95 || lm === 0 ? Math.round(lm) : lm.toFixed(1)} lm`;
 }
-
-/** The lemtone's name: a white by its color temperature, else its hue and chroma. */
-export function colorName(a: number, b: number): string {
-  const k = kelvinOf(a, b);
-  if (k !== null) return `${Math.round(k / 50) * 50} K`;
-  const { hue, chroma } = hueChroma(a, b);
-  return `${Math.round(hue)}° C${chroma.toFixed(2)}`;
-}
-
-/** A short code for a lemtone, e.g. "2800 K · 800 lm · F1.00" or "29° C0.25 · 48 lm · F0.00". */
-export function lemtoneCode(t: Lemtone): string {
-  return `${colorName(t.a, t.b)} · ${lumensText(t.brightness)} · F${t.fidelity.toFixed(2)}`;
-}

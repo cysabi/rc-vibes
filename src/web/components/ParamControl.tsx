@@ -1,20 +1,21 @@
-// One param's control, for some lights: a slider for a number, on and off for
-// a toggle, and for a color whatever picker it's given (room tone's color
-// editor in vibes: ColorParam.tsx; the editor's preview has something
-// lighter, as the color editor can't go there). It shows what those lights
-// have (their range, when they differ), and sets them all; a color change can
-// be for some of them, as room tone's is. "Default" puts them back.
+// One param's control, for some lights, as one of Field.tsx's kinds: a
+// SliderField for a number, a ButtonSwitchField for a toggle, and for a color
+// whatever picker it's given (a ColorField in vibes: ColorParam.tsx; the
+// editor's preview has something lighter, as a ColorField can't go there). With `resettable`, "Set to default" under it puts
+// them all back (in vibes, it's for all of a shader's params at once, by its
+// name: SelectionPanel.tsx).
 
 import type { ComponentType } from "react";
 import type { LightInfo } from "../../shared/arclamp.ts";
 import { paramText, sameValue, type ColorValue, type ParamSpec, type ParamValue } from "../../shared/params.ts";
-import { Segmented } from "./Segmented.tsx";
-import { Slider } from "./Slider.tsx";
+import { ButtonSwitchField, rangeOf, SliderField } from "./Field.tsx";
 
 /** New values (null: back to the default), each with its light. */
 export type ParamChanges = (changes: [number, ParamValue | null][]) => void;
 
 export interface ColorPickerProps {
+  /** The param's name, for its field. */
+  label: string;
   lights: LightInfo[];
   values: ColorValue[];
   onChange: ParamChanges;
@@ -28,44 +29,34 @@ interface Props {
   onChange: ParamChanges;
   /** How a color is picked. */
   colorPicker: ComponentType<ColorPickerProps>;
-  /** What these lights are, said beside what they have ("3 lights"). */
-  note?: string;
+  /** Whether it has its own "Set to default". */
+  resettable?: boolean;
 }
 
 const TRACK = "linear-gradient(90deg, rgb(255 255 255 / 0.06), rgb(255 255 255 / 0.22))";
 
-export function ParamControl({ spec, lights, values, onChange, colorPicker: ColorPicker, note }: Props) {
+export function ParamControl({ spec, lights, values, onChange, colorPicker: ColorPicker, resettable = false }: Props) {
   const all = (v: ParamValue | null) => onChange(lights.map((l) => [l.id, v]));
-  const said = (shown: string) => [shown, note].filter(Boolean).join(" · ");
-  const reset = values.some((v) => !sameValue(v, spec.default)) && (
-    <button className="quiet param-default" onClick={() => all(null)} title="Back to what the sketch starts with">
-      Default
+  const reset = resettable && values.some((v) => !sameValue(v, spec.default)) && (
+    <button className="param-default" onClick={() => all(null)}>
+      Set to default
     </button>
-  );
-  const head = (shown: string) => (
-    <div className="field-head">
-      <span className="label">{spec.label}</span>
-      <span className="mono">{said(shown)}</span>
-    </div>
   );
 
   if (spec.kind === "number") {
     const nums = values as number[];
-    const [lo, hi] = [Math.min(...nums), Math.max(...nums)];
-    const shown = lo === hi ? paramText(lo, spec.step) : `${paramText(lo, spec.step)}–${paramText(hi, spec.step)}`;
+    const shown = rangeOf(nums, (v) => paramText(v, spec.step));
     return (
       <div className="param">
-        <Slider
+        <SliderField
           label={spec.label}
-          value={nums[0] ?? spec.default}
+          value={shown}
+          values={nums}
           min={spec.min}
           max={spec.max}
           step={spec.step}
           track={TRACK}
-          display={said(shown)}
-          onChange={all}
-          onCommit={all}
-          marks={[{ at: spec.default, title: `Default: ${paramText(spec.default, spec.step)}` }]}
+          onChange={(v, which) => onChange(which.map((i) => [lights[i]!.id, v]))}
         />
         {reset}
       </div>
@@ -73,29 +64,18 @@ export function ParamControl({ spec, lights, values, onChange, colorPicker: Colo
   }
 
   if (spec.kind === "toggle") {
-    const on = values.filter((v) => v === true).length;
     return (
       <div className="param">
-        {head(on === 0 ? "all off" : on === values.length ? "all on" : `${on} of ${values.length} on`)}
-        <Segmented
-          className="stretch"
-          label={spec.label}
-          options={[
-            { value: "on", label: "On" },
-            { value: "off", label: "Off" },
-          ]}
-          value={on === values.length ? "on" : on === 0 ? "off" : null}
-          onChange={(v) => all(v === "on")}
-        />
+        <ButtonSwitchField label={spec.label} values={values.map((v) => v === true)} onChange={(on) => all(on)} />
         {reset}
       </div>
     );
   }
 
+  // A color's several fields (its picker, brightness, fidelity), spaced as fields are.
   return (
-    <div className="param">
-      {head(values.every((v) => sameValue(v, values[0]!)) ? "" : "mixed")}
-      <ColorPicker lights={lights} values={values as ColorValue[]} onChange={onChange} />
+    <div className="param fields">
+      <ColorPicker label={spec.label} lights={lights} values={values as ColorValue[]} onChange={onChange} />
       {reset}
     </div>
   );

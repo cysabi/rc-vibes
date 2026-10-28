@@ -11,8 +11,20 @@ export interface Segment {
 }
 
 // The plan groups that stand floor to ceiling and stop light. Doors are left
-// out, as if open; so are fixtures well below the lights (the kitchenette's
-// counters, and the toilets and sinks drawn as symbols in groups of their own).
+// out, as if open (but for SHUT_DOORWAYS); so are fixtures well below the
+// lights (the kitchenette's counters, and the sinks drawn as symbols in
+// groups of their own).
+
+// Light doesn't get into the bathrooms, the electrical closet or the
+// stairs: their doorways are shut, for light only (the drawing's doors stay
+// as drawn). Each door in the drawing is its swing's arc (data-door), then
+// its open leaf, then its closed position as a dashed line across the
+// doorway; that line is what's taken as the wall, carried on at each end to
+// the wall it meets (some stop short of the jamb: the women's room's, by
+// 114 mm), up to SHUT_REACH_MM.
+const SHUT_DOORWAYS =
+  /data-door="(?:Womens room entry|Mens room entry|Electrical closet entry|Main stair entry|Exit stair entry)"[^>]*\/>\s*<polygon[^>]*\/>\s*<line ([^>]*)\/>/g;
+const SHUT_REACH_MM = 300;
 const WALL_GROUPS = new Set([
   "Exterior walls and glazing",
   "Core partitions",
@@ -71,10 +83,39 @@ export function wallsOf(svg: string): Segment[] {
       outline(pts, tag === "polygon");
     }
   }
+  const walls = [...out];
+  for (const m of svg.matchAll(SHUT_DOORWAYS)) {
+    const a = m[1]!;
+    const [p, q] = [at(num(a, "x1"), num(a, "y1")), at(num(a, "x2"), num(a, "y2"))];
+    outline([toWall(p, q, walls), toWall(q, p, walls)], false);
+  }
   return splitAtCrossings(out.filter((s) => s.x1 !== s.x2 || s.y1 !== s.y2));
 }
 
 const segment = (p: Point, q: Point): Segment => ({ x1: p.x, y1: p.y, x2: q.x, y2: q.y });
+
+/**
+ * A shut doorway's end `p` (the line coming from `from`), carried on past
+ * it to the nearest wall it meets within SHUT_REACH_MM; where it already
+ * touches one, or meets none, just `p`.
+ */
+function toWall(p: Point, from: Point, walls: Segment[]): Point {
+  const len = Math.hypot(p.x - from.x, p.y - from.y);
+  if (len === 0) return p;
+  const [dx, dy] = [(p.x - from.x) / len, (p.y - from.y) / len];
+  let best = SHUT_REACH_MM;
+  for (const s of walls) {
+    const [ex, ey] = [s.x2 - s.x1, s.y2 - s.y1];
+    const denom = dx * ey - dy * ex;
+    if (Math.abs(denom) < 1e-9) continue;
+    // Along the line from p (t, mm) and along the wall (u, 0 to 1).
+    const t = ((s.x1 - p.x) * ey - (s.y1 - p.y) * ex) / denom;
+    const u = ((s.x1 - p.x) * dy - (s.y1 - p.y) * dx) / denom;
+    if (u < -1e-9 || u > 1 + 1e-9 || t < -1e-6) continue;
+    if (t < best) best = t;
+  }
+  return best === SHUT_REACH_MM ? p : { x: p.x + dx * best, y: p.y + dy * best };
+}
 
 /**
  * Walls split wherever another crosses them. The plans draw walls as rects

@@ -30,7 +30,7 @@ import { view as buildView, type Builds } from "./builds.ts";
 import { changesIn } from "./changes.ts";
 import type { Db, SketchRow } from "./db.ts";
 import type { Config, SketchesConfig } from "./env.ts";
-import { createRepo, headOf, serveGit } from "./git.ts";
+import { createRepo, forkRepo, headOf, serveGit } from "./git.ts";
 
 const UUID = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/;
 
@@ -52,6 +52,8 @@ const authorOf = (user: Me) => ({ name: user.name, email: `${user.id.replace(/[^
 
 /** /api/sketches, for people logged in. */
 export function sketchRoutes(sketches: SketchesConfig, db: Db, boxes: Boxes, builds: Builds) {
+  // Development's fake changes (VIBES_FAKE_CHANGES) that have been "pushed", by sketch.
+  const fakePushed = new Set<string>();
   async function summary(row: SketchRow): Promise<Sketch> {
     const head = await headOf(sketches.dir, row.id);
     return {
@@ -95,6 +97,27 @@ export function sketchRoutes(sketches: SketchesConfig, db: Db, boxes: Boxes, bui
       return row ? c.json(await summary(row)) : notFound(c);
     })
 
+    /** A fork: a new sketch, yours, whose repo starts as a git clone of this one's (every branch, all its history). */
+    .post("/:id/fork", zValidator("json", z.object({ name: z.string().trim().min(1).max(80) }), badBody), async (c) => {
+      const from = db.sketch(c.req.param("id"));
+      if (!from) return notFound(c);
+      if (from.deleted_at !== null) return c.json({ error: "this sketch was deleted", code: "deleted" }, 410);
+      const user = c.get("user");
+      const id = randomUUID();
+      await forkRepo(sketches.dir, from.id, id);
+      const row: SketchRow = { id, name: c.req.valid("json").name, by_id: user.id, by_name: user.name, at: Date.now(), deleted_at: null, deleted_by_id: null, deleted_by_name: null };
+      db.addSketch(row);
+      return c.json(await summary(row), 201);
+    })
+
+    /** A new name, for everyone (its repo's id doesn't change). */
+    .patch("/:id", zValidator("json", z.object({ name: z.string().trim().min(1).max(80) }), badBody), async (c) => {
+      const row = db.sketch(c.req.param("id"));
+      if (!row) return notFound(c);
+      db.renameSketch(row.id, c.req.valid("json").name);
+      return c.json(await summary(db.sketch(row.id)!));
+    })
+
     .delete("/:id", async (c) => {
       const row = db.sketch(c.req.param("id"));
       if (!row) return notFound(c);
@@ -126,6 +149,8 @@ export function sketchRoutes(sketches: SketchesConfig, db: Db, boxes: Boxes, bui
     .get("/:id/changes", async (c) => {
       const row = db.sketch(c.req.param("id"));
       if (!row) return notFound(c);
+      // Development's stand-in for an editor that has changes (VIBES_FAKE_CHANGES), until they're "pushed".
+      if (sketches.fakeChanges.includes(row.name) && !fakePushed.has(row.id)) return c.json({ files: 2, commits: 1 } satisfies SketchChanges);
       const box = db.boxFor(row.id, c.get("user").id);
       const none: SketchChanges = { files: 0, commits: 0 };
       if (!box || !sketches.homesMount) return c.json(none);
@@ -141,6 +166,12 @@ export function sketchRoutes(sketches: SketchesConfig, db: Db, boxes: Boxes, bui
       const row = db.sketch(c.req.param("id"));
       if (!row) return notFound(c);
       if (row.deleted_at !== null) return c.json({ error: "this sketch was deleted", code: "deleted" }, 410);
+      // Development's fake changes: "pushed" (nothing is), so they're gone till vibes starts again.
+      if (sketches.fakeChanges.includes(row.name) && !fakePushed.has(row.id)) {
+        fakePushed.add(row.id);
+        const head = await headOf(sketches.dir, row.id);
+        return c.json({ commit: head?.commit ?? null });
+      }
       const done = await boxes.publish(row.id, c.get("user"), PUBLISH_MESSAGE);
       if ("pushed" in done) return c.json({ commit: done.pushed });
       if ("failed" in done) return c.json({ error: done.failed, code: "failed" }, 502);

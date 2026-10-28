@@ -16,7 +16,8 @@ import { planSketch, UPDATE_FOOTER, type BuildPlan } from "../src/shared/sketch-
 
 const url = process.env.VIBES_BUILD_URL;
 const token = process.env.VIBES_BUILD_TOKEN;
-const WORK = "/tmp/build";
+// Its own folder in a container; a folder given it, run as a plain process (box-local.ts).
+const WORK = process.env.VIBES_BUILD_DIR ?? "/tmp/build";
 const MAX_LOG = 200_000;
 
 let log = "";

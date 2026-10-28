@@ -8,3 +8,5 @@ dist/
 
 dev/standin/
 dev/lights.json
+# Sketches' repos, beside the database (SKETCHES_DIR's default).
+sketches/

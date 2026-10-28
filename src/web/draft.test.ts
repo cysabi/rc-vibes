@@ -43,7 +43,7 @@ vi.mock("./scene.ts", () => {
   };
 });
 
-const { applyDraft, currentDraft, drafts, EMPTY, keyNow, layerOf, layersOf, opsOf, pendingCount, reachOf, reorderWithin, roomtoneChanges, switchEverywhere, switchFor, switchState, templateOf } =
+const { applyDraft, changedLights, changesByLayer, currentDraft, drafts, EMPTY, keyNow, layerOf, layersOf, opsOf, pendingCount, reachOf, reorderWithin, roomtoneChanges, switchEverywhere, switchFor, switchState, templateOf } =
   await import("./draft.ts");
 const { sendUpdate } = await import("./scene.ts");
 
@@ -630,5 +630,46 @@ describe("switching a shader on and off", () => {
     expect(switchEverywhere({ ...homed(), muted: true, mask: [1, 4, 5, 6] }, true, ALL)).toEqual({ muted: false, mask: [4, 5, 6] });
     expect(switchEverywhere(other(), true, ALL)).toEqual({ muted: false, mask: [] });
     expect(switchEverywhere(other(), false, ALL)).toEqual({ muted: true });
+  });
+});
+
+describe("what's changed, shader by shader", () => {
+  const fp = room(shader(12, { footprint: [1, 2] }), shader(11, { footprint: [2, 3] }));
+
+  it("has nothing for a shader with nothing pending, or an edit that matches what's live", () => {
+    drafts.patchShader("rclamp-11", { muted: false });
+    expect(changesByLayer(fp, currentDraft()).size).toBe(0);
+  });
+
+  it("has each changed shader's own lights, which the room's are all of", () => {
+    drafts.patchShader("rclamp-12", { mask: [2] });
+    drafts.patchShader("rclamp-11", { muted: true });
+    const by = changesByLayer(fp, currentDraft());
+    expect(by.get("rclamp-12")).toEqual([2]);
+    expect(by.get("rclamp-11")).toEqual([2, 3]);
+    expect(changedLights(fp, currentDraft())).toEqual([2, 3]);
+  });
+
+  it("has one taken out, or moved in the stack, on all it reaches", () => {
+    drafts.remove("rclamp-12");
+    expect([...changesByLayer(fp, currentDraft())]).toEqual([["rclamp-12", [1, 2]]]);
+    drafts.discard();
+    drafts.reorder(["rclamp-11", "rclamp-12"]);
+    expect(changesByLayer(fp, currentDraft()).get("rclamp-11")).toEqual([2, 3]);
+  });
+
+  it("has a change even when it changes no lights", () => {
+    drafts.patchShader("rclamp-9", { muted: true });
+    const none = room(shader(9));
+    expect(changesByLayer(none, currentDraft()).get("rclamp-9")).toEqual([]);
+  });
+  it("has a color's lights, however much of each color changes (its numbers are paths of their own)", () => {
+    const tint: ParamSpec = { kind: "color", name: "tint", label: "Tint", lights: {}, default: { a: 0, b: 0, lm: 300, fidelity: 1 } };
+    const colored = withPools(room(shader(12, { pool: "p1" })), { p1: { declared: [tint], values: { tint: {} } } });
+    drafts.setParam("rclamp-12", "tint", [
+      [3, { a: 0.5, b: 0, lm: 300, fidelity: 1 }],
+      [1, { a: 0, b: 0.2, lm: 40, fidelity: 1 }],
+    ]);
+    expect(changesByLayer(colored, currentDraft()).get("rclamp-12")).toEqual([1, 3]);
   });
 });

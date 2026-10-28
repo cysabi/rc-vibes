@@ -8,9 +8,8 @@
 // you're adding, as its preview here does (sim.ts), before it's in.
 
 import type { LightInfo } from "../../shared/arclamp.ts";
-import { appliesTo, valuesAt, type ParamSpec } from "../../shared/params.ts";
+import { appliesTo, sameValue, valuesAt, type ParamSpec } from "../../shared/params.ts";
 import { drafts, reachOf, type Layer } from "../draft.ts";
-import { count } from "../words.ts";
 import { ColorParam } from "./ColorParam.tsx";
 import { ParamControl } from "./ParamControl.tsx";
 
@@ -32,9 +31,29 @@ export function paramRowsOf(layer: Layer, selected: LightInfo[]): ParamRow[] {
   });
 }
 
+/** Its params, of these, that aren't at their default for some of their lights. */
+export function offDefault(layer: Layer, rows: ParamRow[]): ParamRow[] {
+  return rows.filter(({ spec, lights }) =>
+    valuesAt(
+      spec,
+      layer.params?.values[spec.name],
+      lights.map((l) => l.id),
+    ).some((v) => !sameValue(v, spec.default)),
+  );
+}
+
+/** Its params, of these, back to their defaults for their lights: one change. */
+export function resetParams(layer: Layer, rows: ParamRow[]) {
+  drafts.resetParams(
+    layer.key,
+    rows.map(({ spec, lights }) => ({ name: spec.name, ids: lights.map((l) => l.id) })),
+  );
+}
+
+/** Its params, one field each: a fragment, laid out by the details they're in (SidebarDetails). */
 export function ShaderParams({ layer, rows }: { layer: Layer; rows: ParamRow[] }) {
   return (
-    <div className="param-list">
+    <>
       {rows.map(({ spec, lights }) => (
         <ParamControl
           key={spec.name}
@@ -47,9 +66,8 @@ export function ShaderParams({ layer, rows }: { layer: Layer; rows: ParamRow[] }
           )}
           onChange={(changes) => drafts.setParam(layer.key, spec.name, changes)}
           colorPicker={ColorParam}
-          note={count(lights.length, "light")}
         />
       ))}
-    </div>
+    </>
   );
 }

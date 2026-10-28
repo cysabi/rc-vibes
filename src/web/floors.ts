@@ -36,6 +36,8 @@ const KEEP_CLEAR = /(?:<polyline [^>]*stroke-dasharray="[^"]*"[^>]*\/>\s*)?<circ
 // The drinking fountain's clearance: a dashed rect drawn just before the
 // fountain itself (its basin, then its drain).
 const FOUNTAIN_CLEARANCE = /<rect [^>]*stroke-dasharray="[^"]*"[^>]*\/>(?=\s*<path [^>]*\/>\s*<circle [^>]*fill="#777")/g;
+// The toilets: each a group of a bowl (a path that starts like this), its seat, tank and flush.
+const TOILET = /<g transform="translate\([^)]*\)(?: scale\([^)]*\))?"><path d="M-2 -3 L-9 -5[^"]*"[^>]*\/>[\s\S]*?<\/g>/g;
 
 // The stairs are drawn in the wall layers, but their steps, rails and arrows
 // are only drawn on the floor: light crosses them. Everything inside these
@@ -55,7 +57,7 @@ const LINE_PX = 1.5;
 
 /**
  * Drop what clutters a dim map (the reference grid, dimension lines, room
- * labels, the accessible stalls', keep-clear and fountain clearance markings, and metadata), mark the stairs' steps, and drop the fixed print
+ * labels, the accessible stalls', keep-clear and fountain clearance markings, the toilets, and metadata), mark the stairs' steps, and drop the fixed print
  * size, so CSS can size the drawing, and give lines their widths in screen
  * pixels, keeping the drawing's heavier walls and lighter fixtures.
  */
@@ -67,6 +69,7 @@ export function preparePlan(svg: string): string {
     .replace(TURNING_CIRCLE, "")
     .replace(KEEP_CLEAR, "")
     .replace(FOUNTAIN_CLEARANCE, "")
+    .replace(TOILET, "")
     .replace(/<(line|rect|polygon|polyline)\b([^>]*?)(\/?)>/g, (tag, name: string, attrs: string, close: string) =>
       onStairs(name, attrs) ? `<${name} data-step=""${attrs}${close}>` : tag,
     )

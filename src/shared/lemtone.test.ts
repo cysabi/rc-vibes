@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { abOf, cssColor, hueChroma, kelvinOf, lemtoneCode, lightRgb, lookOf, lumensText, swatch, whiteAB } from "./lemtone.ts";
+import { abOf, cssColor, hueChroma, kelvinOf, lightRgb, lookOf, lumensText, swatch, whiteAB } from "./lemtone.ts";
 
 describe("lemtone colors", () => {
   it("puts whites where Walter's tool page does", () => {
@@ -73,13 +73,10 @@ describe("lemtone colors", () => {
     expect(lookOf(-1)).toBe(0);
   });
 
-  it("writes brightness in lumens and codes people can read", () => {
+  it("writes brightness in lumens", () => {
     expect(lumensText(0.8)).toBe("800 lm");
     expect(lumensText(0.025)).toBe("25 lm");
     expect(lumensText(0.0025)).toBe("2.5 lm");
     expect(lumensText(0)).toBe("0 lm");
-    const [a, b] = whiteAB(2800);
-    expect(lemtoneCode({ a, b, brightness: 0.8, fidelity: 1 })).toBe("2800 K · 800 lm · F1.00");
-    expect(lemtoneCode({ a: 0.2, b: 0, brightness: 0.03, fidelity: 0 })).toBe("0° C0.20 · 30 lm · F0.00");
   });
 });

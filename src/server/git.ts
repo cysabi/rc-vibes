@@ -35,6 +35,25 @@ const authorEnv = (a: Author) => ({
 export const repoPath = (dir: string, id: string) => path.join(dir, `${id}.git`);
 
 /**
+ * A fork: a new bare repo at <dir>/<id>.git, a clone of <dir>/<from>.git
+ * with all its branches and history, set up as createRepo's are (it takes
+ * pushes, and logs where its branches go). Nothing links the two after: each
+ * goes its own way.
+ */
+export async function forkRepo(dir: string, from: string, id: string) {
+  const bare = repoPath(dir, id);
+  try {
+    await git(["clone", "--quiet", "--bare", "--no-local", repoPath(dir, from), bare]);
+    await git(["-C", bare, "remote", "remove", "origin"]);
+    await git(["-C", bare, "config", "http.receivepack", "true"]);
+    await git(["-C", bare, "config", "core.logAllRefUpdates", "always"]);
+  } catch (err) {
+    await rm(bare, { recursive: true, force: true });
+    throw err;
+  }
+}
+
+/**
  * A new bare repo at <dir>/<id>.git whose main has one commit, by `author`,
  * holding `files` (path → contents). It takes pushes over HTTP, and keeps a
  * log of where each branch has been, so nothing pushed over is lost for good.

@@ -53,6 +53,7 @@
 
 import type { Channels, LightInfo, Rail } from "./arclamp.ts";
 import type { ParamSpec, ParamValue } from "./params.ts";
+import type { Presence } from "./presence.ts";
 import { NO_SCENES, type Scenes } from "./scenes.ts";
 import { RESTING, type ShowState } from "./show.ts";
 import type { Shader, ShaderKey } from "./vibes.ts";
@@ -348,7 +349,9 @@ export type RoomRequest =
   /** Changes, all or none (fans among them); `note` says what for, for the history (a room tone choice's name). */
   | { type: "update"; id: string; ops: WireOp[]; note?: string }
   /** What time arclamp's clock says it is (web/rtime.ts): answered at once. */
-  | { type: "time"; id: number };
+  | { type: "time"; id: number }
+  /** Where this page is, for everyone else's (shared/presence.ts): the floor it's looking at, and the lights it has selected. */
+  | { type: "presence"; floor: number | null; selected: number[] };
 
 export type RoomMessage =
   /** The whole tree, as of change `rev` of this run of vibes (`epoch`: its changes count from 0 again when it starts again). */
@@ -359,6 +362,8 @@ export type RoomMessage =
   | { type: "done"; id: string; made: Record<string, ShaderKey> }
   /** An update not made (all of it, or, failing part way in arclamp, the rest of it), and why. */
   | { type: "refused"; id: string; error: string; code: string; made: Record<string, ShaderKey> }
+  /** Every page open on the room, this one too, as of now (shared/presence.ts). */
+  | { type: "presence"; people: Presence[] }
   | { type: "ping" }
   /** arclamp's time as vibes reckons it (`r`, ms), as it answered; and how far off vibes might be from arclamp's own (`e`, ms; null till arclamp's answered vibes). */
   | { type: "time"; id: number; r: number; e: number | null };

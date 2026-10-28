@@ -281,6 +281,7 @@ export function openDb(path: string, { background = false }: { background?: bool
   const selectDeletedSketches = db.prepare("SELECT * FROM sketches WHERE deleted_at IS NOT NULL ORDER BY deleted_at DESC");
   const markSketchDeleted = db.prepare("UPDATE sketches SET deleted_at = ?, deleted_by_id = ?, deleted_by_name = ? WHERE id = ? AND deleted_at IS NULL");
   const unmarkSketchDeleted = db.prepare("UPDATE sketches SET deleted_at = NULL, deleted_by_id = NULL, deleted_by_name = NULL WHERE id = ?");
+  const updateSketchName = db.prepare("UPDATE sketches SET name = ? WHERE id = ?");
   const selectBoxesOf = db.prepare("SELECT * FROM boxes WHERE sketch_id = ?");
   const selectSketch = db.prepare("SELECT * FROM sketches WHERE id = ?");
   const insertSketch = db.prepare("INSERT INTO sketches (id, name, by_id, by_name, at) VALUES (?, ?, ?, ?, ?)");
@@ -476,6 +477,10 @@ export function openDb(path: string, { background = false }: { background?: bool
 
     restoreSketch(id: string) {
       unmarkSketchDeleted.run(id);
+    },
+
+    renameSketch(id: string, name: string) {
+      updateSketchName.run(name, id);
     },
 
     /** Everyone's boxes for a sketch. */

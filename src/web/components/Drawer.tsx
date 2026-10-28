@@ -18,7 +18,7 @@ const OPEN_UP_TO = 12;
 
 const GROUPS = [
   { base: "br30", title: "Color bulbs" },
-  { base: "4x1", title: "4×1 panels" },
+  { base: "4x1", title: "Panels" },
   { base: "relay", title: "Old bulbs" },
 ];
 
@@ -111,7 +111,7 @@ export function Drawer({ lights, onDrop, children, lead }: Props) {
                   <h3 className="label">{g.title}</h3>
                   <div className="drawer-lights">
                     {g.lights.map((l) => (
-                      <button key={l.id} className="drawer-light mono" title={`Light ${l.id}`} {...handlers(l)}>
+                      <button key={l.id} className="drawer-light mono" aria-label={`Light ${l.id}`} {...handlers(l)}>
                         <span className="dot" style={{ background: colorOf(l) }} />
                         {l.id}
                       </button>

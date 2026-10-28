@@ -11,7 +11,9 @@
 // move: two fingers pan and pinch (a flick glides on), a double tap zooms in
 // and a two-finger tap zooms out.
 //
-// Click or tap a light to select it; shift adds to the selection, ⌘-click
+// Click or tap a light to select it; shift adds to the selection and alt
+// (⌥) takes out of it (each the other way when there's nothing for it to
+// do: keyedMode), ⌘-click
 // toggles one light, ⌘A selects them all, and double-clicking a light selects
 // its whole rail. On a touch screen, dragging one finger draws a box that adds
 // to the selection, straight away; once anything's selected, taps add and
@@ -26,32 +28,21 @@
 
 import { useEffect, useLayoutEffect, useMemo, useRef, useState, type CSSProperties, type PointerEvent, type ReactNode } from "react";
 import type { Frame, LightInfo, Rail, RailPoint, RailSpot } from "../../shared/arclamp.ts";
-import { baseType, footprintOf, isBinary, isOn, lemtoneOf, orientationsOf, seenOf } from "../../shared/fixtures.ts";
-import { cssColor, lemtoneCode, lemtoneCss, lightRgb, lookOf, LUMENS_PER_BRIGHTNESS, swatch, type Lemtone, type Vec3 } from "../../shared/lemtone.ts";
-import {
-  alongAfterEndMove,
-  clampAlong,
-  hangsOnRails,
-  nearestOnRail,
-  newRailId,
-  railLength,
-  railPoint,
-  settleAngle,
-  type Point,
-  type RailShape,
-} from "../../shared/rails.ts";
+import { baseType, footprintOf, orientationsOf, seenOf } from "../../shared/fixtures.ts";
+import { cssColor, lightRgb, lookOf, LUMENS_PER_BRIGHTNESS, swatch, type Vec3 } from "../../shared/lemtone.ts";
+import { alongAfterEndMove, clampAlong, hangsOnRails, nearestOnRail, newRailId, railLength, railPoint, settleAngle, type Point, type RailShape } from "../../shared/rails.ts";
 import type { Placement, Spot, TagChange, TypeChange } from "../../shared/vibes.ts";
 import { useMoveCamera, useStreetViews } from "../api.ts";
 import { useChangeLayout, type LayoutChange } from "../scene.ts";
 import { FLOORS, planExtent, type Floor } from "../floors.ts";
-import { screenGamut, setHdrCanvas, useDisplay, useGamut } from "../display.ts";
-import { CheckIcon, DownloadIcon, FitIcon, MinusIcon, PencilIcon, PlusIcon, RailIcon, TrashIcon, TurnIcon, UndoIcon } from "../icons.tsx";
+import { screenGamut, setHdrCanvas, useDisplay } from "../display.ts";
+import { CheckIcon, DownloadIcon, FitIcon, LookIcon, MinusIcon, PencilRulerIcon, PlusIcon, RailIcon, TrashIcon, TurnIcon, UndoIcon } from "../icons.tsx";
 import { currentRails, layoutLights, placeLights, type PlacedLight } from "../layout.ts";
 import { ExactLighting } from "../lighting-exact.ts";
 import { HdrLighting } from "../lighting-hdr.ts";
 import { Lighting, REACH_MM, type Renderer, type Source } from "../lighting.ts";
 import { useFrames } from "../live.ts";
-import { useAdminMode, useExactLight } from "../settings.ts";
+import { setPreviewFolded, useAdminMode, useExactLight, usePreviewFolded } from "../settings.ts";
 import { visibility, type Segment } from "../shadows.ts";
 import {
   fitView,
@@ -76,11 +67,15 @@ import { Latency } from "./Latency.tsx";
 import { Segmented } from "./Segmented.tsx";
 import { cameraAt, Pegman, StreetViewSpots } from "./StreetViewMarks.tsx";
 import { TagEditor } from "./TagEditor.tsx";
+import { Tooltip } from "./Tooltip.tsx";
+import { LightsSummary } from "./LightsSummary.tsx";
+import { cssRgb, MINE, RING_ALPHA, ringOf, type Rgb } from "../../shared/presence.ts";
 
-const TYPE_NAMES: Record<string, string> = { br30: "color bulb", "4x1": "4×1 panel", relay: "old bulb" };
-const typeName = (type: string, count = 1) => `${TYPE_NAMES[baseType(type)] ?? type}${count === 1 ? "" : "s"}`;
 // Bulb radius in millimeters (a BR30 is 95 mm across; the old bulbs are A19s).
-const BULB_MM: Record<string, number> = { br30: 48, relay: 30 };
+// A bulb's marker, in millimeters on the plan: every bulb the same, whatever it really is.
+const BULB_MM = 48;
+// And at least this big (px), zoomed right out.
+const MARKER_MIN = 2.5;
 const PAD = 36;
 // How close (in screen pixels) a dragged light has to come to a rail to hang
 // on it, and how far it has to be pulled to come off again.
@@ -101,16 +96,47 @@ const DOUBLE_TAP_MS = 280;
 const DOUBLE_TAP_PX = 30;
 // How long the view takes to fly to a new zoom (buttons, fit, double taps).
 const FLY_MS = 280;
-// Flying to the selection: this much room (mm) round its lights, and no closer than this (px per mm).
-const FRAME_MM = 1000;
-const FRAME_SCALE = 0.25;
 // Holding a finger still on a light this long (ms) shows what it is.
 const LONG_PRESS_MS = 450;
 // How far (px) a press goes before it's a box: a finger wobbles more than a mouse.
 const BOX_SLOP = 4;
 const BOX_SLOP_TOUCH = 10;
 
-export type SelectMode = "replace" | "add" | "toggle";
+/** Replace the selection; add to it; toggle each; or take each out of it. */
+export type SelectMode = "replace" | "add" | "toggle" | "remove";
+
+/**
+ * A selection with a change made: `ids` by `mode`. A replace replaces just
+ * what's in `scope` (the lights on the floor shown; everything, by default),
+ * so a set that reaches past it (a domain, on every floor) keeps the rest.
+ */
+export function selectionWith(prev: ReadonlySet<number>, ids: readonly number[], mode: SelectMode, scope?: ReadonlySet<number>): Set<number> {
+  if (mode === "replace") return new Set([...(scope ? [...prev].filter((id) => !scope.has(id)) : []), ...ids]);
+  const next = new Set(prev);
+  for (const id of ids) {
+    if (mode === "remove" || (mode === "toggle" && next.has(id))) next.delete(id);
+    else next.add(id);
+  }
+  return next;
+}
+
+/**
+ * What a press does to the selection: shift adds, alt (⌥) takes away, each
+ * the other way when there's nothing for it to do (keyedMode); neither,
+ * replaces. A finger's presses add.
+ */
+type PressMode = "replace" | "add" | "remove";
+const pressMode = (e: { shiftKey: boolean; altKey: boolean }, touch = false): PressMode => (e.altKey && !touch ? "remove" : touch || e.shiftKey ? "add" : "replace");
+
+/**
+ * Shift or alt on some lights (one, a box of them, a layer's), as a selection
+ * change. Shift adds them; only if every one's selected already does it let
+ * go of them. Alt lets go of them; only if none is selected does it add them.
+ */
+export function keyedMode(mode: "add" | "remove", ids: readonly number[], selected: ReadonlySet<number>): "add" | "remove" {
+  if (mode === "add") return ids.length > 0 && ids.every((id) => selected.has(id)) ? "remove" : "add";
+  return ids.some((id) => selected.has(id)) ? "remove" : "add";
+}
 
 interface Props {
   lights: LightInfo[];
@@ -121,14 +147,18 @@ interface Props {
   changed: number;
   selected: ReadonlySet<number>;
   onSelect: (ids: number[], mode: SelectMode) => void;
-  /** Floats over the top right of the map. */
-  dock?: ReactNode;
-  /** Bumped to fly the view to the selected lights (or, with none, to the whole floor). */
-  framing?: number;
-  /** Floats over the bottom left of the map. */
-  corner?: ReactNode;
-  /** Fit the building again whenever the map's size changes, rather than keeping the view (for a pane that's resized). */
-  fitOnResize?: boolean;
+  /** The lights other people have selected, each with their colors (web/presence.ts): their light in its ring. */
+  others?: ReadonlyMap<number, Rgb[]>;
+  /** Lights to point out (a layer's, under the pointer in the layers panel): ringed, dashed, as if under the pointer here. */
+  hinted?: ReadonlySet<number>;
+  /** Lights to draw faded (selected ones a click elsewhere would let go of). */
+  faded?: ReadonlySet<number>;
+  /** Your own ring's color: a warm white, or (editing a domain, or a layer in focus) the focus blue. */
+  mine?: Rgb;
+  /** How strongly the rings show: RING_ALPHA, or (editing a domain) solid. */
+  ringAlpha?: number;
+  /** What the selection looks like: a card in the map's bottom right, beside the zoom, while its button there is on. */
+  look?: ReactNode;
   /** Open streetview from a camera (the figure dropped on it); without it, there's no figure. */
   onStreetView?: (id: string) => void;
   /** The camera streetview's showing, if it's open: the map shows every camera, that one picked out, and another click switches. */
@@ -166,7 +196,7 @@ type Drag =
 type Press =
   | { kind: "pan"; id: number; x: number; y: number; view: View; hit: PlacedLight | null; panned: boolean; touch: boolean; trail: Sample[] }
   // `stopped`: the press stopped a glide, so it isn't a tap. `peeked`: held on a light, showing what it is.
-  | { kind: "box"; x: number; y: number; hit: PlacedLight | null; add: boolean; touch: boolean; stopped: boolean; peeked: boolean };
+  | { kind: "box"; x: number; y: number; hit: PlacedLight | null; mode: PressMode; touch: boolean; stopped: boolean; peeked: boolean };
 
 /** Two fingers on the map: where they started, and the view then. */
 interface Pinch {
@@ -188,7 +218,26 @@ interface GestureEvent extends UIEvent {
   clientY: number;
 }
 
-export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSelect, dock, framing, corner, fitOnResize, onStreetView, streetView = null }: Props) {
+const NO_OTHERS: ReadonlyMap<number, Rgb[]> = new Map();
+const NO_HINTED: ReadonlySet<number> = new Set();
+
+export function RoomMap({
+  lights,
+  rails,
+  floor,
+  onFloor,
+  changed,
+  selected,
+  onSelect,
+  others = NO_OTHERS,
+  hinted = NO_HINTED,
+  faded = NO_HINTED,
+  mine = MINE,
+  ringAlpha = RING_ALPHA,
+  look,
+  onStreetView,
+  streetView = null,
+}: Props) {
   const wrap = useRef<HTMLDivElement>(null);
   const canvas = useRef<HTMLCanvasElement>(null);
   const planEl = useRef<HTMLDivElement>(null);
@@ -274,10 +323,7 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
 
   // Everything as it is now, pending changes included.
   const railsNow = useMemo(() => currentRails(rails, pendingRails), [rails, pendingRails]);
-  const placed = useMemo(
-    () => placeLights(lights, railsNow, { spots: pendingSpot, types: pendingType }),
-    [lights, railsNow, pendingSpot, pendingType],
-  );
+  const placed = useMemo(() => placeLights(lights, railsNow, { spots: pendingSpot, types: pendingType }), [lights, railsNow, pendingSpot, pendingType]);
   const layout = useMemo(() => layoutLights(placed, railsNow.values(), floor, frame), [placed, railsNow, floor, frame]);
   const shown = layout.lights;
   const unplaced = useMemo(() => {
@@ -286,8 +332,8 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
   }, [lights, placed]);
 
   // Refs for the draw loop and the native wheel listener.
-  const live = useRef({ layout, selected, hover, moving, railSel, railHover });
-  live.current = { layout, selected, hover, moving, railSel, railHover };
+  const live = useRef({ layout, selected, others, hinted, faded, mine, ringAlpha, hover, moving, railSel, railHover });
+  live.current = { layout, selected, others, hinted, faded, mine, ringAlpha, hover, moving, railSel, railHover };
   const fitRef = useRef(layout.fit);
   fitRef.current = layout.fit;
   const sizeRef = useRef(size);
@@ -295,7 +341,7 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
 
   useEffect(() => {
     dirty.current = true;
-  }, [layout, selected, hover, moving, railSel, railHover, gamut]);
+  }, [layout, selected, others, hinted, faded, mine, ringAlpha, hover, moving, railSel, railHover, gamut]);
 
   // A new floor's plan goes where the view says before it's ever painted.
   useLayoutEffect(() => {
@@ -304,17 +350,17 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
 
   useEffect(() => () => window.clearTimeout(longPress.current), []);
 
-  // ⌘A selects every light on this floor, and frames them (as picking by tag
-  // does; picking lights on the map leaves the view be).
+  // ⌘A selects every light on this floor; the view stays where it is.
   const everything = useRef({ shown, onSelect });
   everything.current = { shown, onSelect };
-  const [framingAll, setFramingAll] = useState(0);
   useEffect(() => {
     const onKey = (e: KeyboardEvent) => {
       if (!(e.metaKey || e.ctrlKey) || e.key !== "a" || (e.target instanceof Element && e.target.closest("input, textarea, .cm-editor"))) return;
       e.preventDefault();
-      everything.current.onSelect(everything.current.shown.map((l) => l.id), "replace");
-      setFramingAll((n) => n + 1);
+      everything.current.onSelect(
+        everything.current.shown.map((l) => l.id),
+        "replace",
+      );
     };
     window.addEventListener("keydown", onKey);
     return () => window.removeEventListener("keydown", onKey);
@@ -353,7 +399,8 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
     lightCanvas.current!.height = Math.round(height * lightDpr);
   };
 
-  // Size the canvas; fit on first layout, and keep the center on resize.
+  // Size the canvas; fit on first layout (where the view starts), and after
+  // that keep the center on resize, never zooming.
   // Resizing a canvas blanks it, and this runs after the frame's drawing but
   // before it's shown, so it draws again at once (else each step of a resize
   // shows a frame without the light).
@@ -368,11 +415,7 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
       setSize({ width, height });
       const v = viewRef.current;
       motion.current = null;
-      setView(
-        v && prev && !fitOnResize
-          ? { ...v, ox: v.ox + (width - prev.width) / 2, oy: v.oy + (height - prev.height) / 2 }
-          : fitTo(width, height),
-      );
+      setView(v && prev ? { ...v, ox: v.ox + (width - prev.width) / 2, oy: v.oy + (height - prev.height) / 2 } : fitTo(width, height));
       paintNow.current?.();
     });
     observer.observe(el);
@@ -385,7 +428,7 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
   // point under the pointer still.
   useEffect(() => {
     const el = wrap.current!;
-    const onMap = (e: Event) => !(e.target as Element).closest(".drawer, .map-tools, .floor-switch, .map-corner, .pending");
+    const onMap = (e: Event) => !(e.target as Element).closest(".drawer, .map-tools, .floor-switch, .map-corner");
     const zoom = (clientX: number, clientY: number, factor: number) => {
       const v = viewRef.current;
       if (!v) return;
@@ -534,7 +577,12 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
           spacing: s.layout.spacing,
           positionOf: (l) => positionOf(l, d),
           selected: s.selected,
+          others: s.others,
           hovered: s.hover?.id ?? null,
+          hinted: s.hinted,
+          faded: s.faded,
+          mine: s.mine,
+          ringAlpha: s.ringAlpha,
           box: marquee.current,
           rails,
           railSel: d?.kind === "rail" ? d.id : s.railSel,
@@ -583,29 +631,6 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
   };
   const fit = () => size && flyTo(fitTo(size.width, size.height));
 
-  // Asked to, fly to the selected lights, with room round them and for what
-  // floats over the map, but no closer than FRAME_SCALE; with none, to the
-  // whole floor. A frame later, once the selection panel has come in (and
-  // its size is in the insets).
-  useEffect(() => {
-    if (!framing && !framingAll) return;
-    const raf = requestAnimationFrame(() => {
-      const s = sizeRef.current;
-      if (!s) return;
-      const picked = live.current.layout.lights.filter((l) => selected.has(l.id));
-      if (!picked.length) return flyTo(fitTo(s.width, s.height));
-      const xs = picked.map((l) => l.x);
-      const ys = picked.map((l) => l.y);
-      const b = { minX: Math.min(...xs) - FRAME_MM, minY: Math.min(...ys) - FRAME_MM, maxX: Math.max(...xs) + FRAME_MM, maxY: Math.max(...ys) + FRAME_MM };
-      const v = fitView(b, s.width, s.height, fitPadding(wrap.current!));
-      if (v.scale <= FRAME_SCALE) return flyTo(v);
-      // Too close: back out around the middle of them.
-      const [cx, cy] = [v.ox + ((b.minX + b.maxX) / 2) * v.scale, v.oy + ((b.minY + b.maxY) / 2) * v.scale];
-      flyTo(zoomAt(v, cx, cy, FRAME_SCALE / v.scale, 0, Infinity));
-    });
-    return () => cancelAnimationFrame(raf);
-  }, [framing, framingAll]);
-
   /** After a pinch past a zoom limit, spring back to it around (x, y). Whether it had to. */
   const settle = (x: number, y: number) => {
     const v = viewRef.current;
@@ -635,7 +660,7 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
       const size = footprintOf(l.type);
       const inside = size
         ? Math.abs(dx) <= (size.width * view.scale) / 2 + slop && Math.abs(dy) <= (size.height * view.scale) / 2 + slop
-        : Math.hypot(dx, dy) <= Math.max(10 * reach, (BULB_MM[baseType(l.type)] ?? 40) * view.scale + slop);
+        : Math.hypot(dx, dy) <= Math.max(10 * reach, MARKER_MIN + slop, BULB_MM * view.scale + slop);
       const d = Math.hypot(dx, dy);
       if (inside && d < bestD) {
         best = l;
@@ -723,10 +748,14 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
   };
 
   /** Every light on a light's rail (or just the light, if it's on none). */
-  const selectRail = (l: PlacedLight, mode: SelectMode) => {
+  /** A light's whole rail (or just it, on none), here. */
+  const railOf = (l: PlacedLight) => {
     const rail = l.rail?.id;
-    onSelect(rail ? shown.filter((o) => o.rail?.id === rail).map((o) => o.id) : [l.id], mode);
+    return rail ? shown.filter((o) => o.rail?.id === rail).map((o) => o.id) : [l.id];
   };
+  const selectRail = (l: PlacedLight, mode: SelectMode) => onSelect(railOf(l), mode);
+  /** A press's mode for these lights: shift's and alt's as keyedMode has them; a replace as it is. */
+  const keyed = (mode: PressMode, ids: number[]): SelectMode => (mode === "replace" ? "replace" : keyedMode(mode, ids, selected));
 
   /**
    * A tap on a light selects it. Once anything's selected, taps add and
@@ -746,13 +775,13 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
     if (hit) onSelect([hit.id], selected.size > 0 ? "toggle" : "replace");
   };
 
-  // Double-clicking a light selects its whole rail (shift adds it); the
-  // floor, zooms in there (⌥ zooms out), as in Maps.
+  // Double-clicking a light selects its whole rail (shift adds it, alt takes
+  // it out, as keyedMode has them); the floor, zooms in there (⌥ zooms out), as in Maps.
   const doubleClick = (e: { clientX: number; clientY: number; altKey: boolean; shiftKey: boolean }) => {
     if (lastPointer.current === "touch" || (moving && drawing)) return;
     const p = toLocal(e);
     const hit = hitTest(p.x, p.y);
-    if (hit) return selectRail(hit, e.shiftKey ? "add" : "replace");
+    if (hit) return selectRail(hit, keyed(pressMode(e), railOf(hit)));
     if (moving && hitRail(p.x, p.y)) return;
     zoomBy(e.altKey ? 0.5 : 2, p.x, p.y);
   };
@@ -819,10 +848,11 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
         return;
       }
     }
-    // A mouse drags out a box (shift adds to the selection). So does a
-    // finger, straight away, always adding (as its taps do): two fingers move
-    // the map. Held still on a light, a finger shows what it is instead.
-    const pr: Extract<Press, { kind: "box" }> = { kind: "box", ...p, hit, add: touch || e.shiftKey, touch, stopped, peeked: false };
+    // A mouse drags out a box (shift adds to the selection, alt takes out of
+    // it: keyedMode). So does a finger, straight away, always adding (as its taps
+    // do): two fingers move the map. Held still on a light, a finger shows
+    // what it is instead.
+    const pr: Extract<Press, { kind: "box" }> = { kind: "box", ...p, hit, mode: pressMode(e, touch), touch, stopped, peeked: false };
     press.current = pr;
     window.clearTimeout(longPress.current);
     if (touch && hit) {
@@ -906,7 +936,8 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
       marquee.current = { x0: pr.x, y0: pr.y, x1: p.x, y1: p.y };
       dirty.current = true;
       const inside = boxed(marquee.current, view);
-      const next = pr.add ? [...new Set([...selected, ...inside])] : inside;
+      const mode = boxMode(pr, inside);
+      const next = mode === "add" ? [...new Set([...selected, ...inside])] : mode === "remove" ? [...selected].filter((id) => !inside.includes(id)) : inside;
       setBoxing((prev) => (prev && prev.length === next.length && prev.every((id, i) => id === next[i]) ? prev : next));
       return;
     }
@@ -937,8 +968,7 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
         const [dx, dy] = [rest[1].x - pz.last.x, rest[1].y - pz.last.y];
         const trail = pz.trail.map((s) => ({ t: s.t, x: s.x + dx, y: s.y + dy }));
         press.current = { kind: "pan", id: rest[0], ...rest[1], view, hit: null, panned: true, touch: true, trail };
-      }
-      else settle(pz.last.x, pz.last.y);
+      } else settle(pz.last.x, pz.last.y);
       return;
     }
     const d = drag.current;
@@ -981,14 +1011,20 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
       else if (!pr.stopped) tap(toLocal(e), pr.hit, e.timeStamp);
       return;
     }
-    if (!pr.add) setRailSel(null);
+    if (pr.mode === "replace") setRailSel(null);
     if (!box) {
-      if (pr.hit) onSelect([pr.hit.id], pr.add ? "toggle" : "replace");
-      else if (!pr.add) onSelect([], "replace");
+      // One light: shift or alt toggles it (each, on one light, is just that).
+      if (pr.hit) onSelect([pr.hit.id], keyed(pr.mode, [pr.hit.id]));
+      else if (pr.mode === "replace") onSelect([], "replace");
       return;
     }
-    onSelect(boxed(box, view), pr.add ? "add" : "replace");
+    const inside = boxed(box, view);
+    onSelect(inside, boxMode(pr, inside));
   };
+
+  /** A box's press, for the lights in it: shift's and alt's as keyedMode has them. A finger's boxes only add. */
+  const boxMode = (pr: { mode: PressMode; touch: boolean }, inside: number[]): PressMode =>
+    pr.mode === "replace" || pr.touch ? pr.mode : keyedMode(pr.mode, inside, selected);
 
   /** The lights inside a box on screen. */
   const boxed = (box: { x0: number; y0: number; x1: number; y1: number }, view: View) => {
@@ -1044,11 +1080,8 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
   };
 
   const dropLights = (d: Extract<Drag, { kind: "lights" }>) => {
-    const placements = [...d.to].map(
-      ([id, t]): Placement =>
-        t.rail
-          ? { id, rail: { id: t.rail.id, mm_along: Math.round(t.rail.mm_along) } }
-          : { id, coords: { mm_x: Math.round(t.x), mm_y: Math.round(t.y), floor } },
+    const placements = [...d.to].map(([id, t]): Placement =>
+      t.rail ? { id, rail: { id: t.rail.id, mm_along: Math.round(t.rail.mm_along) } } : { id, coords: { mm_x: Math.round(t.x), mm_y: Math.round(t.y), floor } },
     );
     commit({ placements }, { placements: [...d.to.keys()].map(placementNow) });
   };
@@ -1096,10 +1129,7 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
     const rail = railsNow.get(id);
     if (!rail) return;
     const on = placed.filter((l) => l.rail?.id === id);
-    commit(
-      { rails: [{ id, rail: null }] },
-      { rails: [{ id, rail: shapeOf(rail) }], placements: on.map((l) => ({ id: l.id, rail: l.rail! })) },
-    );
+    commit({ rails: [{ id, rail: null }] }, { rails: [{ id, rail: shapeOf(rail) }], placements: on.map((l) => ({ id: l.id, rail: l.rail! })) });
     setRailSel(null);
   };
 
@@ -1167,23 +1197,16 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
     return () => window.removeEventListener("keydown", onKey);
   }, [moving]);
 
-  const cursor = panning
-    ? "panning"
-    : panKey
-      ? "pan-ready"
-      : moving && drawing
-        ? "drawing"
-        : moving && (hover || railHover)
-          ? "grab"
-          : hover
-            ? "pointing"
-            : "";
+  const cursor = panning ? "panning" : panKey ? "pan-ready" : moving && drawing ? "drawing" : moving && (hover || railHover) ? "grab" : hover ? "pointing" : "";
 
   const hint = drawing
     ? "Drag along a track to draw its rail. Ends catch on other rails' ends; shift keeps to 45°. Esc when you're done."
     : railSel
       ? "Drag the rail or either end to line it up with its track; the lights on it come along. Delete takes it away."
       : "Select lights to tag them, or drag them to move them; near a rail they hang on it. Drag into the drawer to take them off. R turns panels.";
+
+  // What it looks like: shown while its button in the corner is on (remembered in this browser).
+  const showLook = !usePreviewFolded();
 
   const plan = layout.plan;
   return (
@@ -1209,9 +1232,7 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
         // Ctrl-drag pans; don't let it open the context menu on a Mac.
         onContextMenu={(e) => e.preventDefault()}
       />
-      {/* A dusk over the bottom of the map, for what floats there (shown with a selection, as in the CSS). */}
-      <div className="map-scrim" aria-hidden="true" />
-      {view && hover && <HoverCard light={hover} at={positionOf(hover, drag.current)} view={view} width={size?.width ?? 0} moving={moving} />}
+      {view && hover && <LightTooltip light={hover} at={positionOf(hover, drag.current)} view={view} width={size?.width ?? 0} moving={moving} />}
       {view && boxing && boxing.length > 0 && (
         <SelectionCard lights={shown.filter((l) => boxing.includes(l.id))} at={(l) => positionOf(l, drag.current)} view={view} width={size?.width ?? 0} />
       )}
@@ -1231,27 +1252,27 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
 
       <div className="map-top">
         <div className="map-tools">
-          {moving ? (
+          {moving && (
             <div className="toolbar">
               <div className="toolbar-row">
                 <div className="toolbar-group">
-                  <button className="tool" aria-pressed={drawing} onClick={() => setDrawing(!drawing)} title="Draw rails by dragging along each track">
+                  <button className="tool" aria-pressed={drawing} onClick={() => setDrawing(!drawing)}>
                     <RailIcon /> Draw rail
                   </button>
                   {railSel && (
-                    <button className="tool" onClick={() => deleteRail(railSel)} title="Take the selected rail away; its lights stay where they are (Delete)">
+                    <button className="tool" onClick={() => deleteRail(railSel)}>
                       <TrashIcon /> Delete rail
                     </button>
                   )}
-                  <button className="tool" onClick={turn} disabled={turnable.length === 0} title="Switch selected 4×1 panels between vertical and horizontal (R)">
+                  <button className="tool" onClick={turn} disabled={turnable.length === 0}>
                     <TurnIcon /> Turn
                   </button>
                 </div>
                 <div className="toolbar-group">
-                  <button className="tool" onClick={undoLast} disabled={undo.length === 0 || change.isPending} title="Undo the last change">
+                  <button className="tool" onClick={undoLast} disabled={undo.length === 0 || change.isPending}>
                     <UndoIcon /> Undo
                   </button>
-                  <a className="tool" href="/api/lights.json" download="lights.json" title="arclamp's lights.json with these changes">
+                  <a className="tool" href="/api/lights.json" download="lights.json">
                     <DownloadIcon /> lights.json{changed > 0 && <span className="tool-count">{changed}</span>}
                   </a>
                   <button className="primary tool-done" onClick={stopMoving}>
@@ -1261,26 +1282,35 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
               </div>
               <p className="toolbar-hint">{hint}</p>
             </div>
-          ) : (
-            admin && (
-              <button className="glass-button" onClick={() => setMoving(true)}>
-                <PencilIcon /> Edit lights
-              </button>
-            )
           )}
           {tagging.length > 0 && <TagEditor lights={tagging} known={knownTags} onChange={retag} />}
           {change.error && <p className="map-note bad">Couldn't save that: {change.error.message}</p>}
         </div>
-        {dock}
       </div>
 
-      <Drawer lights={unplaced} onDrop={dropFromDrawer} lead={corner}>
+      <Drawer lights={unplaced} onDrop={dropFromDrawer}>
         {view && (
           <div className="map-corner">
-            {admin && <ClockSync />}
-            {admin && <Latency />}
             <ScaleBar scale={view.scale} />
+            {/* Beside the zoom, pushing the scale left: what the selection looks like (while its button's on), and in admin mode the room's clock and the map's delay under it. */}
+            {((look && showLook) || admin) && (
+              <div className="corner-cards">
+                {look && showLook && <div className="look-card">{look}</div>}
+                {admin && <ClockSync />}
+                {admin && <Latency />}
+              </div>
+            )}
             <div className="zoom">
+              {/* Admin mode's own, at the top: moving lights. */}
+              {admin && !moving && (
+                <button className="zoom-look zoom-edit" onClick={() => setMoving(true)} aria-label="Edit lights">
+                  <PencilRulerIcon />
+                </button>
+              )}
+              {/* Always there, so the corner doesn't shift; the card itself only shows with something to show. */}
+              <button className="zoom-look" aria-pressed={showLook} onClick={() => setPreviewFolded(showLook)} aria-label="What the selection looks like">
+                <LookIcon />
+              </button>
               {onStreetView && cameras.length > 0 && (
                 <Pegman
                   map={wrap}
@@ -1303,14 +1333,14 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
                 onChange={onFloor}
               />
               <div className="zoom-group" role="group" aria-label="Zoom">
-                <button className="zoom-step" onClick={() => zoomBy(1.5)} aria-label="Zoom in" title="Zoom in" disabled={view.scale >= MAX_SCALE}>
+                <button className="zoom-step" onClick={() => zoomBy(1.5)} aria-label="Zoom in" disabled={view.scale >= MAX_SCALE}>
                   <PlusIcon />
                 </button>
-                <button className="zoom-step" onClick={() => zoomBy(1 / 1.5)} aria-label="Zoom out" title="Zoom out">
+                <button className="zoom-step" onClick={() => zoomBy(1 / 1.5)} aria-label="Zoom out">
                   <MinusIcon />
                 </button>
               </div>
-              <button className="zoom-fit" onClick={fit} aria-label="Fit the building" title="Fit the building">
+              <button className="zoom-fit" onClick={fit} aria-label="Fit">
                 <FitIcon />
               </button>
             </div>
@@ -1383,13 +1413,7 @@ function fanOf(o: Point, walls: Segment[]): Float32Array {
  * now: what each can see (cached by spot, as working it out takes a moment),
  * the light each gives right now, and a key that changes when any moves.
  */
-function lightSources(
-  frame: Frame | null,
-  lights: PlacedLight[],
-  plan: Floor | null,
-  at: (l: PlacedLight) => Point,
-  cache: Map<string, Float32Array>,
-) {
+function lightSources(frame: Frame | null, lights: PlacedLight[], plan: Floor | null, at: (l: PlacedLight) => Point, cache: Map<string, Float32Array>) {
   const gamut = screenGamut();
   const sources: Source[] = [];
   const flux: number[] = [];
@@ -1464,61 +1488,22 @@ function ScaleBar({ scale }: { scale: number }) {
   );
 }
 
-function HoverCard({ light, at, view, width, moving }: { light: PlacedLight; at: Point; view: View; width: number; moving: boolean }) {
-  const [, tick] = useState(0);
-  useEffect(() => {
-    const t = window.setInterval(() => tick((n) => n + 1), 250);
-    return () => window.clearInterval(t);
-  }, []);
-  const gamut = useGamut();
-  const channels = useFrames().latest()?.lights.get(light.id);
-  const t = lemtoneOf(channels, light.type);
-  const seen = seenOf(channels, light.type);
+/** The light under the pointer, as LightsSummary says it (or, moving lights, where it is). */
+function LightTooltip({ light, at, view, width, moving }: { light: PlacedLight; at: Point; view: View; width: number; moving: boolean }) {
   const x = view.ox + at.x * view.scale;
   const y = view.oy + at.y * view.scale;
   const flip = x > width - 220;
-  const name = typeName(light.type);
-  const where = light.rail
-    ? `${(light.rail.mm_along / 1000).toFixed(2)} m along its rail`
-    : `${(at.x / 1000).toFixed(2)} m, ${(at.y / 1000).toFixed(2)} m`;
+  const where = light.rail ? `${(light.rail.mm_along / 1000).toFixed(2)} m along its rail` : `${(at.x / 1000).toFixed(2)} m, ${(at.y / 1000).toFixed(2)} m`;
   return (
-    <div
-      className="hover-card"
-      style={{ left: flip ? x - 16 : x + 16, top: y, transform: flip ? "translate(-100%, -50%)" : "translateY(-50%)" }}
-    >
-      <span className="hover-title">
-        <span className="dot" style={{ background: lemtoneCss(seen, gamut) }} />
-        <span className="mono">{light.id}</span>
-        <span className="muted">{light.type === "4x1-horizontal" ? `${name}, horizontal` : name}</span>
-      </span>
-      <span className="mono hover-value">{moving ? where : t ? lemtoneCode(t) : "off"}</span>
-    </div>
+    <Tooltip x={flip ? x - 16 : x + 16} y={y} side={flip ? "left" : "right"}>
+      <LightsSummary lights={[light]} size="small" />
+      {moving && <span className="mono tooltip-value">{where}</span>}
+    </Tooltip>
   );
 }
 
-/**
- * The lights a box being dragged out would select, summed up over the top of
- * them: how many, of what, the color the color lights are making, if they're
- * all making the same one, and whether the old bulbs are on. The two are
- * apart, as an old bulb never makes a color light's light.
- */
+/** The lights a box being dragged out would select, as LightsSummary says them, over the top of them (under, near the top). */
 function SelectionCard({ lights, at, view, width }: { lights: PlacedLight[]; at: (l: PlacedLight) => Point; view: View; width: number }) {
-  const [, tick] = useState(0);
-  useEffect(() => {
-    const t = window.setInterval(() => tick((n) => n + 1), 250);
-    return () => window.clearInterval(t);
-  }, []);
-  const frame = useFrames().latest();
-  const seenAll = (ls: PlacedLight[]) => ls.map((l) => seenOf(frame?.lights.get(l.id), l.type));
-  const colors = lights.filter((l) => !isBinary(l.type));
-  const olds = lights.filter((l) => isBinary(l.type));
-  const tones = colors.map((l) => lemtoneOf(frame?.lights.get(l.id), l.type));
-  const first = tones[0] ?? null;
-  const alike = tones.every((t) => sameTone(t, first));
-  const on = olds.filter((l) => isOn(frame?.lights.get(l.id))).length;
-  const switched = on === 0 ? "off" : on === olds.length ? "on" : `${on} of ${olds.length} on`;
-  const kinds = new Map<string, number>();
-  for (const l of lights) kinds.set(baseType(l.type), (kinds.get(baseType(l.type)) ?? 0) + 1);
   // Over the middle of them, or under them if that's too near the top.
   const xs = lights.map((l) => view.ox + at(l).x * view.scale);
   const ys = lights.map((l) => view.oy + at(l).y * view.scale);
@@ -1526,57 +1511,16 @@ function SelectionCard({ lights, at, view, width }: { lights: PlacedLight[]; at:
   // Clear of the rings round them (see draw).
   const half = (l: PlacedLight) => {
     const foot = footprintOf(l.type);
-    return foot ? (foot.height / 2) * view.scale : Math.max(2.5, (BULB_MM[baseType(l.type)] ?? 40) * view.scale);
+    return foot ? (foot.height / 2) * view.scale : Math.max(MARKER_MIN, BULB_MM * view.scale);
   };
   const top = Math.min(...lights.map((l, i) => ys[i]! - half(l))) - 14;
   const bottom = Math.max(...lights.map((l, i) => ys[i]! + half(l))) + 14;
   const above = top > 110;
   const y = above ? top : bottom;
   return (
-    <div className="hover-card selection-card" style={{ left: x, top: y, transform: above ? "translate(-50%, -100%)" : "translateX(-50%)" }}>
-      <span className="hover-title">
-        <span className="mono">{lights.length}</span>
-        <span className="muted">{kinds.size === 1 ? typeName(lights[0]!.type, lights.length) : "lights"}</span>
-      </span>
-      {kinds.size > 1 && (
-        <span className="hover-value">
-          {[...kinds].map(([kind, n]) => `${n} ${typeName(kind, n)}`).join(" · ")}
-        </span>
-      )}
-      {colors.length > 0 && <ToneLine seen={seenAll(colors)} alike={alike} text={alike ? (first ? lemtoneCode(first) : "off") : "mixed"} />}
-      {olds.length > 0 && (
-        <ToneLine seen={seenAll(olds)} alike={on === 0 || on === olds.length} text={colors.length > 0 ? `old bulbs ${switched}` : switched} />
-      )}
-    </div>
-  );
-}
-
-/** A line of the selection card: the lights' light, one dot when they're alike (else a strip of them), and what it is. */
-function ToneLine({ seen, alike, text }: { seen: (Lemtone | null)[]; alike: boolean; text: string }) {
-  const gamut = useGamut();
-  return (
-    <span className="mono hover-value selection-tone">
-      {alike ? (
-        <span className="dot" style={{ background: lemtoneCss(seen[0] ?? null, gamut) }} />
-      ) : (
-        <span className="slivers" aria-hidden="true">
-          {seen.slice(0, 24).map((t, i) => (
-            <span key={i} style={{ background: lemtoneCss(t, gamut) }} />
-          ))}
-        </span>
-      )}
-      {text}
-    </span>
-  );
-}
-
-/** Whether two lights are making the same light (or are both off), near enough. */
-function sameTone(a: Lemtone | null, b: Lemtone | null): boolean {
-  if (!a || !b) return a === b;
-  return (
-    Math.abs(a.a - b.a) + Math.abs(a.b - b.b) < 0.005 &&
-    Math.abs(a.brightness - b.brightness) <= 0.01 * Math.max(a.brightness, b.brightness) &&
-    Math.abs(a.fidelity - b.fidelity) < 0.02
+    <Tooltip x={x} y={y} side={above ? "above" : "below"}>
+      <LightsSummary lights={lights} size="small" />
+    </Tooltip>
   );
 }
 
@@ -1591,7 +1535,16 @@ interface Scene {
   spacing: number;
   positionOf: (l: PlacedLight) => Point;
   selected: ReadonlySet<number>;
+  /** Other people's selections: each light's colors, added into its ring. */
+  others: ReadonlyMap<number, Rgb[]>;
   hovered: number | null;
+  /** Pointed out from elsewhere: ringed as the light under the pointer is. */
+  hinted: ReadonlySet<number>;
+  /** Drawn faded, glow, light and ring. */
+  faded: ReadonlySet<number>;
+  /** Your own ring's color. */
+  mine: Rgb;
+  ringAlpha: number;
   box: { x0: number; y0: number; x1: number; y1: number } | null;
   rails: Rail[];
   railSel: string | null;
@@ -1600,6 +1553,9 @@ interface Scene {
   /** A rail to label with its length. */
   measure: Rail | null;
 }
+
+// How strongly a faded light shows (Scene.faded).
+const FADED = 0.3;
 
 function draw(c: HTMLCanvasElement, s: Scene) {
   const { size, view } = s;
@@ -1631,7 +1587,7 @@ function draw(c: HTMLCanvasElement, s: Scene) {
       // Panels: their footprint in pixels. Bulbs: a radius.
       w: foot ? foot.width * view.scale : 0,
       h: foot ? foot.height * view.scale : 0,
-      r: foot ? 0 : Math.max(2.5, (BULB_MM[baseType(l.type)] ?? 40) * view.scale),
+      r: foot ? 0 : Math.max(MARKER_MIN, BULB_MM * view.scale),
     };
   });
 
@@ -1640,6 +1596,7 @@ function draw(c: HTMLCanvasElement, s: Scene) {
   ctx.globalCompositeOperation = "lighter";
   for (const it of items) {
     if (!it.rgb || !s.glow) continue;
+    ctx.globalAlpha = s.faded.has(it.id) ? FADED : 1;
     const halo = Math.max(it.r * 2.5, reach * (0.36 + 0.26 * it.level));
     // Panels glow in an ellipse around their footprint.
     const rx = it.w ? it.w / 2 + halo * 0.6 : halo;
@@ -1658,33 +1615,65 @@ function draw(c: HTMLCanvasElement, s: Scene) {
     ctx.fill();
     ctx.restore();
   }
+  ctx.globalAlpha = 1;
   ctx.globalCompositeOperation = "source-over";
 
+  // Each light: a panel as its footprint, a bulb as a disc. Lit, the light's
+  // color pushed toward white as it brightens, with a small glow round it in
+  // its color (brighter, the brighter it is). Off, just its outline in the
+  // rail's color (a little stronger than the rail): the floor shows through,
+  // but not the rail, which is cut away under it. A quiet ring round it once
+  // selected; the same ring, dashed, under the pointer (selected or not), or
+  // inside a box being dragged out. Selected by anyone else too, it's still the one ring, in everyone's
+  // colors added together, yours (a warm white) among them while you have it
+  // selected or under the pointer (shared/presence.ts: ringOf).
+  const box = s.box && { x0: Math.min(s.box.x0, s.box.x1), x1: Math.max(s.box.x0, s.box.x1), y0: Math.min(s.box.y0, s.box.y1), y1: Math.max(s.box.y0, s.box.y1) };
   for (const it of items) {
+    const selected = s.selected.has(it.id);
+    // As the box takes them (its middle inside: boxed, in RoomMap).
+    const boxed = box !== null && it.x >= box.x0 && it.x <= box.x1 && it.y >= box.y0 && it.y <= box.y1;
+    const hovered = s.hovered === it.id || boxed || s.hinted.has(it.id);
+    ctx.globalAlpha = s.faded.has(it.id) ? FADED : 1;
     ctx.beginPath();
     if (it.w) ctx.roundRect(it.x - it.w / 2, it.y - it.h / 2, it.w, it.h, Math.min(3, it.w / 4, it.h / 4));
     else ctx.arc(it.x, it.y, it.r, 0, Math.PI * 2);
     if (!it.rgb) {
-      // Off: dark, so it covers the rail under it like the real bulb would.
-      ctx.fillStyle = "#0b0b0c";
+      ctx.save();
+      ctx.globalCompositeOperation = "destination-out";
+      ctx.fillStyle = "#000";
       ctx.fill();
-      ctx.strokeStyle = "#45423e";
+      ctx.restore();
+      ctx.strokeStyle = "rgba(226,214,192,0.3)";
       ctx.lineWidth = 1;
       ctx.stroke();
     } else {
-      // The emitter: the light's color pushed toward white as it brightens.
+      // The glow: drawn twice, a wide soft one and a tighter one, so it reads
+      // round the dot without washing the floor out.
+      ctx.save();
+      const size = it.w ? Math.min(it.w, it.h) : it.r * 2;
       ctx.fillStyle = cssColor(it.rgb.map((v) => v + (1 - v) * (0.25 + 0.5 * it.level)) as Vec3, gamut);
+      ctx.shadowColor = cssColor(it.rgb, gamut, 0.45 + 0.45 * it.level);
+      ctx.shadowBlur = Math.max(12, Math.min(28, size * 1.1));
       ctx.fill();
+      ctx.shadowColor = cssColor(it.rgb, gamut, 0.5 + 0.5 * it.level);
+      ctx.shadowBlur = Math.max(6, Math.min(16, size * 0.6));
+      ctx.fill();
+      ctx.restore();
     }
-    if (s.selected.has(it.id) || s.hovered === it.id) {
+    const theirs = s.others.get(it.id);
+    const ring = ringOf(selected || hovered ? [s.mine, ...(theirs ?? [])] : (theirs ?? []), s.ringAlpha);
+    if (ring) {
       ctx.beginPath();
       if (it.w) ctx.roundRect(it.x - it.w / 2 - 4, it.y - it.h / 2 - 4, it.w + 8, it.h + 8, 5);
       else ctx.arc(it.x, it.y, it.r + 5, 0, Math.PI * 2);
-      ctx.strokeStyle = s.selected.has(it.id) ? "#fffaf2" : "rgba(255,250,242,0.45)";
+      ctx.strokeStyle = cssRgb(ring.rgb, ring.alpha);
       ctx.lineWidth = 1.5;
+      if (hovered) ctx.setLineDash([3, 3]);
       ctx.stroke();
+      ctx.setLineDash([]);
     }
   }
+  ctx.globalAlpha = 1;
 
   if (s.measure) drawLength(ctx, view, s.measure);
 
@@ -1763,7 +1752,7 @@ function drawLength(ctx: CanvasRenderingContext2D, view: View, r: Rail) {
   }
   const x = (ax + bx) / 2 + nx * 14;
   const y = (ay + by) / 2 + ny * 14;
-  ctx.font = '500 11px "Recursive Variable", ui-sans-serif, system-ui, sans-serif';
+  ctx.font = '500 11px "Hanken Grotesk Variable", ui-sans-serif, system-ui, sans-serif';
   ctx.textAlign = nx < -0.7 ? "right" : nx > 0.7 ? "left" : "center";
   ctx.textBaseline = "middle";
   const text = formatLength(railLength(r));

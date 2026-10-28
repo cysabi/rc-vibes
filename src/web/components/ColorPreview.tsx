@@ -4,43 +4,41 @@
 // the room) with no card, like a car's
 // instruments: their colors as dots on a color wheel, or, for the whites, on
 // a field of color temperature across and tint up and down (Color · White
-// under it); beside it, brightness and fidelity as a tick per light along a
-// track, in the color it's showing, and old bulbs as one bar, on from the
-// left and off to the right. Lights at exactly the same value share one dot
+// over it); under it, brightness and fidelity as a tick per light along a
+// track, in the color it's showing. (Old bulbs, just on or off, aren't here.) Lights at exactly the same value share one dot
 // (with a count) or tick. Nothing here is a handle: it's a readout. It
 // follows the live room (or the preview, while there are pending edits) a
 // few times a second.
 
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import type { LightInfo } from "../../shared/arclamp.ts";
-import { isBinary, isOn, madeOf, requestedOf } from "../../shared/fixtures.ts";
-import { cssColor, kelvinOf, lemtoneCss, lookOf, lumensText, swatch, whiteAB, type Gamut, type Lemtone, type Vec3 } from "../../shared/lemtone.ts";
+import { isBinary, madeOf, requestedOf } from "../../shared/fixtures.ts";
+import { kelvinOf, lemtoneCss, lookOf, lumensText, swatch, whiteAB, type Gamut, type Lemtone, type Vec3 } from "../../shared/lemtone.ts";
 import { useGamut } from "../display.ts";
 import { useFrames } from "../live.ts";
-import { dotsOf, exact, gather, titleOf, type Placed } from "../marks.ts";
+import { dotsOf, exact, gather, type Placed } from "../marks.ts";
 import { wheelColor, wheelSpot } from "../wheel.ts";
+import { heightOf, tintAt, toneText } from "../whites.ts";
 import { Goo } from "./Goo.tsx";
 
-// The wheel (and the white field) this wide, and the tracks beside it this
-// wide, this far off. Short of room for both side by side, the tracks go
-// under the wheel (narrow.ts keeps a wide screen wide enough for that).
+// The wheel (and the white field) this wide, the tracks under it as wide as
+// its box, this far below it; with no wheel, the tracks this wide.
 const LOOK_PX = 152;
 const TRACKS_PX = 220;
-const GAP_PX = 18;
-// Stacked, it's at most this share of the screen's height, the wheel shrinking (to no smaller than LOOK_MIN) to fit.
+const GAP_PX = 14;
+// It's at most this share of the screen's height, the wheel shrinking (to no smaller than LOOK_MIN) to fit.
 const STACKED_SHARE = 0.5;
 const LOOK_MIN = 88;
+// The box round the wheel, across: the box's padding (styles.css: .tone-box), the wheel filling its pane.
+const LOOK_FRAME = 2 * 4;
 // The white field: color temperature across, tint up and down. A light this
 // far off the line (in OKLab a, b), about Duv ±0.05, well into pastels, is a
 // white; further off, it isn't on the field.
 const K_MIN = 2000;
 const K_MAX = 6500;
 const TINT_MAX = 0.1;
-// The field shows less tint than that, about Duv ±0.02, so it reads as
-// whites; a white tinted further sits at its top or bottom edge.
-const TINT_SHOWN = 0.04;
-const tintAt = (y: number) => y * TINT_SHOWN;
-const heightOf = (tint: number) => Math.max(-1, Math.min(1, tint / TINT_SHOWN));
+// The field's tint up and down is the color editor's strip of whites' (whites.ts):
+// all but on the line through the middle, plainly tinted at the edges.
 
 interface Props {
   /** The selected lights. */
@@ -75,15 +73,9 @@ export function ColorPreview({ lights }: Props) {
   const frame = frames.latest();
 
   const colored: Spot[] = [];
-  let oldOn = 0;
-  let oldCount = 0;
   for (const l of lights) {
     const ch = frame?.lights.get(l.id);
-    if (isBinary(l.type)) {
-      oldCount++;
-      if (isOn(ch)) oldOn++;
-      continue;
-    }
+    if (isBinary(l.type)) continue;
     // As the light makes it: a color asked for brighter than it can glow shows paler, or dimmer.
     const t = requestedOf(ch, l.type);
     if (t) colored.push({ id: l.id, t: madeOf(t, l.type).light });
@@ -96,30 +88,24 @@ export function ColorPreview({ lights }: Props) {
   const [chosen, setView] = useState<"color" | "white" | null>(null);
   const view = chosen ?? (allWhite ? "white" : "color");
   const [full, tracks, gap] = [LOOK_PX, TRACKS_PX, GAP_PX];
-  // As wide as the wheel and tracks side by side, at most; as wide as the
-  // wider of them, stacked, at least, which is what the row wraps by. In
-  // between, it takes what room the row has, and stacks.
+  // The tracks under the wheel, as wide as its box (to save room across).
   const look = colored.length > 0;
-  const side = look ? full + gap + tracks : tracks;
-  const least = look ? Math.max(full, tracks) : tracks;
-  const [stacked, setStacked] = useState(false);
-  // Stacked, the wheel as big as fits in its share of the screen's height.
+  // The wheel as big as fits in its share of the screen's height.
   const [room, setRoom] = useState<number | null>(null);
-  const size = stacked && room !== null ? Math.min(full, room) : full;
-  const now = useRef({ side, size, look });
-  now.current = { side, size, look };
+  const size = room !== null ? Math.min(full, room) : full;
+  const width = look ? size + LOOK_FRAME : tracks;
+  const now = useRef({ size, look });
+  now.current = { size, look };
 
-  // Its height, so the map's fit leaves room for it (--preview-h); its width,
-  // for whether it stacks; and the screen's height, for how big the wheel is
-  // then. Measured as it renders too, not only when the browser says it's
+  // Its height, so the map's fit leaves room for it (--preview-h), and the
+  // screen's height, for how big the wheel is. Measured as it renders too, not only when the browser says it's
   // resized, so a fit right after the selection changes has its new height.
   const root = useRef<HTMLElement>(null);
   const measure = () => {
     const el = root.current;
     const app = el?.closest<HTMLElement>(".app");
     if (!el) return;
-    const { side, size, look } = now.current;
-    setStacked(el.clientWidth < side - 0.5);
+    const { size, look } = now.current;
     if (!app) return;
     const rest = el.offsetHeight - (look ? size : 0);
     setRoom(Math.max(LOOK_MIN, Math.floor(app.clientHeight * STACKED_SHARE - rest)));
@@ -140,36 +126,37 @@ export function ColorPreview({ lights }: Props) {
     };
   }, []);
 
-  const style = { flex: `100 1 ${least}px`, maxWidth: side, gap, "--tracks": `${tracks}px`, "--look": `${size}px` } as CSSProperties;
-  const rows = (look ? 2 : 0) + (oldCount > 0 ? 1 : 0);
+  const style = { flex: `100 1 ${width}px`, maxWidth: width, gap, "--tracks": `${width}px`, "--look": `${size}px` } as CSSProperties;
   return (
     <section
-      className={["color-preview", look && "has-look", stacked && "stacked"].filter(Boolean).join(" ")}
+      className={["color-preview", look && "has-look"].filter(Boolean).join(" ")}
       ref={root}
       style={style}
       aria-label="What they look like"
     >
       {look && (
-        <div className="preview-look">
-          <div className="preview-tabs" role="tablist" aria-label="Show">
-            {(["color", "white"] as const).map((v) => (
-              <button key={v} role="tab" aria-selected={view === v} className={view === v ? "tab on" : "tab"} onClick={() => setView(v)}>
+        // The color editor's box of tabs (ColorField.tsx), White · Color over the wheel or the field.
+        <div className="preview-look tone-box">
+          <div className="tone-tabs" role="tablist" aria-label="Show">
+            {(["white", "color"] as const).map((v) => (
+              <button key={v} role="tab" aria-selected={view === v} className={view === v ? "tone-tab on" : "tone-tab"} onClick={() => setView(v)}>
                 {v === "color" ? "Color" : "White"}
               </button>
             ))}
           </div>
-          {view === "color" ? (
-            <Wheel spots={colored} gamut={gamut} size={size} />
-          ) : (
-            <WhiteField spots={whites} gamut={gamut} size={size} hidden={colored.length - whites.length} />
-          )}
+          <div className="tone-pick">
+            {view === "color" ? (
+              <Wheel spots={colored} gamut={gamut} size={size} />
+            ) : (
+              <WhiteField spots={whites} gamut={gamut} size={size} hidden={colored.length - whites.length} />
+            )}
+          </div>
         </div>
       )}
-      {/* Rows alike, spread over the wheel's height: the first label at its top, the last bar at its bottom. */}
-      <div className={rows === 2 ? "preview-tracks two" : "preview-tracks"}>
+      {/* Rows alike, under the wheel. */}
+      <div className="preview-tracks">
         {look && <Brightness spots={colored} gamut={gamut} />}
         {look && <Fidelity spots={colored} gamut={gamut} />}
-        {oldCount > 0 && <OnOff on={oldOn} count={oldCount} gamut={gamut} />}
       </div>
     </section>
   );
@@ -178,11 +165,11 @@ export function ColorPreview({ lights }: Props) {
 // ---- marks ----------------------------------------------------------------------
 
 /** Lights along a track (`x` from 0 to 1) painted `track`: a tick each, in the color it's showing, as bright as it looks. */
-function Ticks({ placed, track, gamut, title }: { placed: Placed[]; track: string; gamut: Gamut; title?: string }) {
+function Ticks({ placed, track, gamut }: { placed: Placed[]; track: string; gamut: Gamut }) {
   return (
-    <div className="ticks" style={{ "--track": track } as CSSProperties} title={title}>
+    <div className="ticks" style={{ "--track": track } as CSSProperties}>
       {gather(placed).map((g) => (
-        <span key={g.key} className="tick" style={{ left: `${g.x * 100}%`, background: lemtoneCss(g.t, gamut) }} title={titleOf(g)} />
+        <span key={g.key} className="tick" style={{ left: `${g.x * 100}%`, background: lemtoneCss(g.t, gamut) }} />
       ))}
     </div>
   );
@@ -269,7 +256,7 @@ function WhiteField({ spots, gamut, size, hidden }: { spots: WhiteSpot[]; gamut:
     // Tint up is up, as the field is painted.
     y: ((1 - heightOf(white.tint)) / 2) * size,
     t,
-    label: `${Math.round(white.kelvin / 50) * 50} K`,
+    label: toneText(t.a, t.b),
   }));
   return (
     // Its scale, and the lights it leaves out, written small in its own corners, under the dots.
@@ -279,7 +266,7 @@ function WhiteField({ spots, gamut, size, hidden }: { spots: WhiteSpot[]; gamut:
         <span className="field-note warm">warm</span>
         <span className="field-note cool">cool</span>
         {hidden > 0 && (
-          <span className="field-note left-out" title={`${hidden} of the lights aren't whites, so aren't shown here`}>
+          <span className="field-note left-out">
             +{hidden} not white
           </span>
         )}
@@ -342,44 +329,7 @@ function Fidelity({ spots, gamut }: { spots: Spot[]; gamut: Gamut }) {
         placed={placed}
         track="linear-gradient(90deg, #5b4c92, #8a7352 60%, #b49c75)"
         gamut={gamut}
-        title="Fidelity: vivid (pale colors from the RGB LEDs) to natural (from the white ones)"
       />
-    </div>
-  );
-}
-
-// ---- old bulbs ----------------------------------------------------------------------
-
-function OnOff({ on, count, gamut }: { on: number; count: number; gamut: Gamut }) {
-  // An old bulb on: a 2700 K filament.
-  const [a, b] = whiteAB(2700);
-  const style = { "--on": `${(on / count) * 100}%`, "--filament": cssColor(swatch(a, b, gamut), gamut) } as CSSProperties;
-  // Just one: whether it's on, and no bar.
-  if (count === 1) {
-    return (
-      <div className="onoff-view one" style={style}>
-        <div className="field-head">
-          <span className="label">Old bulb</span>
-          <span className="mono">
-            {/* Lit, or just its outline. */}
-            <span className={on > 0 ? "onoff-lamp" : "onoff-lamp off"} aria-hidden="true" />
-            {on > 0 ? "On" : "Off"}
-          </span>
-        </div>
-      </div>
-    );
-  }
-  return (
-    <div className="onoff-view">
-      <div className="field-head">
-        <span className="label">Old bulbs</span>
-        <span className="mono">
-          {on} on · {count - on} off
-        </span>
-      </div>
-      <div className="onoff-bar" style={style} role="img" aria-label={`${on} of ${count} old bulbs on`}>
-        <span className="onoff-on" />
-      </div>
     </div>
   );
 }
@@ -388,13 +338,8 @@ function OnOff({ on, count, gamut }: { on: number; count: number; gamut: Gamut }
 
 const clamp = (v: number) => Math.min(1, Math.max(0, v));
 
-/** A color, as the pin's hover says it: a temperature for whites (on the line, not just on the strip), else hue and chroma. */
-function colorLabel(t: Lemtone): string {
-  const kelvin = kelvinOf(t.a, t.b);
-  if (kelvin !== null) return `${Math.round(kelvin / 50) * 50} K`;
-  const hue = Math.round(((Math.atan2(t.b, t.a) * 180) / Math.PI + 360) % 360);
-  return `${hue}° C${Math.hypot(t.a, t.b).toFixed(2)}`;
-}
+/** A color, as the pin's hover says it: as it's said everywhere (whites.ts). */
+const colorLabel = (t: Lemtone): string => toneText(t.a, t.b);
 
 /**
  * Fill a canvas pixel by pixel in the screen's gamut. `at` gets the pixel's

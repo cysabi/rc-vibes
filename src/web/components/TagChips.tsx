@@ -1,15 +1,14 @@
-// The tags on the floor you're looking at, as chips over the top left of the
-// map. Each turns on and off on its own: on adds its lights here to the
-// selection, off takes them out again (except any another chip that's on
-// still covers). A chip is on, with an × to turn it off, while all its
-// lights are selected. Ahead of them, All: on whenever every other chip is,
-// and turning it on or off turns them all on or off. Selected lights no chip
-// that's on covers (picked on the map, or part of a tag) show as a count
-// ahead of those, whose × lets go of just them. With more than one chip on,
-// a button under them lets go of everything.
+// The groups of lights on the floor you're looking at, as chips: two for
+// whole places, All (every light here) and Main Space (the open floor:
+// tags.ts), then one per tag. Each is on, with an ×, while all its lights
+// are selected: on adds its lights to the selection, off takes them out
+// (every one of them, whatever else they're part of). Selected lights no
+// chip that's on covers (picked on the map, or part of a tag) show as a
+// count ahead of those, whose × lets go of just them. With a layer in focus,
+// the lights here are just its (App.tsx), so the chips are just theirs.
 
 import type { LightInfo } from "../../shared/arclamp.ts";
-import { tagLabel } from "../../shared/tags.ts";
+import { inMainSpace, tagLabel } from "../../shared/tags.ts";
 import { CloseIcon } from "../icons.tsx";
 import type { SelectMode } from "./RoomMap.tsx";
 
@@ -23,23 +22,20 @@ interface Props {
 export function TagChips({ lights, selected, onSelect }: Props) {
   const byTag = new Map<string, number[]>();
   for (const l of lights) for (const t of l.tags ?? []) byTag.set(t, [...(byTag.get(t) ?? []), l.id]);
-  const tags = [...byTag]
-    .map(([tag, ids]) => ({ tag, label: tagLabel(tag), ids, on: ids.every((id) => selected.has(id)) }))
-    .sort((a, b) => a.label.localeCompare(b.label));
-  if (tags.length === 0 && selected.size === 0) return null;
-  const covered = new Set(tags.filter((t) => t.on).flatMap((t) => t.ids));
+  const chipOf = (tag: string, label: string, ids: number[]) => ({ tag, label, ids, on: ids.length > 0 && ids.every((id) => selected.has(id)) });
+  const tags = [...byTag].map(([tag, ids]) => chipOf(tag, tagLabel(tag), ids)).sort((a, b) => a.label.localeCompare(b.label));
+  // The places: everything here, and the main space (only where it's a part of what's here).
+  const main = lights.filter((l) => inMainSpace(l.tags)).map((l) => l.id);
+  const places = [
+    chipOf("*", "All", lights.map((l) => l.id)),
+    ...(main.length > 0 && main.length < lights.length ? [chipOf("*main", "Main Space", main)] : []),
+  ];
+  const chips = [...places, ...tags];
+  if (lights.length === 0 && selected.size === 0) return null;
+  const covered = new Set(chips.filter((c) => c.on).flatMap((c) => c.ids));
   const loose = [...selected].filter((id) => !covered.has(id)).length;
-  const allOn = tags.length > 0 && tags.every((t) => t.on);
-  const chipsOn = tags.filter((t) => t.on).length + (loose > 0 ? 1 : 0);
 
-  /** Take out the lights of `going` chips that no chip staying on covers. */
-  const turnOff = (going: typeof tags) => {
-    const kept = new Set(tags.filter((t) => t.on && !going.includes(t)).flatMap((t) => t.ids));
-    const out = new Set(going.flatMap((t) => t.ids).filter((id) => !kept.has(id)));
-    onSelect([...selected].filter((id) => !out.has(id)), "replace");
-  };
-  const toggle = (chip: (typeof tags)[number]) => (chip.on ? turnOff([chip]) : onSelect(chip.ids, "add"));
-  const toggleAll = () => (allOn ? turnOff(tags) : onSelect(tags.flatMap((t) => t.ids), "add"));
+  const toggle = (chip: (typeof chips)[number]) => onSelect(chip.ids, chip.on ? "remove" : "add");
 
   return (
     <div className="tag-bar">
@@ -49,24 +45,13 @@ export function TagChips({ lights, selected, onSelect }: Props) {
             <CloseIcon /> {loose} selected
           </button>
         )}
-        {tags.length > 1 && (
-          <button className={allOn ? "chip on" : "chip"} aria-pressed={allOn} onClick={toggleAll}>
-            {allOn && <CloseIcon />}
-            All
-          </button>
-        )}
-        {tags.map((chip) => (
+        {chips.map((chip) => (
           <button key={chip.tag} className={chip.on ? "chip on" : "chip"} aria-pressed={chip.on} onClick={() => toggle(chip)}>
             {chip.on && <CloseIcon />}
             {chip.label}
           </button>
         ))}
       </div>
-      {chipsOn > 1 && (
-        <button className="tag-clear" onClick={() => onSelect([], "replace")}>
-          Deselect all
-        </button>
-      )}
     </div>
   );
 }

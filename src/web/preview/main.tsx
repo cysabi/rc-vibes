@@ -14,12 +14,15 @@ import { createRoot } from "react-dom/client";
 import { color } from "../../../packages/vibes/src/color.ts";
 import { appliesTo, valuesAt, type ParamTable } from "../../shared/params.ts";
 import type { Lights } from "../../shared/vibes.ts";
+import { Field } from "../components/Field.tsx";
 import { ParamControl, type ColorPickerProps } from "../components/ParamControl.tsx";
 import { FramesProvider, type FrameSource } from "../live.ts";
 import { PreviewMap } from "./PreviewMap.tsx";
 import type { FromPreview, SketchSource, ToPreview } from "./protocol.ts";
 import { SketchRunner } from "./runner.ts";
-import "@fontsource-variable/recursive/full.css";
+import "@fontsource-variable/hanken-grotesk/wght.css";
+import "@fontsource/space-mono/400.css";
+import "@fontsource/space-mono/700.css";
 import "../styles.css";
 import "./preview.css";
 
@@ -131,6 +134,7 @@ function Knobs({ runner }: { runner: SketchRunner }) {
           )}
           onChange={(changes) => runner.setParam(spec.name, changes)}
           colorPicker={PickColor}
+          resettable
         />
       ))}
     </div>
@@ -138,18 +142,21 @@ function Knobs({ runner }: { runner: SketchRunner }) {
 }
 
 /** A color param here: the browser's own picker (room tone's color editor can't go in a webview), for every light it's for. */
-function PickColor({ lights, values, onChange }: ColorPickerProps) {
+function PickColor({ label, lights, values, onChange }: ColorPickerProps) {
+  const hex = color(values[0]!).hex;
   return (
-    <input
-      type="color"
-      className="preview-color"
-      aria-label="Color"
-      value={color(values[0]!).hex}
-      onChange={(e) => {
-        const c = color(e.target.value).toJSON();
-        onChange(lights.map((l) => [l.id, c]));
-      }}
-    />
+    <Field label={label} value={hex}>
+      <input
+        type="color"
+        className="preview-color"
+        aria-label={label}
+        value={hex}
+        onChange={(e) => {
+          const c = color(e.target.value).toJSON();
+          onChange(lights.map((l) => [l.id, c]));
+        }}
+      />
+    </Field>
   );
 }
 

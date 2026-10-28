@@ -1,25 +1,16 @@
-// Sketches, as their own pages: /sketches lists them, and /sketches/<id> is
-// one, in your own VS Code (your box: your clone of it, on your own branch)
-// under vibes' bar. The preview and console are panels inside VS Code (the
-// extension in box/extension), so this page is just the way in.
+// A sketch's page: /sketches/<id> is one, in your own VS Code (your box:
+// your clone of it, on your own branch) under vibes' bar. The preview and
+// console are panels inside VS Code (the extension in box/extension), so
+// this page is just the way in. The library of sketches is the dialog on
+// the room's page (components/AddSketch.tsx).
 
-import { useEffect, useRef, useState, type FormEvent, type MouseEvent, type ReactNode } from "react";
+import { useState, type MouseEvent, type ReactNode } from "react";
 import { boxCommitFolder, type Sketch } from "../../shared/vibes.ts";
-import {
-  RequestError,
-  useBox,
-  useCreateSketch,
-  useDeletedSketches,
-  useDeleteSketch,
-  useRestoreSketch,
-  useSketch,
-  useSketches,
-  useStatus,
-} from "../api.ts";
+import { RequestError, useBox, useDeleteSketch, useRestoreSketch, useSketch } from "../api.ts";
 import { useLights } from "../scene.ts";
 import { Brand } from "../components/Brand.tsx";
 import { UserMenu } from "../components/UserMenu.tsx";
-import { ChevronUpIcon, PlusIcon, TrashIcon } from "../icons.tsx";
+import { TrashIcon } from "../icons.tsx";
 import { navigate, useQueryParam } from "../route.ts";
 import { ago } from "../words.ts";
 import "./sketches.css";
@@ -38,20 +29,9 @@ function Link({ to, className, children }: { to: string; className?: string; chi
   );
 }
 
-/** The way in from the map: a button in the HUD, beside the account, while sketches are on. */
-export function SketchesLink() {
-  const status = useStatus();
-  if (!status.data?.sketches) return null;
-  return (
-    <Link to="/sketches" className="glass-button sketches-link">
-      <CodeIcon /> Sketches
-    </Link>
-  );
-}
-
 export function SketchPages({ path }: { path: string }) {
   const id = path.replace(/^\/sketches\/?/, "").split("/")[0];
-  return id ? <SketchPage id={id} /> : <Library />;
+  return <SketchPage id={id!} />;
 }
 
 function TopBar({ children, actions }: { children: ReactNode; actions?: ReactNode }) {
@@ -66,147 +46,6 @@ function TopBar({ children, actions }: { children: ReactNode; actions?: ReactNod
       {actions}
       <UserMenu />
     </header>
-  );
-}
-
-function Library() {
-  const sketches = useSketches();
-  const [search, setSearch] = useState("");
-  const shown = (sketches.data ?? []).filter((s) => s.name.toLowerCase().includes(search.trim().toLowerCase()));
-  return (
-    <div className="sketch-page">
-      <TopBar>
-        <nav className="crumbs">
-          <Link to="/">Room</Link>
-          <span className="crumb-sep">/</span>
-          <span>Sketches</span>
-        </nav>
-      </TopBar>
-      <main className="library-main">
-        <div className="library-intro">
-          <h1>Sketches</h1>
-          <p>Code that lights the room. Anyone can open one and change it, in their own copy, and share it back with git.</p>
-        </div>
-        <div className="library-toolbar">
-          <input className="library-search" placeholder="Search sketches" value={search} onChange={(e) => setSearch(e.target.value)} />
-          <span className="spacer" />
-          <RecentlyDeleted />
-          <NewSketch />
-        </div>
-        {sketches.isError && <p className="error-text">Couldn't load the sketches: {sketches.error.message}</p>}
-        {sketches.data?.length === 0 && <p className="library-empty">No sketches yet. Make the first one.</p>}
-        <ul className="sketch-grid">
-          {shown.map((s) => (
-            <li key={s.id}>
-              <Link to={`/sketches/${s.id}`} className="sketch-card">
-                <span className="card-name">{s.name}</span>
-                <span className="card-meta">by {s.createdBy.name}</span>
-                <span className="card-meta">
-                  changed {ago(s.updatedAt)} by {s.updatedBy}
-                </span>
-              </Link>
-            </li>
-          ))}
-        </ul>
-      </main>
-    </div>
-  );
-}
-
-/**
- * The deleted sketches, in a dropdown, for anyone to restore. ?deleted=<id>
- * opens it with that one picked out: where a deleted sketch's shader in the
- * room sends you.
- */
-function RecentlyDeleted() {
-  const deleted = useDeletedSketches();
-  const restore = useRestoreSketch();
-  const picked = useQueryParam("deleted");
-  const [open, setOpen] = useState(picked !== null);
-  const menu = useRef<HTMLDivElement>(null);
-  useEffect(() => {
-    if (picked !== null) setOpen(true);
-  }, [picked]);
-  // Closed by a click anywhere else, or Escape.
-  useEffect(() => {
-    if (!open) return;
-    const away = (e: PointerEvent) => {
-      if (!menu.current?.contains(e.target as Node)) setOpen(false);
-    };
-    const escape = (e: KeyboardEvent) => {
-      if (e.key === "Escape") setOpen(false);
-    };
-    document.addEventListener("pointerdown", away);
-    document.addEventListener("keydown", escape);
-    return () => {
-      document.removeEventListener("pointerdown", away);
-      document.removeEventListener("keydown", escape);
-    };
-  }, [open]);
-  useEffect(() => {
-    if (open) menu.current?.querySelector(".picked")?.scrollIntoView({ block: "nearest" });
-  }, [open, deleted.data]);
-  if (!deleted.data?.length) return null;
-  return (
-    <div className="deleted-menu" ref={menu}>
-      <button className={open ? "quiet open" : "quiet"} aria-expanded={open} onClick={() => setOpen(!open)}>
-        <TrashIcon /> Recently deleted <span className="count">{deleted.data.length}</span>
-        <span className="chevron" aria-hidden="true">
-          <ChevronUpIcon />
-        </span>
-      </button>
-      {open && (
-        <div className="deleted-panel">
-          <p>Anyone can restore these, for everyone.</p>
-          <ul>
-            {deleted.data.map((s) => (
-              <li key={s.id} className={s.id === picked ? "picked" : undefined}>
-                <span className="deleted-text">
-                  <span className="card-name">{s.name}</span>
-                  <span className="card-meta">
-                    deleted {ago(s.deleted!.at)} by {s.deleted!.by}
-                  </span>
-                </span>
-                <button className="quiet" disabled={restore.isPending} onClick={() => restore.mutate(s.id)}>
-                  Restore
-                </button>
-              </li>
-            ))}
-          </ul>
-          {restore.isError && <p className="error-text">Couldn't restore it: {restore.error.message}</p>}
-        </div>
-      )}
-    </div>
-  );
-}
-
-function NewSketch() {
-  const [naming, setNaming] = useState(false);
-  const [name, setName] = useState("");
-  const create = useCreateSketch();
-  const submit = (e: FormEvent) => {
-    e.preventDefault();
-    if (!name.trim()) return;
-    create.mutate(name.trim(), { onSuccess: (s) => navigate(`/sketches/${s.id}`) });
-  };
-  if (!naming) {
-    return (
-      <button className="primary" onClick={() => setNaming(true)}>
-        <PlusIcon /> New sketch
-      </button>
-    );
-  }
-  return (
-    <form className="new-sketch" onSubmit={submit}>
-      <input autoFocus placeholder="Its name" value={name} maxLength={80} onChange={(e) => setName(e.target.value)} />
-      <button className="primary" type="submit" disabled={!name.trim() || create.isPending}>
-        Make it
-      </button>
-      <button className="quiet" type="button" onClick={() => setNaming(false)}>
-        Cancel
-      </button>
-      {create.isError && <p className="error-text">{create.error.message}</p>}
-    </form>
   );
 }
 
@@ -226,7 +65,7 @@ function DeleteSketch({ sketch }: { sketch: Sketch }) {
       <span>
         Delete <b>{sketch.name}</b> for everyone? Anyone can restore it.
       </span>
-      <button className="quiet danger" disabled={remove.isPending} onClick={() => remove.mutate(sketch.id, { onSuccess: () => navigate("/sketches") })}>
+      <button className="quiet danger" disabled={remove.isPending} onClick={() => remove.mutate(sketch.id, { onSuccess: () => navigate("/") })}>
         Delete it
       </button>
       <button className="quiet" onClick={() => setAsking(false)}>
@@ -275,15 +114,13 @@ function SketchPage({ id }: { id: string }) {
         <nav className="crumbs">
           <Link to="/">Room</Link>
           <span className="crumb-sep">/</span>
-          <Link to="/sketches">Sketches</Link>
-          <span className="crumb-sep">/</span>
           {commit ? (
             <>
               <Link to={`/sketches/${id}`} className="crumb-name">
                 {sketch.data?.name ?? "…"}
               </Link>
               <span className="crumb-sep">@</span>
-              <span className="crumb-commit" title={`At commit ${commit}. The sketch's name goes back to your branch.`}>
+              <span className="crumb-commit">
                 {commit.slice(0, 7)}
               </span>
             </>
@@ -294,7 +131,7 @@ function SketchPage({ id }: { id: string }) {
       </TopBar>
       {sketch.isError ? (
         <Notice>
-          Couldn't open this sketch: {sketch.error.message}. <Link to="/sketches">All sketches</Link>
+          Couldn't open this sketch: {sketch.error.message}. <Link to="/">Back to the room</Link>
         </Notice>
       ) : deleted ? (
         <Notice>
@@ -302,11 +139,11 @@ function SketchPage({ id }: { id: string }) {
           <button className="quiet" disabled={restore.isPending} onClick={() => restore.mutate(id)}>
             Restore it
           </button>{" "}
-          <Link to="/sketches">All sketches</Link>
+          <Link to="/">Back to the room</Link>
         </Notice>
       ) : shown ? (
         <div className="box-stage">
-          <iframe key={`${shown.run} ${shown.url}`} className="box-frame" src={shown.url} title={`${sketch.data?.name ?? "The sketch"} in VS Code`} allow="clipboard-read; clipboard-write" />
+          <iframe key={`${shown.run} ${shown.url}`} className="box-frame" src={shown.url} aria-label={`${sketch.data?.name ?? "The sketch"} in VS Code`} allow="clipboard-read; clipboard-write" />
           {!ready && <div className={failure ? "box-notice box-cover" : "box-notice box-cover starting"}>{failure ? <p>{failure}</p> : <p>Waking your VS Code…</p>}</div>}
         </div>
       ) : failure ? (
@@ -336,9 +173,3 @@ function Notice({ children, starting }: { children: ReactNode; starting?: boolea
     </div>
   );
 }
-
-const CodeIcon = () => (
-  <svg width="16" height="16" viewBox="0 0 16 16" fill="none" stroke="currentColor" strokeWidth="1.4" strokeLinecap="round" strokeLinejoin="round" aria-hidden="true">
-    <path d="M6 4L2 8l4 4M10 4l4 4-4 4" />
-  </svg>
-);

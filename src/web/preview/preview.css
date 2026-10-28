@@ -34,16 +34,6 @@ body {
   overflow: hidden;
 }
 
-/* With lights selected, what they look like sits in the bottom left, over
-   the same dusk as on the map. */
-.preview-map.app.selecting {
-  --inset-bottom: max(48px, calc(var(--preview-h, 0px) + var(--gap) * 2));
-}
-
-.preview-map.selecting .map-scrim {
-  opacity: 1;
-}
-
 /* The sketch's params, as knobs in the top right, over the map. */
 .preview-knobs {
   position: fixed;

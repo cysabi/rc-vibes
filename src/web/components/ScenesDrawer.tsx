@@ -143,11 +143,11 @@ function ScenesBar() {
         {scenes.order.length === 0 && <span className="scenes-empty">No scenes yet: + Scene keeps the room as one.</span>}
       </div>
       {error && (
-        <span className="dock-error" role="alert" title={error}>
+        <span className="dock-error" role="alert">
           {error}
         </span>
       )}
-      <button className="scene-add" onClick={create} disabled={!room} title="A new scene: the room as it is, if one sketch is on">
+      <button className="scene-add" onClick={create} disabled={!room} aria-label="New scene: the room as it is, if one sketch is on">
         + Scene
       </button>
     </div>
@@ -181,14 +181,14 @@ function SceneChip({ id, n, scene, lit, queued, show, room, apply, send }: ChipP
 
   const what = sketch ? sketch.name : keys.length > 0 ? "a sketch that's left the room" : "no sketch yet";
   const applying = show ? press((e) => apply(id, e)) : { onClick: (e: { timeStamp: number }) => apply(id, e) };
-  const title = !sketch ? `${scene.name} has ${what}` : show && n <= 9 ? `Apply ${scene.name} (${n}): ${what}` : `Apply ${scene.name}: ${what}`;
+  const label = !sketch ? `${n} ${scene.name}: it has ${what}` : show && n <= 9 ? `${n} ${scene.name}: apply it (${n}), ${what}` : `${n} ${scene.name}: apply it, ${what}`;
   return (
     <span className={`scene-chip${lit ? " lit" : ""}${queued ? " queued" : ""}`}>
-      <button className="scene-apply" {...applying} disabled={!sketch} title={title}>
+      <button className="scene-apply" {...applying} disabled={!sketch} aria-label={label}>
         <small className="mono">{n}</small>
         {scene.name}
       </button>
-      <Menu align="start" side="above" className="transport-button" title={`${scene.name}: its name, its sketch`} label={<MoreIcon />}>
+      <Menu align="start" side="above" className="transport-button" name={`${scene.name}: its name, its sketch`} label={<MoreIcon />}>
         <p className="menu-heading">{scene.name}</p>
         <label className="menu-field">
           <span>Name</span>
@@ -207,7 +207,7 @@ function SceneChip({ id, n, scene, lit, queued, show, room, apply, send }: ChipP
           </button>
         ))}
         {sketch && (
-          <button className="menu-item" onClick={() => send([[path("shaders", sketch.key), knobsOf(sketch, room.pools)]])} title="Keep its sketch's knobs as the room has them now">
+          <button className="menu-item" onClick={() => send([[path("shaders", sketch.key), knobsOf(sketch, room.pools)]])} aria-label="Take knobs from the room: keep its sketch's knobs as the room has them now">
             Take knobs from the room
           </button>
         )}

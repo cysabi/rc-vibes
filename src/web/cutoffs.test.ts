@@ -65,7 +65,8 @@ describe("makeCutoffs", () => {
 
   it.each(DEVICES)("puts each color's cutoff where the %s stops making it as asked", (device) => {
     const { wheel, strip } = tables[device];
-    const w = check(device, wheel, (x, y) => wheelColor(x * 2 - 1, 1 - y * 2), (x, y) => Math.hypot(x * 2 - 1, 1 - y * 2) <= 1.08);
+    // The wheel's whole square, its corners past the rim too (seen while it morphs to the whites' square).
+    const w = check(device, wheel, (x, y) => wheelColor(x * 2 - 1, 1 - y * 2), () => true);
     const s = check(device, strip, whitesColor, () => true);
     // Both kinds on the wheel; on the strip of whites, nearly every one's made up to a
     // point, or all the way (not the greenest of the warmest, at its bottom left, which

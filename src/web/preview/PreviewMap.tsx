@@ -26,7 +26,7 @@ export function PreviewMap({ layout }: { layout: Lights | null }) {
       if (mode === "replace") return new Set(ids);
       const next = new Set(prev);
       for (const id of ids) {
-        if (mode === "toggle" && next.has(id)) next.delete(id);
+        if (mode === "remove" || (mode === "toggle" && next.has(id))) next.delete(id);
         else next.add(id);
       }
       return next;
@@ -41,7 +41,7 @@ export function PreviewMap({ layout }: { layout: Lights | null }) {
   return (
     // .app, for the color readout: it sizes itself against it, and tells it
     // its height (--preview-h) so the map's fit keeps clear of it.
-    <div className={chosen.length ? "preview-map app selecting" : "preview-map app"}>
+    <div className="preview-map app">
       {layout && (
         <RoomMap
           lights={all}
@@ -54,9 +54,7 @@ export function PreviewMap({ layout }: { layout: Lights | null }) {
           changed={layout.changed ?? 0}
           selected={selected}
           onSelect={select}
-          framing={0}
-          corner={chosen.length > 0 && <ColorPreview lights={chosen} />}
-          fitOnResize
+          look={chosen.length > 0 && <ColorPreview lights={chosen} />}
         />
       )}
     </div>

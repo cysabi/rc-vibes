@@ -10,6 +10,7 @@ import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
 import { normalizeLights, type Channels, type LightsResponse } from "../shared/arclamp.ts";
 import { unfanOps, type RoomMessage } from "../shared/live.ts";
+import { MAX_PRESENCE_SELECTED } from "../shared/presence.ts";
 import { RAIL_ID } from "../shared/rails.ts";
 import { MAX_TAGS, TAG } from "../shared/tags.ts";
 import type { Lights, Me, Status } from "../shared/vibes.ts";
@@ -24,6 +25,7 @@ import { applyEdits, lightsFile } from "./lights.ts";
 import type { LiveState } from "./live.ts";
 import type { Pools } from "./pools.ts";
 import type { RclampTime } from "./rclamp-time.ts";
+import { createPresence, type PresenceHub } from "./presence.ts";
 import type { SceneFeedSource } from "./scene-feed.ts";
 import { createShaders, Refused, shaderRoutes } from "./shaders.ts";
 import type { ScenesSource } from "./scenes.ts";
@@ -66,6 +68,8 @@ export interface ApiDeps {
   show?: Show | null;
   /** The scenes, for pages to change (scenes.ts). */
   scenes?: ScenesSource | null;
+  /** Who's here (shared/presence.ts); without it, one of its own. */
+  presence?: PresenceHub;
 }
 
 // An event stream says something at least this often (a ping, if nothing
@@ -79,6 +83,7 @@ const roomRequest = z.discriminatedUnion("type", [
   z.object({ type: z.literal("hello"), rev: z.number().int().nullable(), epoch: z.string().max(100).optional(), fans: z.boolean().optional() }),
   z.object({ type: z.literal("update"), id: z.string().min(1).max(100), ops: z.array(op).max(MAX_OPS), note: z.string().max(60).optional() }),
   z.object({ type: z.literal("time"), id: z.number().int() }),
+  z.object({ type: z.literal("presence"), floor: z.number().int().nullable(), selected: z.array(z.number().int()).max(MAX_PRESENCE_SELECTED) }),
   // A page from before the live state, asking the old way.
   z.object({ type: z.literal("apply"), id: z.string().max(100) }).passthrough(),
 ]);
@@ -172,7 +177,7 @@ const badBody = (result: { success: boolean; error?: unknown }, c: Context) => {
   }
 };
 
-export function apiRoutes({ config, arclamp, db, relay, origins, lights, feed, live, pools, layout, sketches, instances = null, health = null, rtime = null, show = null, scenes = null }: ApiDeps) {
+export function apiRoutes({ config, arclamp, db, relay, origins, lights, feed, live, pools, layout, sketches, instances = null, health = null, rtime = null, show = null, scenes = null, presence = createPresence() }: ApiDeps) {
   const api = new Hono<AuthEnv>();
   api.onError(handleError);
   // Browsers already refuse cross-site JSON requests without CORS headers,
@@ -357,6 +362,7 @@ export function apiRoutes({ config, arclamp, db, relay, origins, lights, feed, l
         const cookie = (c.get("user") as Me | null) ?? null;
         let on: ReturnType<typeof whoIsOn> | null = null;
         let session: ReturnType<typeof updates.session> | null = null;
+        let here: ReturnType<typeof presence.join> | null = null;
         let closed = false;
         let say = (_message: string) => {};
         let unsubscribe = () => {};
@@ -370,6 +376,7 @@ export function apiRoutes({ config, arclamp, db, relay, origins, lights, feed, l
             };
             on = whoIsOn(cookie, config, ws, (u) => {
               session = updates.session(u, answer);
+              here = presence.join(u, say);
             });
             ping = setInterval(() => say('{"type":"ping"}'), STREAM_PING_MS);
           },
@@ -406,6 +413,8 @@ export function apiRoutes({ config, arclamp, db, relay, origins, lights, feed, l
               if (ops === "bad") answer({ type: "refused", id: m.id, error: "a fan is of lights' paths, with a lights field", code: "bad_update", made: {} });
               else if (ops === "too_big") answer({ type: "refused", id: m.id, error: `an update carries at most ${MAX_OPS} changes`, code: "too_big", made: {} });
               else session.take(m.id, ops, m.note);
+            } else if (m.type === "presence") {
+              here?.move(m.floor, m.selected);
             } else {
               // A page from before: it says why its changes don't go through.
               say(JSON.stringify({ type: "refused", id: m.id, at: 0, error: "vibes has changed since this page loaded: reload it", code: "reload", made: {} }));
@@ -416,6 +425,7 @@ export function apiRoutes({ config, arclamp, db, relay, origins, lights, feed, l
             on?.done();
             unsubscribe();
             session?.close();
+            here?.leave();
             clearInterval(ping);
           },
         };

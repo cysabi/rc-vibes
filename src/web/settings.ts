@@ -45,6 +45,8 @@ try {
 }
 // The map's light worked out a pixel at a time (lighting-exact.ts), while it's tried out.
 export const [setExactLight, useExactLight] = flag("vibes.exactLight");
+// What the selection looks like (ColorPreview), folded away in the map's top right.
+export const [setPreviewFolded, usePreviewFolded] = flag("vibes.previewFolded");
 
 const FLOOR_KEY = "vibes.floor";
 

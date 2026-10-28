@@ -10,7 +10,7 @@
 
 import { useEffect, useLayoutEffect, useRef } from "react";
 import { swatch, type Gamut, type Vec3 } from "../../shared/lemtone.ts";
-import { sizeOf, titleOf, totalOf, type Group } from "../marks.ts";
+import { sizeOf, totalOf, type Group } from "../marks.ts";
 
 // How far a ball's field reaches, in its radii: a single light's a little past
 // its rim, so it reaches for its neighbors just before they touch; a count's
@@ -426,16 +426,9 @@ export function Goo({ marks, width, height, gamut, lookOf, outline, halo }: Prop
 
   return (
     <>
-      <canvas
-        key={gamut}
-        ref={canvas}
-        className="goo"
-        style={{ left: -PAD, top: -PAD, width: width + 2 * PAD, height: height + 2 * PAD }}
-        aria-hidden="true"
-      />
+      <canvas key={gamut} ref={canvas} className="goo" style={{ left: -PAD, top: -PAD, width: width + 2 * PAD, height: height + 2 * PAD }} aria-hidden="true" />
       {marks.map((g) => {
         const n = g.ids.length;
-        const joined = n > 1 && g.into;
         const look = lookOf?.(g);
         const [r, gr, b] = look?.fill ?? swatch(g.t.a, g.t.b, gamut);
         const light = 0.2126 * r + 0.7152 * gr + 0.0722 * b > 0.6;
@@ -449,7 +442,6 @@ export function Goo({ marks, width, height, gamut, lookOf, outline, halo }: Prop
             }}
             className={look?.className ? `goo-mark ${look.className}` : "goo-mark"}
             style={{ width: size, height: size, color: light ? "#0d0b09" : "#fff" }}
-            title={titleOf(joined ? g.into! : g)}
           >
             {/* Counts that joined another are counted there; single lights carry no number. */}
             {!g.into && n > 1 && totalOf(g)}

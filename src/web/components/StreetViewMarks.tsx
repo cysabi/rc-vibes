@@ -57,7 +57,6 @@ export function Pegman({ map, onDrag, onDrop, onPoke }: { map: React.RefObject<H
   return (
     <button
       className="pegman"
-      title="Drag onto a camera to see the room from there"
       aria-label="Streetview: drag onto a camera"
       onPointerDown={(e) => {
         e.currentTarget.setPointerCapture(e.pointerId);
@@ -178,16 +177,9 @@ export function StreetViewSpots({
             viewBox={`${-CONE_PX - 12} ${-CONE_PX - 12} ${CONE_PX * 2 + 24} ${CONE_PX * 2 + 24}`}
           >
             <path className="camera-cone" d={cone} />
-            <circle className="camera-dot" r="7" onPointerDown={press(c, "body")} onPointerMove={drag} onPointerUp={release} onPointerCancel={release}>
-              <title>
-                Camera {c.id}
-                {editing ? ": drag to move it" : picking && c.id !== active ? ": see the room from here" : ""}
-              </title>
-            </circle>
+            <circle className="camera-dot" r="7" onPointerDown={press(c, "body")} onPointerMove={drag} onPointerUp={release} onPointerCancel={release} />
             {editing && (
-              <circle className="camera-tip" cx={tip.x} cy={tip.y} r="6" onPointerDown={press(c, "tip")} onPointerMove={drag} onPointerUp={release} onPointerCancel={release}>
-                <title>Drag to turn camera {c.id}</title>
-              </circle>
+              <circle className="camera-tip" cx={tip.x} cy={tip.y} r="6" onPointerDown={press(c, "tip")} onPointerMove={drag} onPointerUp={release} onPointerCancel={release} />
             )}
           </svg>
         );
@@ -198,9 +190,7 @@ export function StreetViewSpots({
         </div>
       )}
       {(peg || shown) && here.length === 0 && others > 0 && (
-        <p className="map-note streetview-hint">
-          The cameras are on floor {[...new Set(cameras.map((c) => c.floor))].join(" and ")}.
-        </p>
+        <p className="map-note streetview-hint">The cameras are on floor {[...new Set(cameras.map((c) => c.floor))].join(" and ")}.</p>
       )}
       {shown && !peg && here.length > 0 && <p className="map-note streetview-hint">Drag the figure onto a camera to see the room from there.</p>}
     </div>

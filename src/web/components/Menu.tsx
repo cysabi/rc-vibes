@@ -4,7 +4,7 @@ interface Props {
   /** What the button shows. */
   label: ReactNode;
   /** Its accessible name, when the label alone doesn't say. */
-  title?: string;
+  name?: string;
   className?: string;
   /** Which edge of the button the panel lines up with. */
   align?: "start" | "end";
@@ -14,7 +14,7 @@ interface Props {
 }
 
 /** A button that opens a small panel beneath it (or above it); closes on outside click or Escape. */
-export function Menu({ label, title, className, align = "start", side = "below", children }: Props) {
+export function Menu({ label, name, className, align = "start", side = "below", children }: Props) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLSpanElement>(null);
   useEffect(() => {
@@ -33,7 +33,7 @@ export function Menu({ label, title, className, align = "start", side = "below",
   }, [open]);
   return (
     <span className={`menu ${align} ${side}`} ref={ref}>
-      <button className={className} aria-expanded={open} aria-label={title} title={title} onClick={() => setOpen(!open)}>
+      <button className={className} aria-expanded={open} aria-label={name} onClick={() => setOpen(!open)}>
         {label}
       </button>
       {open && <div className="menu-panel">{children}</div>}

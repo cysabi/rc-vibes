@@ -34,10 +34,7 @@ export function Latency() {
   });
 
   return (
-    <div
-      className="latency"
-      title="How far the map runs behind the room. Bars: the latest frame to arrive each second; amber ones came too late, and the map held its last frame. In a still room vibes sends a frame a second, so the delay waits for the lights to change."
-    >
+    <div className="latency">
       <span className="label">Map delay</span>
       <span className="latency-value mono">{delay === null ? "–" : `${Math.round(delay)} ms`}</span>
       <svg width={WIDTH} height={HEIGHT} role="img" aria-label={`Frames late in the last ${SECONDS} seconds: ${late}`}>

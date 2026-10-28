@@ -14,6 +14,7 @@
 import { useCallback, useState, useSyncExternalStore } from "react";
 import type { RoomTemplate } from "../shared/arclamp.ts";
 import { fanOps, pathOf, unfanOps, withOps, type LiveTree, type Op, type Pool, type RoomMessage, type RoomRequest } from "../shared/live.ts";
+import type { Presence } from "../shared/presence.ts";
 import { NO_SCENES, type Scenes } from "../shared/scenes.ts";
 import { RESTING, type CueMode, type ShowClock, type ShowState, type TransportAction } from "../shared/show.ts";
 import type { Lights, Placement, RailChange, Shader, ShaderKey, TagChange, TypeChange } from "../shared/vibes.ts";
@@ -210,6 +211,8 @@ function connect(url: string, hello: string | null, greet: (ws: WebSocket) => vo
     if (hello) ws.send(hello);
     // The tree, or what's changed since the copy here.
     ws.send(JSON.stringify({ type: "hello", rev, ...(epoch ? { epoch } : {}), fans: true } satisfies RoomRequest));
+    // Where this page is, said again on every socket: vibes forgot it with the last.
+    if (presenceOut) ws.send(presenceOut);
     greet(ws);
     askTime(ws);
   };
@@ -244,6 +247,8 @@ function connect(url: string, hello: string | null, greet: (ws: WebSocket) => vo
       waiting.delete(m.id);
       if (m.type === "done") asked?.resolve(m.made);
       else asked?.reject(new UpdateError(m.error, m.code, m.made));
+    } else if (m.type === "presence") {
+      for (const l of presenceListeners) l(m.people);
     }
   };
   ws.onclose = () => {
@@ -263,6 +268,8 @@ function connect(url: string, hello: string | null, greet: (ws: WebSocket) => vo
     retry = window.setTimeout(() => {
       if (listeners.size > 0 && !socket) open();
     }, RETRY_MS);
+    // Everyone else is unknown until it's open again.
+    for (const l of presenceListeners) l([]);
     if (state.scene === undefined) {
       state = { ...state, error: new Error("couldn't reach vibes for the room") };
       for (const l of listeners) l();
@@ -300,6 +307,23 @@ export function sendUpdate(ops: Op[], note?: string): Promise<Record<string, Sha
     open();
     void greeted!.then((ws) => ws.send(JSON.stringify({ type: "update", id, ops: fanOps(ops), ...(note ? { note } : {}) } satisfies RoomRequest)));
   });
+}
+
+// Who's here (shared/presence.ts; web/presence.ts has it): where this page
+// is, as last said, and who's told what vibes says of everyone.
+let presenceOut: string | null = null;
+const presenceListeners = new Set<(people: Presence[]) => void>();
+
+/** Where this page is: sent now if the socket's open, and again whenever it opens. */
+export function sayPresence(floor: number | null, selected: number[]) {
+  presenceOut = JSON.stringify({ type: "presence", floor, selected } satisfies RoomRequest);
+  if (socket?.readyState === WebSocket.OPEN) socket.send(presenceOut);
+}
+
+/** Told everyone's presence (this page's too) each time vibes says it; nobody's when the socket closes. */
+export function onPresence(listener: (people: Presence[]) => void) {
+  presenceListeners.add(listener);
+  return () => void presenceListeners.delete(listener);
 }
 
 const snapshot = () => state;

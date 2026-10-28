@@ -1,14 +1,17 @@
-// Degraded states, as banners across the top of the whole site: anything that
-// means the room isn't doing what vibes shows, or can't be changed from here.
-// Nothing shows while all is well.
+// Banners across the top of the whole site: the modes that change what your
+// edits do (live mode: they reach the room as they're made; admin mode: its
+// controls are out), and degraded states, anything that means the room isn't
+// doing what vibes shows, or can't be changed from here. Nothing shows while
+// all is well and neither mode's on.
 
 import { useEffect, useState } from "react";
 import { useHealth, useStatus } from "../api.ts";
 import { useStreamConnected } from "../live.ts";
+import { useAdminMode, useLiveMode } from "../settings.ts";
 
 interface Banner {
   key: string;
-  tone: "bad" | "warn" | "info";
+  tone: "bad" | "warn" | "info" | "live" | "admin";
   title: string;
   detail: string;
 }
@@ -21,8 +24,12 @@ export function Banners() {
   const health = useHealth();
   const stream = useStreamConnected();
   const streamLost = useHeldFor(status.data?.arclamp === "ok" && !stream, STREAM_GRACE_MS);
+  const liveMode = useLiveMode();
+  const admin = useAdminMode();
 
   const banners: Banner[] = [];
+  if (liveMode) banners.push({ key: "live", tone: "live", title: "Live mode", detail: "Changes go to the room as you make them." });
+  if (admin) banners.push({ key: "admin", tone: "admin", title: "Admin mode", detail: "Editing lights and the map's timing are out." });
   if (status.error) {
     banners.push({ key: "vibes", tone: "bad", title: "Can't reach vibes", detail: "What you see may be out of date, and changes won't save." });
   } else if (status.data?.arclamp === "unreachable") {

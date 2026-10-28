@@ -4,7 +4,9 @@ import { createRoot } from "react-dom/client";
 import { queryClient } from "./api.ts";
 import { App } from "./App.tsx";
 import { prepareBackdrops } from "./backdrop.ts";
-import "@fontsource-variable/recursive/full.css";
+import "@fontsource-variable/hanken-grotesk/wght.css";
+import "@fontsource/space-mono/400.css";
+import "@fontsource/space-mono/700.css";
 import "./styles.css";
 
 // The color editor's backdrops' tables, as the page loads rather than when a picker first opens.

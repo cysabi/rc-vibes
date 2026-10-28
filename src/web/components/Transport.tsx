@@ -68,7 +68,7 @@ export function ShowMenuItem() {
       <button
         className="menu-item"
         onClick={act}
-        title={on ? "For everyone: the dock goes, and the clock rests at 120 beats a minute" : "For everyone: the show clock's dock, the piece at 0:00, the beat going on"}
+        aria-label={on ? "End show: for everyone, the dock goes, and the clock rests at 120 beats a minute" : "Start show: for everyone, the show clock's dock, the piece at 0:00, the beat going on"}
       >
         {on ? "End show" : "Start show"}
       </button>
@@ -164,12 +164,12 @@ export function Transport() {
 
   return (
     <div className="dock-bar">
-      <div className="transport" title="The show clock: every sketch that follows it agrees where the piece is">
-        <button className="transport-button" {...press(playStop)} aria-label={clock.playing ? "Stop the show clock" : "Start the show clock"} title={clock.playing ? "Stop (P)" : "Play (P)"}>
+      <div className="transport" role="group" aria-label="The show clock: every sketch that follows it agrees where the piece is">
+        <button className="transport-button" {...press(playStop)} aria-label={clock.playing ? "Stop the show clock (P)" : "Start the show clock (P)"}>
           {clock.playing ? "❚❚" : "▶"}
         </button>
         {typedTime === null ? (
-          <button className="transport-time mono" ref={time} onClick={() => setTypedTime(clockText(timeAt(clock, rNow())))} title="Set the time (m:ss)">
+          <button className="transport-time mono" ref={time} onClick={() => setTypedTime(clockText(timeAt(clock, rNow())))} aria-label="Set the time (m:ss)">
             {clockText(timeAt(clock, rNow()))}
           </button>
         ) : (
@@ -184,7 +184,7 @@ export function Transport() {
             aria-label="The time, m:ss"
           />
         )}
-        <button className="transport-button restart" onClick={(e) => void act({ do: "seek", at: rOfEvent(e), t: 0 })} aria-label="Back to the start" title="Back to the start">
+        <button className="transport-button restart" onClick={(e) => void act({ do: "seek", at: rOfEvent(e), t: 0 })} aria-label="Back to the start">
           ⟲
         </button>
       </div>
@@ -193,7 +193,7 @@ export function Transport() {
           <span ref={light} className="tempo-light" />
         </span>
         {typedBpm === null ? (
-          <button className="tempo-bpm mono" onClick={() => setTypedBpm(clock.bpm === null ? "120" : bpmText(clock.bpm))} title="The tempo, in beats a minute: click to type one">
+          <button className="tempo-bpm mono" onClick={() => setTypedBpm(clock.bpm === null ? "120" : bpmText(clock.bpm))} aria-label="The tempo, in beats a minute: click to type one">
             {clock.bpm === null ? "—" : bpmText(clock.bpm)}
             <small> BPM</small>
           </button>
@@ -210,21 +210,21 @@ export function Transport() {
             aria-label="Beats a minute"
           />
         )}
-        <button className="tempo-tap" {...press(tap)} title="Tap on the beat (T): from the third tap, the tempo">
+        <button className="tempo-tap" {...press(tap)} aria-label="Tap on the beat (T): from the third tap, the tempo">
           Tap
         </button>
-        <button className="tempo-sync" {...press(syncNow)} disabled={clock.bpm === null} title="Sync (B): now is a bar's first beat">
+        <button className="tempo-sync" {...press(syncNow)} disabled={clock.bpm === null} aria-label="Sync (B): now is a bar's first beat">
           Sync
         </button>
       </div>
       {error && (
-        <span className="dock-error" role="alert" title={error}>
+        <span className="dock-error" role="alert">
           {error}
         </span>
       )}
       <span className="dock-spacer" />
       <div className="dock-more">
-        <Menu align="end" side="above" className="transport-button" title="Nudge the show clock, or end the show" label={<MoreIcon />}>
+        <Menu align="end" side="above" className="transport-button" name="Nudge the show clock, or end the show" label={<MoreIcon />}>
           <p className="menu-heading">Show</p>
           <div className="menu-field">
             <span>

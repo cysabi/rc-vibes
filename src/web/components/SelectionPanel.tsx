@@ -1,82 +1,64 @@
-// What's selected, in a panel that comes in while anything is: over the left
-// of the map on a wide screen, and up from the bottom as a sheet on a narrow
-// one, as Google Maps does with a place. The sheet rests at one of three
+// What's selected, in the panel along the right of the map on a wide screen
+// (always there, beside the map: IdlePanel while nothing's selected, with the
+// groups of lights to select), and up from the bottom as a sheet while
+// anything is on a narrow one, as Google
+// Maps does with a place. The sheet rests at one of three
 // heights (just its head, most of what's in it, or the whole screen), and its
-// head drags it between them, settling where it's let go. It names
-// the selection (the floor, when it's every light on it; its tags, when it's
-// exactly whole tags) and says what kinds of light are in it. Then what's on
-// these lights, as the room builds their light: room tone, then each shader
-// up the stack that's about any of them (its home, or where its code's lit),
+// head drags it between them, settling where it's let go. Its title says
+// how many lights are selected, beside a button that lets go of them all. Then what's on
+// these lights, as the room builds their light: the base tone (room tone, in
+// admin view only), then each shader up the stack that's about any of them
+// (its home, or where its code's lit; Base Color's home is every light, its
+// params opened under it to start with),
 // joined by a rail as the light builds up through them: in the room, on its
 // way in, or one you're adding. Each has a switch for whether it's on for
 // these lights and a handle to drag it to another place among them; both are
-// pending edits. (One that couldn't go in has neither.)
-// Each shader's ⋯ opens it in the panel in place of the selection
-// (ShaderPanel.tsx).
+// pending edits. (One that couldn't go in has neither.) What can be done to
+// a shader besides is in the shaders panel (ShadersPanel.tsx).
 
-import {
-  closestCenter,
-  DndContext,
-  KeyboardSensor,
-  PointerSensor,
-  useSensor,
-  useSensors,
-  type DragEndEvent,
-} from "@dnd-kit/core";
-import {
-  arrayMove,
-  SortableContext,
-  sortableKeyboardCoordinates,
-  useSortable,
-  verticalListSortingStrategy,
-} from "@dnd-kit/sortable";
-import { CSS } from "@dnd-kit/utilities";
-import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type HTMLAttributes, type PointerEvent, type ReactNode } from "react";
 import type { Channels, LightInfo } from "../../shared/arclamp.ts";
-import { BASE_COLOR, BASE_COLOR_SPECS, isBaseColor } from "../../shared/base-color.ts";
-import { baseType, isBinary, isOn, lemtoneOf, requestedOf } from "../../shared/fixtures.ts";
-import { colorName, lemtoneCode, lumensText } from "../../shared/lemtone.ts";
-import { appliesTo, lemtoneOf as lemtoneOfColor, valuesAt, type ColorValue } from "../../shared/params.ts";
-import { tagLabel } from "../../shared/tags.ts";
-
-import { useBranchHead, useStatus } from "../api.ts";
+import { lemtoneOf, seenOf } from "../../shared/fixtures.ts";
+import { lemtoneCss } from "../../shared/lemtone.ts";
+import { isBaseColor } from "../../shared/base-color.ts";
+import { useGamut } from "../display.ts";
 import { useAdminMode } from "../settings.ts";
 import {
   changeable,
+  changedLights,
+  domainOf,
   drafts,
   layerOf,
   layersOf,
   reachOf,
   removedOf,
-  reorderWithin,
-  statusOf,
   switchFor,
   switchState,
   templateOf,
   useDraft,
-  type Adding,
   type Layer,
-  type LayerKey,
   type SwitchState,
 } from "../draft.ts";
-import { ChevronUpIcon, CloseIcon, GripIcon, MoreIcon, PlusIcon } from "../icons.tsx";
+import { ChevronUpIcon, CloseIcon, SaveIcon, UndoIcon } from "../icons.tsx";
 import { useFrames } from "../live.ts";
+import { BASE_TONE, peek } from "../peek.ts";
 import { useNarrow } from "../narrow.ts";
 import { useLights, useScene, type Scene } from "../scene.ts";
-import { commitName, listOf, ordinal } from "../words.ts";
-import { AddSketch } from "./AddSketch.tsx";
+import { count } from "../words.ts";
 import { Reveal } from "./Reveal.tsx";
+import { Sidebar, SidebarDetails } from "./Sidebar.tsx";
 import { RoomToneEditor } from "./RoomToneEditor.tsx";
-import { AddingBody, AddingTitle, ComingBody, ComingTitle, ShaderBody, ShaderTitle } from "./ShaderPanel.tsx";
-import { paramRowsOf, ShaderParams } from "./ShaderParams.tsx";
+import type { SelectMode } from "./RoomMap.tsx";
+import { Tooltip } from "./Tooltip.tsx";
+import { offDefault, paramRowsOf, resetParams, ShaderParams } from "./ShaderParams.tsx";
+import { TagChips } from "./TagChips.tsx";
+import { useOpened } from "../opened.ts";
+import { useFocus } from "../focus.ts";
+import { usePointsOut } from "../hint.ts";
+import { useStuckHeads } from "../stuck.ts";
 
 const NO_SCENE: Scene = { shaders: [], roomtone: null, pools: {} };
 
-const KINDS: Record<string, { one: string; many: string }> = {
-  br30: { one: "color bulb", many: "color bulbs" },
-  "4x1": { one: "4×1 panel", many: "4×1 panels" },
-  relay: { one: "old bulb", many: "old bulbs" },
-};
 
 // The sheet's middle height, at most, as a share of the screen.
 const HALF = 0.6;
@@ -90,6 +72,19 @@ const TAP_PX = 4;
 /** The heights a sheet rests at: just its head, most of what's in it, the whole screen. */
 type Rest = "peek" | "half" | "full";
 
+/** The pending edits, and saving them to the room: the panel's head says and does this. */
+export interface Saving {
+  /** How many edits are pending. */
+  pending: number;
+  /** They're on their way. */
+  saving: boolean;
+  /** The last save failed. */
+  error: string | null;
+  onSave: () => void;
+  /** Drop them all, the room staying as it is. */
+  onDiscard: () => void;
+}
+
 interface Props {
   /** The floor being shown. */
   floor: number;
@@ -97,16 +92,14 @@ interface Props {
   here: LightInfo[];
   /** The selected ones among them. */
   selected: ReadonlySet<number>;
-  /** The shader open in place of the selection, if one is. */
-  shader: LayerKey | null;
-  onShader: (key: LayerKey | null) => void;
-  onClose: () => void;
+  save: Saving;
+  /** Selecting lights, from the groups at the top. */
+  onSelect: (ids: number[], mode: SelectMode) => void;
 }
 
-export function SelectionPanel({ floor, here, selected, shader, onShader, onClose }: Props) {
+export function SelectionPanel({ here, selected, save, onSelect }: Props) {
   const panel = useRef<HTMLElement>(null);
   const chosen = here.filter((l) => selected.has(l.id));
-  const n = chosen.length;
 
   // What's on these lights, bottom of the stack first: each shader whose
   // home (or, with none, where its code has lit: reachOf) takes in any of
@@ -115,6 +108,7 @@ export function SelectionPanel({ floor, here, selected, shader, onShader, onClos
   const scene = useScene();
   const lights = useLights();
   const draft = useDraft();
+  const gamut = useGamut();
   const live = scene.data ?? NO_SCENE;
   const template = templateOf(live, draft);
   const ids = chosen.map((l) => l.id);
@@ -122,75 +116,42 @@ export function SelectionPanel({ floor, here, selected, shader, onShader, onClos
   const stack = layersOf(live, draft);
   // And the ones you're taking out (when you apply), where they are, to keep after all.
   const going = new Set(removedOf(live, draft));
-  const shown = withGoing(stack, [...going].flatMap((key) => layerOf(live, draft, key) ?? []), live);
+  const shown = withGoing(
+    stack,
+    [...going].flatMap((key) => layerOf(live, draft, key) ?? []),
+    live,
+  );
   const onThese = [...shown].reverse().filter((layer) => reachOf(layer).some((id) => selected.has(id)));
+  // The room tone, the room's "normal", is admin view's to change; everyone's color is Base Color's
+  // (shared/base-color.ts: vibes' own shader at the bottom, on every light, always in).
+  const admin = useAdminMode();
   const rows: Row[] = onThese.map((layer) => ({ layer, state: switchState(layer, ids) }));
 
-  // Room tone, the room's "normal", is for admin mode to change; Base Color's what everyone does.
-  const admin = useAdminMode();
-  // The layer whose parameters are open under it, one at a time: room tone's (in admin mode) or Base Color's, to start with.
-  const [opened, setOpened] = useState<string | null>(admin ? "roomtone" : BASE_COLOR.instance);
-  // Picking a sketch to add to these lights.
-  const [picking, setPicking] = useState(false);
-  const status = useStatus();
-  const add = (sketch: { id: string; name: string }) => {
-    setPicking(false);
-    const home = new Set(ids);
-    // From main, for now: there's no picking a branch yet.
-    drafts.add({ sketchId: sketch.id, sketchName: sketch.name, branch: "main", home: ids, mask: all.filter((id) => !home.has(id)) });
-  };
-
-  // The shader open in place of the selection: one in the room, one on its way in, or one you're adding.
-  const inPanel = shader ? layerOf(live, draft, shader) : null;
-  const openLayer = inPanel?.stage === "live" ? inPanel : null;
-  const openComing = inPanel?.stage === "building" || inPanel?.stage === "failed" ? inPanel.instance : null;
-  const openAdding = inPanel?.adding ?? null;
-
+  // The layers whose parameters are open under them, any number at once: room tone's, to start with.
+  const opened = useOpened(["roomtone"]);
+  // Base Color's params are open under it to start with: it's closed once it's toggled.
+  const isOpen = (layer: Layer) => (isBaseColor(layer.key) ? !opened.isOpen(`closed:${layer.key}`) : opened.isOpen(layer.key));
+  const toggle = (layer: Layer) => opened.toggle(isBaseColor(layer.key) ? `closed:${layer.key}` : layer.key);
+  // A layer picked in the layers panel: its row the only one open (room
+  // tone's and Base Color's shut too, those open to start with).
+  const focus = useFocus();
+  useEffect(() => {
+    if (!focus) return;
+    const base = shown.filter((l) => isBaseColor(l.key) && l.key !== focus.key).map((l) => `closed:${l.key}`);
+    opened.only([...base, focus.key]);
+    // Only for a new pick: not as the stack changes after it.
+  }, [focus]);
   /** A shader switched off for these lights, or on: pending edits, like a mute. */
   const setOn = (row: Row, on: boolean) => drafts.patchShader(row.layer.key, switchFor(row.layer, ids, on, all));
 
-  // Dragging a shader rearranges just the ones on these lights, among their places in the stack.
-  const sensors = useSensors(
-    useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
-    useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
-  );
-  // Base Color stays at the bottom: it's no place among them to move to.
-  const listed = rows.filter((r) => changeable(r.layer) && !going.has(r.layer.key) && !isBaseColor(r.layer.key)).map((r) => r.layer.key);
-  const onDragEnd = ({ active, over }: DragEndEvent) => {
-    if (!over || active.id === over.id) return;
-    const moved = arrayMove(listed, listed.indexOf(String(active.id)), listed.indexOf(String(over.id)));
-    // The list is bottom first; the stack's order is top first.
-    drafts.reorder(reorderWithin(stack.map((l) => l.key), moved.reverse()));
-  };
-
-  // Whole tags: every light here with the tag is selected.
-  const byTag = new Map<string, number[]>();
-  for (const l of here) for (const t of l.tags ?? []) byTag.set(t, [...(byTag.get(t) ?? []), l.id]);
-  const whole = [...byTag].filter(([, ids]) => ids.every((id) => selected.has(id)));
-  const covered = new Set(whole.flatMap(([, ids]) => ids));
-  const exactlyTags = whole.length > 0 && chosen.every((l) => covered.has(l.id));
-  const title =
-    n === here.length
-      ? `${ordinal(floor)} Floor`
-      : exactlyTags
-        ? listOf(whole.map(([t]) => tagLabel(t)).sort((a, b) => a.localeCompare(b)))
-        : n === 1
-      ? `${capitalized(kindOf(chosen[0]!).one)} ${chosen[0]!.id}`
-      : `${n} lights`;
-
-  const kinds = new Map<string, number>();
-  for (const l of chosen) kinds.set(baseType(l.type), (kinds.get(baseType(l.type)) ?? 0) + 1);
-  const breakdown = [...kinds].map(([type, count]) => {
-    const kind = KINDS[type] ?? { one: type, many: type };
-    return `${count} ${count === 1 ? kind.one : kind.many}`;
-  });
-
+  const title = `${count(chosen.length, "light")} selected`;
 
   // As a sheet, the heights it rests at: its head (and the safe area under
   // it); up to HALF the screen, or less when that's all of it; the screen.
   const narrow = useNarrow();
   const head = useRef<HTMLDivElement>(null);
   const body = useRef<HTMLDivElement>(null);
+  useStuckHeads(body);
   const [heights, setHeights] = useState<Record<Rest, number> | null>(null);
   useLayoutEffect(() => {
     if (!narrow) return;
@@ -281,125 +242,309 @@ export function SelectionPanel({ floor, here, selected, shader, onShader, onClos
   }, [lift]);
 
   return (
-    <section
+    <Sidebar
       ref={panel}
-      className={["selection-panel", sheet && dragged !== null && "dragging", sheet && rest === "full" && dragged === null && "full"].filter(Boolean).join(" ")}
-      aria-label="Selection"
+      side="right"
+      label="Selection"
+      className={[save.pending > 0 && "unsaved", sheet && dragged !== null && "dragging", sheet && rest === "full" && dragged === null && "full"].filter(Boolean).join(" ")}
       style={sheet ? { height: dragged ?? heights[rest] } : undefined}
+      headRef={head}
+      headProps={grab}
+      grabber
+      bodyRef={body}
+      head={
+        <>
+          {title}
+          <UnsavedMark here={here} onSelect={onSelect} />
+        </>
+      }
+      actions={
+        <>
+          <SaveButtons save={save} />
+          <button className="icon-button deselect-all" onClick={() => onSelect([], "replace")} aria-label="Deselect all">
+            <CloseIcon />
+          </button>
+        </>
+      }
     >
-      <div className="selection-head" ref={head} {...grab}>
-        <span className="selection-grabber" aria-hidden="true" />
-        {openLayer ? (
-          <ShaderTitle layer={openLayer} onBack={() => onShader(null)} />
-        ) : openComing ? (
-          <ComingTitle instance={openComing} onBack={() => onShader(null)} />
-        ) : openAdding ? (
-          <AddingTitle adding={openAdding} onBack={() => onShader(null)} />
-        ) : (
-          <div className="selection-title">
-            <h2>{title}</h2>
-            {/* One light: its title already says what it is, so here, its tags and what it's showing. */}
-            <p className="muted">{n === 1 ? <LightNow light={chosen[0]!} /> : breakdown.join(" · ")}</p>
-          </div>
-        )}
-        <button className="icon-button" onClick={onClose} aria-label="Let go of the selection" title="Let go of the selection">
-          <CloseIcon />
-        </button>
-      </div>
-      <div className="selection-body" ref={body}>
-        {openLayer ? (
-          <ShaderBody
-            layer={openLayer}
-            stack={stack}
-            removing={draft.removed.includes(openLayer.key)}
-            lights={lights.data?.lights ?? []}
-            selected={ids}
-            onGone={() => onShader(null)}
-          />
-        ) : openComing ? (
-          <ComingBody instance={openComing} lights={lights.data?.lights ?? []} onRetried={onShader} />
-        ) : openAdding ? (
-          <AddingBody adding={openAdding} lights={lights.data?.lights ?? []} onGone={() => onShader(null)} />
-        ) : (
-          <>
-            <section className="selection-section">
-              {/* The rows read in the order light builds up: room tone, then each shader over what's above it. */}
-              <h3 className="lit-by">On these lights</h3>
-              <DndContext sensors={sensors} collisionDetection={closestCenter} onDragEnd={onDragEnd}>
-                <SortableContext items={listed} strategy={verticalListSortingStrategy}>
-                  <ol className="layers">
-                    {/* Always the base, the rail's source: it can't move or be switched off. Its
-                        parameter, the color, opens under it (open to start with). Admin mode's to change. */}
-                    {admin && (
-                      <li className={opened === "roomtone" ? "layer base open" : "layer base"}>
-                        {/* All of its head (what lights up) opens and closes it; the button's for the keyboard. */}
-                        <div className="layer-head" onClick={() => setOpened(opened === "roomtone" ? null : "roomtone")}>
-                          <span className="layer-grip" aria-hidden="true" />
-                          <span className="layer-node" aria-hidden="true" />
-                          <button className="layer-text layer-toggle" aria-expanded={opened === "roomtone"}>
-                            <span className="layer-name">Room tone</span>
-                            <span className="layer-meta">{toneSummary(chosen, template)}</span>
-                          </button>
-                          <span className="layer-chevron" aria-hidden="true">
-                            <ChevronUpIcon />
-                          </span>
-                        </div>
-                        <Reveal open={opened === "roomtone"}>
-                          <RoomToneEditor lights={chosen} template={template} over={rows.filter((r) => r.state !== "off" && r.layer.script !== "" && !going.has(r.layer.key)).map((r) => r.layer.name)} />
-                        </Reveal>
-                      </li>
-                    )}
-                    {rows.map((row) =>
-                      going.has(row.layer.key) ? (
-                        <GoingRow key={row.layer.key} layer={row.layer} />
-                      ) : isBaseColor(row.layer.key) && changeable(row.layer) ? (
-                        <FixedRow
-                          key={row.layer.key}
-                          row={row}
-                          summary={baseSummary(row.layer, chosen)}
-                          onSwitch={(on) => setOn(row, on)}
-                          onOpen={() => onShader(row.layer.key)}
-                          details={detailsOf(row.layer, chosen)}
-                          opened={opened === row.layer.key}
-                          onToggle={() => setOpened(opened === row.layer.key ? null : row.layer.key)}
-                        />
-                      ) : changeable(row.layer) ? (
-                        <SortableRow
-                          key={row.layer.key}
-                          row={row}
-                          onSwitch={(on) => setOn(row, on)}
-                          onOpen={() => onShader(row.layer.key)}
-                          details={detailsOf(row.layer, chosen)}
-                          opened={opened === row.layer.key}
-                          onToggle={() => setOpened(opened === row.layer.key ? null : row.layer.key)}
-                        />
-                      ) : (
-                        <FailedRow key={row.layer.key} layer={row.layer} onOpen={() => onShader(row.layer.key)} />
-                      ),
-                    )}
-                    {/* And, last, room for another (while sketches are on). */}
-                    {status.data?.sketches && (
-                      <li className="layer add-row">
-                        <button className="add-row-button" onClick={() => setPicking(true)}>
-                          <span className="layer-grip" aria-hidden="true" />
-                          <span className="layer-node" aria-hidden="true">
-                            <PlusIcon />
-                          </span>
-                          <span className="layer-name">Add sketch</span>
-                        </button>
-                      </li>
-                    )}
-                  </ol>
-                </SortableContext>
-              </DndContext>
-            </section>
-            <AddSketch open={picking} lights={n} onPick={add} onClose={() => setPicking(false)} />
-          </>
-        )}
-      </div>
+      <Groups here={here} selected={selected} onSelect={onSelect} />
+      {/* The rows read in the order light builds up: room tone, then each shader over what's above it.
+              Their order is the room's, not these lights': it's changed in the layers panel. */}
+      <ol className="layers">
+            {/* Always the base, in admin view: it can't move or be switched off. Its parameter, the
+                        color, opens under it (open to start with). */}
+            {admin && (
+            <li className={opened.isOpen("roomtone") ? "layer base open" : "layer base"}>
+              {/* All of its head opens and closes it. */}
+              <div className="layer-rail">
+                <ToneNode colors={toneColors(chosen, template, gamut)} />
+              </div>
+              <div className="layer-head toggle" {...toggling(opened.isOpen("roomtone"), () => opened.toggle("roomtone"))}>
+                <span className="layer-text">
+                  <span className="layer-name">Base tone</span>
+                </span>
+                <Chevron />
+              </div>
+              <Reveal open={opened.isOpen("roomtone")}>
+                <SidebarDetails>
+                  <RoomToneEditor lights={chosen} template={template} />
+                </SidebarDetails>
+              </Reveal>
+            </li>
+            )}
+            {rows.map((row) =>
+              going.has(row.layer.key) ? (
+                <GoingRow key={row.layer.key} layer={row.layer} />
+              ) : changeable(row.layer) ? (
+                <ShaderRow
+                  key={row.layer.key}
+                  row={row}
+                  lights={chosen}
+                  onSwitch={(on) => setOn(row, on)}
+                  details={detailsOf(row.layer, chosen)}
+                  opened={isOpen(row.layer)}
+                  onToggle={() => toggle(row.layer)}
+                />
+              ) : (
+                <FailedRow key={row.layer.key} layer={row.layer} />
+              ),
+            )}
+      </ol>
+    </Sidebar>
+  );
+}
+
+/**
+ * After the title, with changes not saved yet: an asterisk saying how many
+ * lights they change, which selects those of them on this floor.
+ */
+function UnsavedMark({ here, onSelect }: { here: LightInfo[]; onSelect: Props["onSelect"] }) {
+  const scene = useScene();
+  const draft = useDraft();
+  const changed = scene.data ? changedLights(scene.data, draft) : [];
+  if (changed.length === 0) return null;
+  return <ChangesMark changed={changed} here={here} onSelect={onSelect} />;
+}
+
+/**
+ * An asterisk, in the unsaved pink, for changes not saved yet (the room's,
+ * or one shader's): under the pointer, how many lights they change, and
+ * those lights pointed out on the map (hint.ts, as a layer's row does);
+ * pressed, it selects those of them on this floor.
+ */
+export function ChangesMark({ changed, here, onSelect }: { changed: readonly number[]; here: LightInfo[]; onSelect: Props["onSelect"] }) {
+  // Under the pointer (or focused): where to say so, under it, on the screen.
+  const [tip, setTip] = useState<{ x: number; y: number } | null>(null);
+  const show = (el: HTMLElement) => {
+    const r = el.getBoundingClientRect();
+    setTip({ x: r.left + r.width / 2, y: r.bottom + 6 });
+  };
+  const pointsOut = usePointsOut(() => changed);
+  const ids = new Set(here.map((l) => l.id));
+  const mine = changed.filter((id) => ids.has(id));
+  const what = `${count(changed.length, "light")} ${changed.length === 1 ? "has" : "have"} unsaved changes`;
+  const title = mine.length === changed.length ? what : `${what} (${mine.length} on this floor)`;
+  return (
+    <>
+      <button
+        className="unsaved-mark"
+        aria-label={`${title}: select them`}
+        // Not disabled, which would take the pointer events that show its tooltip.
+        aria-disabled={mine.length === 0}
+        onClick={() => mine.length > 0 && onSelect(mine, "replace")}
+        onPointerEnter={(e) => {
+          show(e.currentTarget);
+          pointsOut.onPointerEnter(e);
+        }}
+        onPointerLeave={(e) => {
+          setTip(null);
+          pointsOut.onPointerLeave(e);
+        }}
+        onFocus={(e) => show(e.currentTarget)}
+        onBlur={() => setTip(null)}
+      >
+        *
+      </button>
+      {tip && (
+        <Tooltip x={tip.x} y={tip.y} side="below" fixed>
+          <span className="tooltip-title">{`${count(changed.length, "light")}${mine.length > 0 ? " (click to view)" : ""}`}</span>
+        </Tooltip>
+      )}
+    </>
+  );
+}
+
+/** The groups of lights here (all of them, the main space, each tag), to select and let go of. */
+function Groups({
+  here,
+  selected,
+  onSelect,
+  hint,
+}: {
+  here: LightInfo[];
+  selected: ReadonlySet<number>;
+  onSelect: Props["onSelect"];
+  hint?: string;
+}) {
+  if (here.length === 0) return null;
+  return (
+    <section className="panel-groups">
+      <TagChips lights={here} selected={selected} onSelect={onSelect} />
+      {hint && <p className="hint">{hint}</p>}
     </section>
   );
 }
+
+/** The panel while nothing's selected: the groups to pick from. */
+export function IdlePanel({
+  here,
+  selected,
+  onSelect,
+  save,
+}: {
+  here: LightInfo[];
+  selected: ReadonlySet<number>;
+  onSelect: Props["onSelect"];
+  save: Saving;
+}) {
+  return (
+    <Sidebar
+      side="right"
+      label="Selection"
+      className={save.pending > 0 ? "idle unsaved" : "idle"}
+      head={
+        <>
+          No lights selected
+          <UnsavedMark here={here} onSelect={onSelect} />
+        </>
+      }
+      actions={<SaveButtons save={save} />}
+    >
+      <Groups here={here} selected={selected} onSelect={onSelect} hint="Pick a group, or lights on the map, to see what's on them." />
+    </Sidebar>
+  );
+}
+
+/**
+ * The pending edits, in the head: save them to the room (dim with none, lit
+ * while there are any), and, beside it while there are, drop them instead.
+ */
+function SaveButtons({ save }: { save: Saving }) {
+  const { pending, saving, error } = save;
+  const title = error ? `Couldn't save: ${error}` : saving ? "Saving…" : "Save";
+  if (pending === 0 && !error) return null;
+  return (
+    <span className="save-buttons">
+      <button className="icon-button discard-button" onClick={save.onDiscard} disabled={saving} aria-label="Discard">
+        <UndoIcon />
+      </button>
+      <button className={["icon-button", "save-button", "lit", error && "failed"].filter(Boolean).join(" ")} onClick={save.onSave} disabled={saving} aria-label={title}>
+        <SaveIcon />
+      </button>
+    </span>
+  );
+}
+
+/** The most colors a stop's pie shows. */
+const NODE_COLORS = 6;
+
+/**
+ * A stop on the rail, in the color of the light at it: one color, or up to
+ * NODE_COLORS in a pie when the lights there aren't alike. Hollow when nothing's
+ * lit there, or the stop's bypassed (off here, or not in the room yet).
+ */
+function LayerNode({ colors, hollow = false, ...rest }: { colors: string[]; hollow?: boolean } & HTMLAttributes<HTMLSpanElement>) {
+  const shown = hollow ? [] : colors.slice(0, NODE_COLORS);
+  const background =
+    shown.length === 0
+      ? undefined
+      : shown.length === 1
+        ? shown[0]
+        : `conic-gradient(${shown.map((c, i) => `${c} ${(i / shown.length) * 100}% ${((i + 1) / shown.length) * 100}%`).join(", ")})`;
+  const node = (
+    <span
+      {...rest}
+      className={[background ? "layer-node" : "layer-node hollow", rest.className].filter(Boolean).join(" ")}
+      style={background ? { background } : undefined}
+      aria-hidden="true"
+    />
+  );
+  if (!background) return node;
+  // Lit, a blurred copy of it behind it: a soft glow round each slice, in its own color.
+  return (
+    <span className="layer-stop">
+      <span className="layer-glow" style={{ background }} aria-hidden="true" />
+      {node}
+    </span>
+  );
+}
+
+/** The base tone's stop: hovering it peeks at the base tone alone (every shader set aside, on the map). */
+function ToneNode({ colors }: { colors: string[] }) {
+  return <LayerNode colors={colors} {...usePeekable(BASE_TONE)} />;
+}
+
+/**
+ * What makes a stop peekable: while the pointer's on it, the map shows the
+ * room as the light is there (peek.ts). Stops peeking if it goes away under
+ * the pointer.
+ */
+function usePeekable(key: string | null): HTMLAttributes<HTMLSpanElement> {
+  useEffect(() => (key === null ? undefined : () => peek.clear(key)), [key]);
+  if (key === null) return {};
+  return {
+    className: "peekable",
+    onPointerEnter: () => peek.set(key),
+    onPointerLeave: () => peek.clear(key),
+    onPointerCancel: () => peek.clear(key),
+  };
+}
+
+/** The base tone's colors on these lights, as it sets them (an old bulb that's on, as its incandescent). */
+function toneColors(lights: LightInfo[], template: Record<string, Channels>, gamut: ReturnType<typeof useGamut>): string[] {
+  const colors = new Set<string>();
+  for (const l of lights) {
+    const t = lemtoneOf(template[String(l.id)], l.type);
+    if (t) colors.add(lemtoneCss(t, gamut));
+  }
+  return [...colors];
+}
+
+/**
+ * A shader's stop: the light as the selected lights it reaches are making
+ * it right now (the room's, or the preview's), kept up every second. There's
+ * no seeing what each shader alone adds, so this is the light as it leaves
+ * the stack, on just the lights this shader is on (none: hollow). Hovering it peeks at
+ * the room as it is up to this shader (once its script's here to preview).
+ */
+export function ShaderNode({ layer, lights, hollow }: { layer: Layer; lights: LightInfo[]; hollow: boolean }) {
+  const gamut = useGamut();
+  const frames = useFrames();
+  const peekable = usePeekable(layer.script !== "" ? layer.key : null);
+  const [, tick] = useState(0);
+  useEffect(() => {
+    if (hollow) return;
+    const t = window.setInterval(() => tick((n) => n + 1), 1000);
+    return () => window.clearInterval(t);
+  }, [hollow]);
+  const frame = frames.latest();
+  // Just the lights it's on: masked off the rest, their light isn't its.
+  const on = new Set(domainOf(layer));
+  const colors = new Set<string>();
+  for (const l of lights) {
+    if (!on.has(l.id)) continue;
+    const t = seenOf(frame?.lights.get(l.id), l.type);
+    if (t) colors.add(lemtoneCss(t, gamut));
+  }
+  return <LayerNode colors={[...colors]} hollow={hollow} {...peekable} />;
+}
+
+/**
+ * Whether a shader's in the light the stops show (the preview's, with your
+ * unsaved changes, or the room's): in the room, or one you're adding once
+ * it's built (its script here to preview). Not yet, its stop is hollow.
+ */
+export const inPreview = (layer: Layer) => layer.stage === "live" || (layer.stage === "adding" && layer.script !== "");
 
 /** A shader as the selection sees it. */
 interface Row {
@@ -410,22 +555,21 @@ interface Row {
 
 interface RowProps {
   row: Row;
+  /** The selected lights, for its stop's color. */
+  lights: LightInfo[];
   /** Its switch, for these lights. */
   onSwitch: (on: boolean) => void;
-  /** Open it, in place of the selection. */
-  onOpen: () => void;
   /** What it shows under its row when that's opened (detailsOf), if anything. */
   details: ReactNode | null;
   opened: boolean;
   onToggle: () => void;
-  /** Under its name in place of its commit (Base Color's: what it sets these lights to, baseSummary). */
-  summary?: string;
 }
 
 /**
  * What a shader shows under its row, opened, as room tone shows its color:
- * its params, for these lights (ShaderParams.tsx); nothing, if it has none
- * for them.
+ * its params, for these lights (ShaderParams.tsx: Base Color's are a color
+ * for each color light and on or off for the old bulbs); nothing, if it has
+ * none for them.
  */
 function detailsOf(layer: Layer, chosen: LightInfo[]): ReactNode | null {
   const params = paramRowsOf(layer, chosen);
@@ -433,42 +577,59 @@ function detailsOf(layer: Layer, chosen: LightInfo[]): ReactNode | null {
 }
 
 /**
- * A shader on these lights: draggable by its handle to another place among
- * them. One with something to show opens and closes it from anywhere on its
- * head, as room tone's does (its buttons still do their own things).
+ * A row's head that opens and closes what's under it, from anywhere on it
+ * (but its own buttons, which do their own things), by mouse or keyboard:
+ * the head itself is the button. Clicking does nothing else.
  */
-function SortableRow(props: RowProps) {
-  const { row, details, opened, onToggle } = props;
-  const { attributes, listeners, setNodeRef, transform, transition, isDragging } = useSortable({ id: row.layer.key });
+function toggling(open: boolean, onToggle: () => void): HTMLAttributes<HTMLDivElement> {
+  return {
+    role: "button",
+    tabIndex: 0,
+    "aria-expanded": open,
+    onClick: (e) => !(e.target as Element).closest("button") && onToggle(),
+    onKeyDown: (e) => {
+      if (e.target !== e.currentTarget || (e.key !== "Enter" && e.key !== " ")) return;
+      e.preventDefault();
+      onToggle();
+    },
+  };
+}
+
+/** The arrow at the end of a row that opens: just a picture of it (its head is what's clicked). */
+const Chevron = () => (
+  <span className="layer-chevron" aria-hidden="true">
+    <ChevronUpIcon />
+  </span>
+);
+
+/**
+ * A shader on these lights. One with something to show opens and closes it
+ * from anywhere on its head, as room tone's does (its buttons still do their
+ * own things); one with nothing to show doesn't, and doesn't light up.
+ */
+function ShaderRow(props: RowProps) {
+  const { row, lights, details, opened, onToggle } = props;
   const expandable = details !== null;
   const open = opened && expandable;
   // Not in the room yet: on its way in, or yours to add (previewed once it's built).
   const { stage, adding } = row.layer;
   const coming = stage === "live" ? "" : stage === "adding" ? (adding?.build?.state === "built" ? " coming adding built" : " coming adding") : " coming";
-  const head = (
-    <>
-      <button className="layer-grip" aria-label={`Move ${row.layer.name}`} {...attributes} {...listeners}>
-        <GripIcon />
-      </button>
-      <RowParts {...props} />
-    </>
-  );
+  const head = <RowParts {...props} />;
   return (
-    <li
-      ref={setNodeRef}
-      className={`layer${coming}${row.state === "off" ? " off" : ""}${expandable ? " expandable" : ""}${open ? " open" : ""}${isDragging ? " dragging" : ""}`}
-      style={{ transform: CSS.Transform.toString(transform), transition }}
-    >
+    <li className={`layer${coming}${row.state === "off" ? " off" : ""}${open ? " open" : ""}`}>
+      <div className="layer-rail">
+        <ShaderNode layer={row.layer} lights={lights} hollow={row.state === "off" || !inPreview(row.layer)} />
+      </div>
       {expandable ? (
-        <div className="layer-head" onClick={(e) => !(e.target as Element).closest("button") && onToggle()}>
+        <div className="layer-head toggle" {...toggling(open, onToggle)}>
           {head}
         </div>
       ) : (
-        head
+        <div className="layer-head">{head}</div>
       )}
       {expandable && (
         <Reveal open={open}>
-          <div className="layer-details">{details}</div>
+          <SidebarDetails>{details}</SidebarDetails>
         </Reveal>
       )}
     </li>
@@ -476,95 +637,47 @@ function SortableRow(props: RowProps) {
 }
 
 /**
- * Base Color's row (shared/base-color.ts): as any shader's, but always at the
- * bottom, so with no handle to drag it by.
+ * A shader's stop on the rail: its name, what's become of it, a switch for
+ * whether it's on for these lights (off here leaves the rest of the room as
+ * it is; on, for one that's off everywhere, is on for just these), and, at
+ * the end, under room tone's chevron, a toggle for what it shows under its
+ * row, or, if it shows nothing, the quiet dot in its place, so every row
+ * ends in the same column.
  */
-function FixedRow(props: RowProps) {
-  const { row, details, opened, onToggle } = props;
-  const expandable = details !== null;
-  const open = opened && expandable;
-  const head = (
-    <>
-      <span className="layer-grip" aria-hidden="true" />
-      <RowParts {...props} />
-    </>
-  );
-  return (
-    <li className={`layer fixed${row.state === "off" ? " off" : ""}${expandable ? " expandable" : ""}${open ? " open" : ""}`}>
-      {expandable ? (
-        <div className="layer-head" onClick={(e) => !(e.target as Element).closest("button") && onToggle()}>
-          {head}
-        </div>
-      ) : (
-        head
-      )}
-      {expandable && (
-        <Reveal open={open}>
-          <div className="layer-details">{details}</div>
-        </Reveal>
-      )}
-    </li>
-  );
-}
-
-/**
- * A shader's stop on the rail: its name, what's become of it, its ⋯ to
- * open it, a switch for whether it's on for these lights (off here leaves the
- * rest of the room as it is; on, for one that's off everywhere, is on for
- * just these), and, at the end, under room tone's chevron, a toggle for what
- * it shows under its row, or, if it shows nothing, a quiet dot in its place,
- * so every row ends in the same column.
- */
-function RowParts({ row, onSwitch, onOpen, details, opened, onToggle, summary }: RowProps) {
+function RowParts({ row, lights, onSwitch, details }: RowProps) {
   const { layer, state } = row;
-  const tip =
-    state === "on"
-      ? `${layer.name} is on for these lights. Switch it off here; the rest of the room isn't affected.`
-      : layer.muted
-        ? `${layer.name} is off. Switch it on for just these lights.`
-        : state === "off"
-          ? `${layer.name} is off for these lights. Switch it back on for them.`
-          : `${layer.name} is on for some of these lights. Switch it on for all of them.`;
   const sketch = layer.sketch;
-  const meta = metaOf(row, summary);
+  // Its params on these lights, if any aren't at their default: one link puts them all back, under its name.
+  const changed = offDefault(layer, paramRowsOf(layer, lights));
   return (
     <>
-      <span className="layer-node" aria-hidden="true" />
       <span className="layer-text">
         <span className="layer-name">
           {layer.name}
           {/* Not built by vibes (no stamp): made in rclamp some other way. */}
-          {!sketch && (
-            <span className="layer-badge external" title="Made outside vibes, not from a sketch">
-              external
-            </span>
-          )}
+          {!sketch && <span className="layer-badge external">external</span>}
           {sketch?.deleted && <span className="layer-badge">deleted</span>}
-          {sketch?.edited && (
-            <span className="layer-badge" title="Changed since vibes built it, so it isn't what its sketch's commit says">
-              edited
-            </span>
-          )}
+          {sketch?.edited && <span className="layer-badge">edited</span>}
         </span>
-        {layer.adding ? <AddingMeta adding={layer.adding} row={row} /> : meta && <span className="layer-meta">{meta}</span>}
+        {changed.length > 0 && (
+          <span className="layer-meta">
+            <button className="layer-reset" onClick={() => resetParams(layer, changed)}>
+              Set to default
+            </button>
+          </span>
+        )}
       </span>
-      <button className="icon-button layer-open" aria-label={`More for ${layer.name}`} title={`More for ${layer.name}`} onClick={onOpen}>
-        <MoreIcon />
-      </button>
       <button
         className={`switch ${state}`}
         role="switch"
         aria-checked={state === "on" ? true : state === "off" ? false : "mixed"}
         aria-label={`${layer.name}, on these lights`}
-        title={tip}
         onClick={() => onSwitch(state !== "on")}
       >
         <span className="switch-knob" />
       </button>
       {details !== null ? (
-        <button className="layer-chevron" aria-expanded={opened} aria-label={`${layer.name}'s details`} title={opened ? "Hide" : "Show more"} onClick={onToggle}>
-          <ChevronUpIcon />
-        </button>
+        <Chevron />
       ) : (
         <span className="layer-chevron layer-end" aria-hidden="true" />
       )}
@@ -572,57 +685,20 @@ function RowParts({ row, onSwitch, onOpen, details, opened, onToggle, summary }:
   );
 }
 
-/** What its switch says, if it's not just on: on for some of these, or off (here, or everywhere). */
-const switchNote = ({ layer, state }: Row) => (state === "mixed" ? "on for some of these" : state === "off" ? (layer.muted ? "off" : "off here") : null);
-
-/** Under a shader's name: its commit (or branch), if it's a sketch's, or the summary given in its place; and anything that's become of it. */
-function metaOf(row: Row, summary?: string): string | null {
-  const { layer } = row;
-  const parts: string[] = [];
-  const sketch = layer.sketch;
-  const instance = layer.instance;
-  if (summary !== undefined) parts.push(summary);
-  else if (sketch) parts.push(instance ? commitName(sketch.commit, instance.branch, instance.head) : sketch.commit.slice(0, 7));
-  if (layer.stage === "building") parts.push("building…");
-  const status = statusOf(layer) ?? switchNote(row);
-  if (status) parts.push(status);
-  return parts.length > 0 ? parts.join(" · ") : null;
-}
-
-/** Under one you're adding: its build (building on the server, built, or why it couldn't), and its switch. */
-function AddingMeta({ adding, row }: { adding: Adding; row: Row }) {
-  const build = adding.build;
-  const head = useBranchHead(adding.sketchId, adding.branch);
-  const parts = [
-    build?.state === "failed"
-      ? `${adding.branch} · couldn't build`
-      : build?.state === "built"
-        ? `${commitName(build.commit, adding.branch, head)} · new here`
-        : `building ${adding.branch}…`,
-  ];
-  const note = switchNote(row);
-  if (note) parts.push(note);
-  return <span className={build?.state === "failed" ? "layer-meta bad" : "layer-meta"}>{parts.join(" · ")}</span>;
-}
-
-/** One that couldn't go in, homed on some of these lights, and why: nothing to switch or move. */
-function FailedRow({ layer, onOpen }: { layer: Layer; onOpen: () => void }) {
-  const { name, instance } = layer;
+/** One that couldn't go in, homed on some of these lights, and why: nothing to switch or move (the shaders panel has what can be done). */
+function FailedRow({ layer }: { layer: Layer }) {
+  const { name } = layer;
   return (
     <li className="layer coming">
-      <span className="layer-grip" aria-hidden="true" />
-      <span className="layer-node" aria-hidden="true" />
-      <span className="layer-text">
-        <span className="layer-name">{name}</span>
-        <span className="layer-meta bad">
-          {instance ? `${commitName(instance.commit, instance.branch, instance.head)} · ` : ""}
-          couldn't go in
+      <div className="layer-rail">
+        <LayerNode colors={[]} hollow />
+      </div>
+      <div className="layer-head">
+        <span className="layer-text">
+          <span className="layer-name">{name}</span>
         </span>
-      </span>
-      <button className="icon-button layer-open" aria-label={`More for ${name}`} title={`More for ${name}`} onClick={onOpen}>
-        <MoreIcon />
-      </button>
-      <RowEnd />
+        <RowEnd />
+      </div>
     </li>
   );
 }
@@ -631,16 +707,18 @@ function FailedRow({ layer, onOpen }: { layer: Layer; onOpen: () => void }) {
 function GoingRow({ layer }: { layer: Layer }) {
   return (
     <li className="layer coming going">
-      <span className="layer-grip" aria-hidden="true" />
-      <span className="layer-node" aria-hidden="true" />
-      <span className="layer-text">
-        <span className="layer-name">{layer.name}</span>
-        <span className="layer-meta">comes out when you apply</span>
-      </span>
-      <button className="quiet layer-keep" onClick={() => drafts.keep(layer.key)} title={`Keep ${layer.name} in the room`}>
-        Keep
-      </button>
-      <span className="layer-chevron layer-end" aria-hidden="true" />
+      <div className="layer-rail">
+        <LayerNode colors={[]} hollow />
+      </div>
+      <div className="layer-head">
+        <span className="layer-text">
+          <span className="layer-name">{layer.name}</span>
+        </span>
+        <button className="quiet layer-keep" onClick={() => drafts.keep(layer.key)}>
+          Keep
+        </button>
+        <span className="layer-chevron layer-end" aria-hidden="true" />
+      </div>
     </li>
   );
 }
@@ -650,7 +728,7 @@ function GoingRow({ layer }: { layer: Layer }) {
  * each just above the one under it in the room (the lowest first, so one
  * over another going too goes above it).
  */
-function withGoing(stack: Layer[], going: Layer[], scene: Scene): Layer[] {
+export function withGoing(stack: Layer[], going: Layer[], scene: Scene): Layer[] {
   const keys = scene.shaders.map((s) => s.key);
   const all = [...stack];
   for (const layer of [...going].sort((a, b) => keys.indexOf(b.key) - keys.indexOf(a.key))) {
@@ -667,68 +745,3 @@ const RowEnd = () => (
     <span className="layer-chevron layer-end" aria-hidden="true" />
   </>
 );
-
-/** What room tone sets these lights to: one lemtone (or on/off, for old bulbs) when they're alike, else "mixed". */
-function toneSummary(lights: LightInfo[], template: Record<string, Channels>): string {
-  const colors = new Set<string>();
-  const oldBulbs = new Set<string>();
-  for (const l of lights) {
-    const ch = template[String(l.id)];
-    if (isBinary(l.type)) {
-      oldBulbs.add(isOn(ch) ? "on" : "off");
-    } else {
-      const t = requestedOf(ch, l.type);
-      colors.add(t && t.brightness > 0 ? lemtoneCode(t) : "off");
-    }
-  }
-  return summaryOf(colors, oldBulbs);
-}
-
-/** What Base Color sets these lights to, as room tone's row says it: "3000K · 546 lm · F1.00 · old bulbs off". */
-function baseSummary(layer: Layer, lights: LightInfo[]): string {
-  const colors = new Set<string>();
-  const oldBulbs = new Set<string>();
-  for (const spec of BASE_COLOR_SPECS) {
-    const ids = lights.filter((l) => appliesTo(spec, l)).map((l) => l.id);
-    for (const v of valuesAt(spec, layer.params?.values[spec.name], ids)) {
-      if (spec.kind === "color") {
-        const t = lemtoneOfColor(v as ColorValue);
-        colors.add(t.brightness > 0 ? lemtoneCode(t) : "off");
-      } else oldBulbs.add(v ? "on" : "off");
-    }
-  }
-  return summaryOf(colors, oldBulbs);
-}
-
-/** Colors and old bulbs' on or off, each one when they're alike, else "mixed". */
-function summaryOf(colors: Set<string>, oldBulbs: Set<string>): string {
-  const one = (set: Set<string>) => (set.size === 1 ? [...set][0]! : "mixed");
-  const parts: string[] = [];
-  if (colors.size > 0) parts.push(one(colors));
-  if (oldBulbs.size > 0) parts.push(colors.size > 0 ? `old bulbs ${one(oldBulbs)}` : one(oldBulbs));
-  return parts.join(" · ");
-}
-
-/** A light's tags and what it's showing right now ("Couches · 2700 K · 207 lm", "Couches · off"), kept up a few times a second. */
-function LightNow({ light }: { light: LightInfo }) {
-  const [, tick] = useState(0);
-  useEffect(() => {
-    const t = window.setInterval(() => tick((n) => n + 1), 250);
-    return () => window.clearInterval(t);
-  }, []);
-  const channels = useFrames().latest()?.lights.get(light.id);
-  let state: string;
-  if (isBinary(light.type)) state = isOn(channels) ? "on" : "off";
-  else {
-    const t = lemtoneOf(channels, light.type);
-    state = t && t.brightness > 0 ? `${colorName(t.a, t.b)} · ${lumensText(t.brightness)}` : "off";
-  }
-  const tags = (light.tags ?? []).map(tagLabel).sort((a, b) => a.localeCompare(b));
-  return [...tags, state].join(" · ");
-}
-
-function kindOf(l: LightInfo) {
-  return KINDS[baseType(l.type)] ?? { one: l.type, many: l.type };
-}
-
-const capitalized = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);

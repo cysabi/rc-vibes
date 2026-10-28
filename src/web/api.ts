@@ -3,7 +3,7 @@
 import { QueryCache, QueryClient, useMutation, useQuery } from "@tanstack/react-query";
 import type { HealthResponse } from "../shared/arclamp.ts";
 import type { RoomRequest } from "../shared/live.ts";
-import type { ApiError, ApiToken, BoxState, CameraView, LoginOptions, Me, Sketch, Status, StreetView } from "../shared/vibes.ts";
+import type { ApiError, ApiToken, BoxState, CameraView, LoginOptions, Me, Sketch, SketchChanges, Status, StreetView } from "../shared/vibes.ts";
 
 export class RequestError extends Error {
   readonly status: number;
@@ -197,6 +197,15 @@ export function useBranchHead(sketchId: string, branch: string): string | null {
   return branch === "main" ? (sketch.data?.head ?? null) : null;
 }
 
+/** What your editor has of a sketch that main hasn't (files not committed, commits not pushed): kept a minute, looked at again on focus. */
+export const useSketchChanges = (id: string | null) =>
+  useQuery({
+    queryKey: ["sketches", id, "changes"],
+    queryFn: () => request<SketchChanges>("GET", `/api/sketches/${encodeURIComponent(id!)}/changes`),
+    enabled: id !== null,
+    staleTime: 60_000,
+  });
+
 /** The deleted sketches that can still be restored. */
 export const useDeletedSketches = () =>
   useQuery({ queryKey: ["sketches", "deleted"], queryFn: () => request<{ sketches: Sketch[] }>("GET", "/api/sketches/deleted").then((r) => r.sketches) });
@@ -206,6 +215,22 @@ const invalidateSketches = () => queryClient.invalidateQueries({ queryKey: ["ske
 export function useCreateSketch() {
   return useMutation({
     mutationFn: (name: string) => request<Sketch>("POST", "/api/sketches", { name }),
+    onSuccess: invalidateSketches,
+  });
+}
+
+/** Renames a sketch, for everyone. */
+export function useRenameSketch() {
+  return useMutation({
+    mutationFn: ({ id, name }: { id: string; name: string }) => request<Sketch>("PATCH", `/api/sketches/${encodeURIComponent(id)}`, { name }),
+    onSuccess: invalidateSketches,
+  });
+}
+
+/** Forks a sketch: a new one, yours, starting as a git clone of it. */
+export function useForkSketch() {
+  return useMutation({
+    mutationFn: ({ id, name }: { id: string; name: string }) => request<Sketch>("POST", `/api/sketches/${encodeURIComponent(id)}/fork`, { name }),
     onSuccess: invalidateSketches,
   });
 }

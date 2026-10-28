@@ -56,18 +56,18 @@ export function TagEditor({ lights, known, onChange }: Props) {
           {tags.map(([tag, count]) => (
             <span key={tag} className={count < n ? "tag partial" : "tag"}>
               {count < n ? (
-                <button className="tag-name" onClick={() => set(tag, true)} title={`${tag}: tag all ${n}`}>
+                <button className="tag-name" onClick={() => set(tag, true)}>
                   {tagLabel(tag)}
                   <span className="tag-count">
                     {count}/{n}
                   </span>
                 </button>
               ) : (
-                <span className="tag-name" title={tag}>
+                <span className="tag-name">
                   {tagLabel(tag)}
                 </span>
               )}
-              <button className="tag-remove" onClick={() => set(tag, false)} aria-label={`Take ${tagLabel(tag)} off`} title={`Take ${tagLabel(tag)} off`}>
+              <button className="tag-remove" onClick={() => set(tag, false)} aria-label={`Take ${tagLabel(tag)} off`}>
                 <CloseIcon />
               </button>
             </span>

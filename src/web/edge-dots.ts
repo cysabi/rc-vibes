@@ -1,5 +1,5 @@
 // Dots along an edge, evenly spaced, for the color editor's backdrops (the
-// inner of their two edges: ColorEditor.tsx, backdrop.ts). An edge comes as
+// inner of their two edges: ColorField.tsx, backdrop.ts). An edge comes as
 // marching squares makes it: a piece in each grid cell it crosses, from where
 // it crosses one side of the cell to where it crosses another. Pieces in
 // neighboring cells meet where they cross the side they share, so joined up

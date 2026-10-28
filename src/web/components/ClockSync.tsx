@@ -13,7 +13,8 @@ export function ClockSync() {
   return (
     <div
       className="latency clock-sync"
-      title="How near this page is to the room's time (arclamp's), which the show clock and every press are in: at most this far off, this page from vibes and vibes from arclamp, as each last measured it. Below, how far this machine's own clock is from arclamp's."
+      role="group"
+      aria-label="How near this page is to the room's time (arclamp's), which the show clock and every press are in: at most this far off, this page from vibes and vibes from arclamp, as each last measured it. Below, how far this machine's own clock is from arclamp's."
     >
       <span className="label">Clock</span>
       <span className="latency-value mono">{total === null ? "–" : `±${ms(total)}`}</span>

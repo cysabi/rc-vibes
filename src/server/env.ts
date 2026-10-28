@@ -24,7 +24,8 @@ const schema = z.object({
   // Sketches, and the boxes they're edited in (see Config.sketches).
   SKETCHES: z.enum(["0", "1"]).default("0"),
   SKETCHES_DIR: z.string().min(1).optional(),
-  BOX_RUNNER: z.enum(["docker", "kubernetes"]).default("docker"),
+  // Or "local": no boxes, and builds as plain processes here (for development without Docker).
+  BOX_RUNNER: z.enum(["docker", "kubernetes", "local"]).default("docker"),
   BOX_IMAGE: z.string().min(1).optional(),
   BOX_VIBES_URL: z.url().optional(),
   // Where shaders in the room reach vibes, for their params (params.ts).
@@ -42,13 +43,17 @@ const schema = z.object({
     .optional(),
   // Streetview's photographs: <dir>/<camera>/build (see streetview.ts). Unset, there's no streetview.
   ROOMSTAGE_DIR: z.string().min(1).optional(),
+  // Development only (with VIBES_DEV_LOGIN=1): sketches, by name, whose editor
+  // says it has changes main hasn't (2 files, 1 commit) for everyone, with
+  // no box to read: so their "not up to date" shows without one.
+  VIBES_FAKE_CHANGES: z.string().optional(),
 });
 
 export interface SketchesConfig {
   /** Where each sketch's canonical repo lives: <dir>/<id>.git. */
   dir: string;
-  /** How boxes run: Docker on this machine, or pods on the cluster vibes runs in. */
-  runner: "docker" | "kubernetes";
+  /** How boxes run: Docker on this machine, pods on the cluster vibes runs in, or (builds only) processes here. */
+  runner: "docker" | "kubernetes" | "local";
   /** The box image: VS Code, the sketch's tools, and vibes' extension. */
   image: string;
   /** Where a box reaches vibes (for git and the lights' layout). */
@@ -69,6 +74,8 @@ export interface SketchesConfig {
    * can't, and then it never asks.
    */
   homesMount: string | null;
+  /** Development only: sketches (by name) that say their editor has changes main hasn't (VIBES_FAKE_CHANGES). */
+  fakeChanges: string[];
   /**
    * With Docker, which vibes on this machine the boxes and builds are (null:
    * the usual one). Each looks after only its own, and leaves the rest alone:
@@ -149,14 +156,15 @@ export function loadConfig(source: Record<string, string | undefined> = process.
   const deviceKeys = parseDeviceKeys(env.VIBES_DEVICE_KEYS);
   let sketches: SketchesConfig | null = null;
   if (env.SKETCHES === "1") {
-    if (!env.BOX_IMAGE) throw new Error("SKETCHES=1 needs BOX_IMAGE, the box image to run");
-    // Docker containers reach the machine they run on by this name.
-    const vibesUrl = env.BOX_VIBES_URL ?? (env.BOX_RUNNER === "docker" ? `http://host.docker.internal:${env.PORT}` : undefined);
+    const local = env.BOX_RUNNER === "local";
+    if (!env.BOX_IMAGE && !local) throw new Error("SKETCHES=1 needs BOX_IMAGE, the box image to run");
+    // Docker containers reach the machine they run on by this name; local builds, this very vibes.
+    const vibesUrl = env.BOX_VIBES_URL ?? (env.BOX_RUNNER === "docker" ? `http://host.docker.internal:${env.PORT}` : local ? `http://127.0.0.1:${env.PORT}` : undefined);
     if (!vibesUrl) throw new Error("BOX_RUNNER=kubernetes needs BOX_VIBES_URL, where boxes reach vibes in the cluster");
     sketches = {
       dir: env.SKETCHES_DIR ?? path.join(path.dirname(path.resolve(env.DATABASE_PATH)), "sketches"),
       runner: env.BOX_RUNNER,
-      image: env.BOX_IMAGE,
+      image: env.BOX_IMAGE ?? "",
       vibesUrl: vibesUrl.replace(/\/+$/, ""),
       namespace: env.BOX_NAMESPACE,
       runtimeClass: env.BOX_RUNTIME_CLASS,
@@ -166,6 +174,12 @@ export function loadConfig(source: Record<string, string | undefined> = process.
       // Docker's homes, in a folder on this machine (not a volume of Docker's own), are right here.
       homesMount: env.BOX_HOMES_MOUNT ?? (env.BOX_RUNNER === "docker" && env.BOX_HOMES && path.isAbsolute(env.BOX_HOMES) ? env.BOX_HOMES : null),
       scope: env.BOX_SCOPE ?? null,
+      fakeChanges: devLogin
+        ? (env.VIBES_FAKE_CHANGES ?? "")
+            .split(",")
+            .map((n) => n.trim())
+            .filter(Boolean)
+        : [],
     };
   }
   return {

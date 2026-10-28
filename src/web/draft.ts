@@ -8,7 +8,7 @@
 //
 // A draft records only what you changed, on top of whatever is live, so
 // changes others make meanwhile still show through: room tone, each shader's
-// mute, mask, params and place in the stack, the shaders taken out of it, and
+// mute, mask, home, params and place in the stack, the shaders taken out of it, and
 // the sketches being put in (each on its home, previewed once built, with a
 // pool of its own for its params, which goes in with it). A shader on its way
 // in, or one you're adding, is switched and moved like any other: vibes puts
@@ -17,7 +17,8 @@
 
 import { useSyncExternalStore } from "react";
 import type { Channels } from "../shared/arclamp.ts";
-import { pathOf, type AddSpec, type Op, type Pool } from "../shared/live.ts";
+import { isBaseColor } from "../shared/base-color.ts";
+import { keysOf, pathOf, type AddSpec, type Op, type Pool } from "../shared/live.ts";
 import {
   changedParts,
   cleanValue,
@@ -42,6 +43,8 @@ export interface ShaderPatch {
   muted?: boolean;
   /** The lights it may not change: its whole mask. */
   mask?: number[];
+  /** An instance's (or a sketch being added's) home: all it can light. */
+  home?: number[];
   /** Its params' values, by name: each light's, by id, over the live ones (null back to the default). */
   params?: Record<string, Record<string, ParamValue | null>>;
 }
@@ -135,6 +138,7 @@ export interface Layer {
 function layerOfAdding(a: Adding, d: Draft): Layer {
   const script = a.build ? (addedScripts.get(a.build.id) ?? "") : "";
   const commit = a.build?.commit ?? "";
+  const patch = d.edits[a.key] ?? {};
   const instance: Instance = {
     id: a.key,
     sketchId: a.sketchId,
@@ -143,7 +147,7 @@ function layerOfAdding(a: Adding, d: Draft): Layer {
     buildId: a.build?.id ?? "",
     branch: a.branch,
     head: null,
-    home: a.home,
+    home: patch.home ?? a.home,
     state: a.build?.state === "failed" ? "failed" : "building",
     error: a.build?.error ?? null,
     next: null,
@@ -151,7 +155,6 @@ function layerOfAdding(a: Adding, d: Draft): Layer {
     at: 0,
   };
   const sketch: ShaderSketch = { id: a.sketchId, name: a.sketchName, commit, edited: false, deleted: false };
-  const patch = d.edits[a.key] ?? {};
   // Its params as its preview says it declares them, with whatever's been set on them meanwhile.
   const params = a.declared ? paramsWith({ declared: a.declared, values: {} }, patch.params) : null;
   return {
@@ -181,16 +184,6 @@ export const changeable = (layer: Pick<Layer, "stage">) => layer.stage !== "fail
  * shares a light with.
  */
 export const reachOf = (layer: Layer): readonly number[] => layer.instance?.home ?? layer.footprint;
-
-/** What's become of a shader, if anything has: failing, restarting, updating, or couldn't update. */
-export function statusOf(layer: Layer): string | null {
-  const { shader, instance } = layer;
-  if (shader?.state === "error") return "failing";
-  if (shader?.state === "restarting") return "restarting";
-  if (instance?.next?.state === "building") return `updating to ${instance.next.commit.slice(0, 7)}`;
-  if (instance?.next?.state === "failed") return "couldn't update";
-  return null;
-}
 
 /** Whether a shader's on for some lights: for all of them, none (or it's muted), or some. */
 export type SwitchState = "on" | "off" | "mixed";
@@ -242,6 +235,34 @@ export function sameMask(a: readonly number[], b: readonly number[]): boolean {
   if (a.length !== b.length) return false;
   const ids = new Set(a);
   return b.every((id) => ids.has(id));
+}
+
+/** Whether a home pending for a shader isn't the one its instance has (false for one that isn't an instance). */
+const homeDiffers = (shader: Pick<SceneShader, "instance">, home: readonly number[] | undefined): boolean =>
+  !!home && !!shader.instance && !sameMask(home, shader.instance.home);
+
+/** The lights a shader's on: of those it reaches, the ones it isn't switched off for (none, muted). */
+export function domainOf(layer: Layer): number[] {
+  if (layer.muted) return [];
+  const masked = new Set(layer.mask);
+  return reachOf(layer).filter((id) => !masked.has(id));
+}
+
+/**
+ * A shader on just these lights, as a draft edit: on none, it's muted (its
+ * mask left as it was); otherwise unmuted and masked from every other light.
+ * An instance (or a sketch being added) can only light its home, so lights
+ * outside it are added to it; one put in some other way has no home, its
+ * mask is all there is. Base Color's home is every light, and nobody moves
+ * it (vibes refuses to): just its mask, for it.
+ */
+export function domainPatch(layer: Layer, ids: Iterable<number>, all: readonly number[]): ShaderPatch {
+  const on = new Set(ids);
+  if (on.size === 0) return { muted: true };
+  const mask = sortedIds(all.filter((id) => !on.has(id)));
+  const home = isBaseColor(layer.key) ? null : layer.instance?.home;
+  if (home && [...on].some((id) => !home.includes(id))) return { muted: false, mask, home: sortedIds([...home, ...on]) };
+  return { muted: false, mask };
 }
 
 /** The room tone template with the draft's values over the live one. */
@@ -318,6 +339,9 @@ function paramOps(pool: string, declared: readonly ParamSpec[] | null, live: Poo
   return ops;
 }
 
+/** The light a param op is for: pools/<pool>/values/<param>/<light>, and maybe a color's number after it. */
+const lightOfParamOp = (op: Op): number => Number(keysOf(op[0])[4]);
+
 /** Whether what's pending changes a shader's params at all. */
 function paramsDiffer(scene: Scene, shader: SceneShader, pending: ShaderPatch["params"]): boolean {
   const pool = shader.pool ? scene.pools[shader.pool] : undefined;
@@ -336,7 +360,7 @@ function layerOfShader(scene: Scene, shader: SceneShader, d: Draft): Layer {
     muted: patch.muted ?? shader.muted,
     mask: patch.mask ?? shader.mask,
     by: shader.by,
-    instance: shader.instance,
+    instance: shader.instance && patch.home ? { ...shader.instance, home: patch.home } : shader.instance,
     footprint: shader.footprint,
     adding: null,
     params: shader.pool ? paramsWith(paramsOfPool(scene.pools[shader.pool]), patch.params) : null,
@@ -388,10 +412,82 @@ export function pendingCount(scene: Scene, d: Draft): number {
   n += removedOf(scene, d).length;
   n += d.added.length;
   for (const l of layers) {
-    if (l.muted !== l.shader!.muted || !sameMask(l.mask, l.shader!.mask) || paramsDiffer(scene, l.shader!, d.edits[l.key]?.params)) n++;
+    const patch = d.edits[l.key];
+    if (
+      l.muted !== l.shader!.muted ||
+      !sameMask(l.mask, l.shader!.mask) ||
+      homeDiffers(l.shader!, patch?.home) ||
+      paramsDiffer(scene, l.shader!, patch?.params)
+    )
+      n++;
   }
   if (layers.map((l) => l.key).join() !== sceneKeys(scene, d).join()) n++;
   return n;
+}
+
+/**
+ * Each shader the draft changes anything about, if it were saved, and the
+ * lights that changes: one switched on or off (all it reaches), or for some
+ * lights (those); moved to another home (the lights in one but not the
+ * other); its params' values for any; one taken out, put
+ * in, or moved in the stack (all it reaches). Each sorted; a shader with
+ * nothing changed isn't in it.
+ */
+export function changesByLayer(scene: Scene, d: Draft): Map<LayerKey, number[]> {
+  const out = new Map<LayerKey, Set<number>>();
+  /** A change to a shader, and the lights it changes (maybe none). */
+  const touch = (key: LayerKey, ids: Iterable<number>) => {
+    let s = out.get(key);
+    if (!s) out.set(key, (s = new Set()));
+    for (const id of ids) s.add(id);
+  };
+  /** The lights in one of these but not the other. */
+  const differ = (a: readonly number[], b: readonly number[]) => {
+    const was = new Set(a);
+    const now = new Set(b);
+    return [...a.filter((id) => !now.has(id)), ...b.filter((id) => !was.has(id))];
+  };
+  const layers = layersOf(scene, d);
+  for (const l of layers) {
+    if (l.adding) {
+      touch(l.key, reachOf(l));
+      continue;
+    }
+    const shader = l.shader;
+    if (!shader) continue;
+    if (l.muted !== shader.muted) touch(l.key, reachOf(l));
+    if (shader.instance && homeDiffers(shader, d.edits[l.key]?.home)) touch(l.key, differ(shader.instance.home, reachOf(l)));
+    if (!sameMask(shader.mask, l.mask)) touch(l.key, differ(shader.mask, l.mask));
+    const pool = shader.pool ? scene.pools[shader.pool] : undefined;
+    const params = shader.pool ? paramOps(shader.pool, pool?.declared ?? null, pool?.values, d.edits[l.key]?.params) : [];
+    if (params.length > 0) touch(l.key, params.map(lightOfParamOp));
+  }
+  for (const key of removedOf(scene, d)) {
+    const l = layerOf(scene, d, key);
+    touch(key, l ? reachOf(l) : []);
+  }
+  // Moved: each one in the room no longer over the same ones as it was.
+  const was = sceneKeys(scene, d);
+  const now = layers.filter((l) => l.shader).map((l) => l.key);
+  if (was.join() !== now.join()) {
+    for (const l of layers) {
+      if (!l.shader) continue;
+      const before = was.slice(was.indexOf(l.key) + 1).join();
+      const after = now.slice(now.indexOf(l.key) + 1).join();
+      if (before !== after) touch(l.key, reachOf(l));
+    }
+  }
+  return new Map([...out].map(([key, ids]) => [key, [...ids].sort((a, b) => a - b)]));
+}
+
+/**
+ * The lights the draft changes anything for, if it were saved: their room
+ * tone, and whatever it changes about any shader (changesByLayer). Sorted.
+ */
+export function changedLights(scene: Scene, d: Draft): number[] {
+  const out = new Set<number>(Object.keys(roomtoneChanges(scene, d)).map(Number));
+  for (const ids of changesByLayer(scene, d).values()) ids.forEach((id) => out.add(id));
+  return [...out].sort((a, b) => a - b);
 }
 
 /** The shaders the draft takes out that are still there. */
@@ -403,16 +499,18 @@ export function removedOf(scene: Scene, d: Draft): LayerKey[] {
 // arclamp keeps channels as float32, so that's as close as a value can match.
 const same = (a: number | undefined, b: number) => a !== undefined && Math.fround(a) === Math.fround(b);
 
-/** The room tone values the draft actually changes. */
-export function roomtoneChanges(scene: Scene, d: Draft): Record<string, Channels> {
-  const base = scene.roomtone?.lights ?? {};
+/** Of channel values over others, the ones that are different. */
+function colorChanges(base: Record<string, Channels>, over: Record<string, Channels>): Record<string, Channels> {
   const out: Record<string, Channels> = {};
-  for (const [id, ch] of Object.entries(d.roomtone)) {
+  for (const [id, ch] of Object.entries(over)) {
     const diff = Object.fromEntries(Object.entries(ch).filter(([name, v]) => !same(base[id]?.[name], v)));
     if (Object.keys(diff).length > 0) out[id] = diff;
   }
   return out;
 }
+
+/** The room tone values the draft actually changes. */
+export const roomtoneChanges = (scene: Scene, d: Draft): Record<string, Channels> => colorChanges(scene.roomtone?.lights ?? {}, d.roomtone);
 
 // ---- the store --------------------------------------------------------------
 
@@ -478,6 +576,13 @@ export const drafts = {
     const was = draft.edits[key]?.params?.[name] ?? {};
     const now = { ...was, ...Object.fromEntries(changes.map(([id, v]) => [String(id), v])) };
     set({ ...draft, edits: { ...draft.edits, [key]: { ...draft.edits[key], params: { ...draft.edits[key]?.params, [name]: now } } } });
+  },
+  /** Every one of these params back to its default, for these lights (each name's), in one change. */
+  resetParams(key: LayerKey, params: readonly { name: string; ids: readonly number[] }[]) {
+    const was = draft.edits[key]?.params ?? {};
+    const now = { ...was };
+    for (const { name, ids } of params) now[name] = { ...now[name], ...Object.fromEntries(ids.map((id) => [String(id), null])) };
+    set({ ...draft, edits: { ...draft.edits, [key]: { ...draft.edits[key], params: now } } });
   },
   reorder(keysTopFirst: LayerKey[]) {
     set({ ...draft, order: keysTopFirst });
@@ -590,7 +695,7 @@ export function opsOf(scene: Scene, d: Draft): Op[] {
       sketch: a.sketchId,
       branch: a.branch,
       ...(a.build && a.build.state !== "failed" ? { build: a.build.id } : {}),
-      home: a.home,
+      home: d.edits[a.key]?.home ?? a.home,
       muted: layer.muted,
       mask: layer.mask,
       ...(d.order ? { above: under ?? "" } : {}),
@@ -606,6 +711,7 @@ export function opsOf(scene: Scene, d: Draft): Op[] {
   for (const [key, patch] of Object.entries(d.edits)) {
     const shader = byKey.get(key);
     if (!shader || !changeable(shader) || d.removed.includes(key)) continue;
+    if (homeDiffers(shader, patch.home)) ops.push([pathOf("shaders", key, "instance", "home"), patch.home!]);
     if (patch.muted !== undefined && patch.muted !== shader.muted) ops.push([pathOf("shaders", key, "muted"), patch.muted]);
     if (patch.mask !== undefined && !sameMask(patch.mask, shader.mask)) ops.push([pathOf("shaders", key, "mask"), patch.mask]);
     if (shader.pool) {

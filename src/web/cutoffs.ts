@@ -40,8 +40,8 @@ export type Cutoffs = Record<Device, Tables>;
 
 type Sizes = Record<keyof Tables, readonly [number, number]>;
 
-/** Points across and down: a point per device pixel at 2×, for the wheel (224 CSS px) and the strip at its usual size (320 × 96). */
-export const SIZES: Sizes = { wheel: [449, 449], strip: [641, 193] };
+/** Points across and down: a point per device pixel at 2×, for the wheel and the whites' square (224 CSS px each). */
+export const SIZES: Sizes = { wheel: [449, 449], strip: [449, 449] };
 
 // The slider's first step: a color the bulbs don't make as asked there, they never do.
 const LOOK_MIN = 0.005;
@@ -51,9 +51,14 @@ const FIDELITY = 0.5;
 const STEPS = 14;
 const TOP = 0xffff;
 
-/** Where each picker's colors are (fractions across and down), and how far it's worked out: the wheel, to a little past its rim, as backdrop.ts works it out. */
+/**
+ * Where each picker's colors are (fractions across and down), and how far
+ * it's worked out: each its whole square. The wheel's past its rim (more
+ * saturated still) is only seen while it morphs to and from the whites'
+ * square (its canvas is clipped to the disc), but it's worked out the same.
+ */
 const PICKERS: Record<keyof Tables, { colorAt: (x: number, y: number) => [number, number]; worked: (x: number, y: number) => boolean }> = {
-  wheel: { colorAt: (x, y) => wheelColor(x * 2 - 1, 1 - y * 2), worked: (x, y) => Math.hypot(x * 2 - 1, 1 - y * 2) <= 1.08 },
+  wheel: { colorAt: (x, y) => wheelColor(x * 2 - 1, 1 - y * 2), worked: () => true },
   strip: { colorAt: whitesColor, worked: () => true },
 };
 

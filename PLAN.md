@@ -12,8 +12,10 @@ lighting system at the Recurse Center, served at `vibes.recurse.com`.
   one Pi, or on two different hosts.
 - **No admins.** Everyone can edit everything, matching RC culture and arclamp.
   "Edit lights" sits behind an "admin mode" switch in the user menu, which
-  anyone can turn on; it is a guard against slips, not a permission. Room tone is open to everyone: it's the control people will
-  want most.
+  anyone can turn on; it is a guard against slips, not a permission. The
+  room's color is open to everyone: it's the control people will want most.
+  It's Base Color (below), vibes' own shader at the bottom; arclamp's room
+  tone, under it, is shown and changed in admin mode only.
 - **Degraded states are banners** across the top of the whole site: arclamp
   unreachable or refusing vibes' key, a radio disconnected, a dry run, or no
   live data. Nothing shows while all is well.
@@ -136,7 +138,8 @@ top-left wall corner. They're drawn as faint lines under the lights, over a
 grid whose spacing follows the zoom, with a metric and imperial scale bar.
 
 Dragging across the map box-selects lights (shift adds to the selection,
-⌘-click toggles one); so does one finger, adding, with no hold first, and
+or, all of them selected already, takes them out; alt takes them out, or,
+none of them selected, adds them; ⌘-click toggles one); so does one finger, adding, with no hold first, and
 holding a finger on a light shows what it is. ⌘-drag, middle-drag or two
 fingers pan; scroll or pinch zooms around the pointer (or the buttons, with
 "fit" to see the whole building). Switching floors keeps the view, so the building never jumps.
@@ -196,7 +199,18 @@ lights where they are, as free lights. vibes keeps its rail changes in the
    place in the stack.
 3. **Room tone.** ✅ Left panel: the whole room, a type, or lights selected on
    the map (click, shift-click, drag a box), set with the lemtone picker.
-   Old bulbs get on/off.
+   Old bulbs get on/off. Now Base Color's, over the room tone (below).
+   - **Base Color and the room tone** (`src/shared/base-color.ts`). arclamp's
+     room tone is the room's "normal", and only admin mode shows it (and its
+     color editor). Over it, the room's color is Base Color: a sketch baked
+     into vibes (`src/base-color`, built beside the web app), a Color param
+     for each color light and a switch for the old bulbs, seeded from the
+     room tone the first time. vibes keeps it in the room at the bottom: put
+     back as soon as it's gone, held muted until its params link, and moved
+     back down when anything goes under it. Nobody can remove it, move its
+     home or edit its code; muting it and per-light masks work as for any
+     shader. In the layers panel it can't be dragged, cloned or deleted, and
+     its params are open under its row in the selection to start with.
 4. **Simulated mode.** ✅ Any edit (room tone, or a shader's mute, mask or
    place in the stack) is pending, kept per browser, until
    Apply sends it all to arclamp or Discard drops it. Meanwhile the map shows

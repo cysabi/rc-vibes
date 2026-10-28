@@ -140,7 +140,7 @@ export function StreetView({ id, onClose }: { id: string; onClose: () => void })
         <p className="streetview-title">
           From camera <span className="mono">{id}</span>
         </p>
-        <button className="glass-button streetview-close" onClick={onClose} title="Close streetview (Esc)" aria-label="Close streetview">
+        <button className="glass-button streetview-close" onClick={onClose} aria-label="Close streetview">
           <CloseIcon />
         </button>
       </div>
@@ -175,8 +175,9 @@ const SPLIT_DEFAULT = () => (tall() ? 0.4 : 0.56);
 
 /**
  * The line between streetview and the map: drag it to give either more room
- * (remembered here), double-click it for the usual split. It sets the app's
- * --split straight away, so the map just resizes, without React redrawing it.
+ * (remembered here), double-click it for the usual split. It sets --split on
+ * what it splits (`app`: the app's body, under the banners) straight away, so
+ * the map just resizes, without React redrawing it.
  */
 export function SplitHandle({ app }: { app: RefObject<HTMLDivElement | null> }) {
   const set = (f: number) => app.current?.style.setProperty("--split", `${(Math.min(SPLIT_MAX, Math.max(SPLIT_MIN, f)) * 100).toFixed(2)}%`);

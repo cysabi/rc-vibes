@@ -11,6 +11,7 @@ import { authRoutes } from "./auth.ts";
 import { createBaseColor, type BaseColor } from "./base-color.ts";
 import { loadBaseColorScript } from "./base-color-script.ts";
 import { dockerRunner } from "./box-docker.ts";
+import { localRunner } from "./box-local.ts";
 import { createBoxProxy } from "./box-proxy.ts";
 import { createBoxes, type BoxRunner } from "./boxes.ts";
 import { buildApiRoutes, createBuilds, type BuildRunner } from "./builds.ts";
@@ -47,7 +48,10 @@ if (!config.production) origins.push("http://localhost:5173", "http://127.0.0.1:
 // Sketches, the boxes they're edited in, and their builds, while they're on.
 const sketches = config.sketches;
 let runner: (BoxRunner & BuildRunner) | null = null;
-if (sketches) runner = sketches.runner === "docker" ? dockerRunner(sketches) : (await import("./box-kube.ts")).kubernetesRunner(sketches);
+if (sketches) {
+  runner =
+    sketches.runner === "docker" ? dockerRunner(sketches) : sketches.runner === "local" ? localRunner() : (await import("./box-kube.ts")).kubernetesRunner(sketches);
+}
 const boxes = sketches && runner ? createBoxes(config, sketches, db, runner) : null;
 const builds = sketches && runner ? createBuilds(config, sketches, db, runner) : null;
 const proxy = boxes ? createBoxProxy(config, db, boxes) : null;

@@ -23,6 +23,15 @@ export function tagLabel(tag: string): string {
     .join(" ");
 }
 
+/**
+ * The main space: the open floor (couches, dining room, presentation space,
+ * kitchen, lobby), as against the named rooms. A light with any of these tags
+ * is in it. What vibes starts with selected.
+ */
+export const MAIN_SPACE_TAGS = new Set(["couches", "dining-room", "presentation-space", "kitchen", "lobby", "dave"]);
+
+export const inMainSpace = (tags: readonly string[] | null | undefined) => (tags ?? []).some((t) => MAIN_SPACE_TAGS.has(t));
+
 /** Whether two lights' tags are the same, in any order. */
 export function sameTags(a: readonly string[] | null, b: readonly string[] | null): boolean {
   const x = new Set(a ?? []);
