@@ -3,7 +3,8 @@
 // start) and the tempo (a light on the beat, warm on a bar's first; the
 // beats a minute, click to type; Tap; Sync, this beat's a bar's first), and
 // the nudge, and ending the show. It's there for everyone while a show's on;
-// with none, StartShow is, in the HUD, and the clock rests (shared/show.ts).
+// with none, the clock rests (shared/show.ts). A show starts (and ends, too)
+// from the account menu: ShowMenuItem, in it and the dock's own menu.
 // Each acts on the room's one clock at once, live mode or not: it's the
 // room's, never a pending edit. A press is put in arclamp's time as it
 // happened (rtime.ts), so it lands where it was meant however long it takes
@@ -16,7 +17,7 @@
 
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent } from "react";
 import { BEATS_PER_BAR, beatAt, MAX_BPM, MIN_BPM, tappedBpm, timeAt, type TransportAction } from "../../shared/show.ts";
-import { MoreIcon, PlayIcon } from "../icons.tsx";
+import { MoreIcon } from "../icons.tsx";
 import { rNow, rOfEvent } from "../rtime.ts";
 import { sendTransport, useShowClock, useShowOn } from "../scene.ts";
 import { Menu } from "./Menu.tsx";
@@ -52,25 +53,28 @@ const press = (act: (e: { timeStamp: number }) => void) => ({
   },
 });
 
-/** A show beginning, for the whole room: in the HUD while none is on. */
-export function StartShow() {
+/** A menu's item starting a show, for the whole room, or, with one on, ending it. */
+export function ShowMenuItem() {
   const on = useShowOn();
   const [error, setError] = useState<string | null>(null);
-  if (on) return null;
-  const start = (e: MouseEvent) =>
-    void sendTransport({ do: "start", at: rOfEvent(e) }).then(
+  const act = (e: MouseEvent) =>
+    void sendTransport({ do: on ? "end" : "start", at: rOfEvent(e) }).then(
       () => setError(null),
       (err: Error) => setError(err.message),
     );
   return (
     <>
-      <button className="glass-button start-show" onClick={start} title="For everyone: the show clock's dock, the piece at 0:00, the beat going on">
-        <PlayIcon /> Start show
+      <button
+        className="menu-item"
+        onClick={act}
+        title={on ? "For everyone: the dock goes, and the clock rests at 120 beats a minute" : "For everyone: the show clock's dock, the piece at 0:00, the beat going on"}
+      >
+        {on ? "End show" : "Start show"}
       </button>
       {error && (
-        <span className="map-note" role="alert">
+        <p className="error-text" role="alert">
           {error}
-        </span>
+        </p>
       )}
     </>
   );
@@ -256,9 +260,7 @@ function Transport({ onHeight }: { onHeight: (px: number) => void }) {
                 </button>
               </span>
             </div>
-            <button className="menu-item" onClick={(e) => void act({ do: "end", at: rOfEvent(e) })} title="For everyone: the dock goes, and the clock rests at 120 beats a minute">
-              End show
-            </button>
+            <ShowMenuItem />
           </Menu>
         </div>
       </div>

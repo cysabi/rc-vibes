@@ -2434,6 +2434,11 @@ button.layer-chevron:hover {
   color: var(--ink-2);
 }
 
+.menu-panel .error-text {
+  margin: 0;
+  padding: 2px 10px 6px;
+}
+
 .menu-item:hover {
   background: var(--fill-2);
   color: var(--ink);

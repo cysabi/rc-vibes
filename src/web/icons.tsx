@@ -135,10 +135,3 @@ export const InfoIcon = () => (
     <path d="M8 7.2v4M8 4.9v.1" />
   </Svg>
 );
-
-/** A show starting. */
-export const PlayIcon = () => (
-  <Svg strokeWidth="0" fill="currentColor">
-    <path d="M5 3.2v9.6a.6.6 0 0 0 .9.5l7.6-4.8a.6.6 0 0 0 0-1L5.9 2.7a.6.6 0 0 0-.9.5Z" />
-  </Svg>
-);

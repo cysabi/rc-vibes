@@ -20,7 +20,7 @@ import { savedFloor, saveFloor, useLiveMode } from "./settings.ts";
 import { useSimulation } from "./sim.ts";
 import { navigate, usePath, useQueryParam } from "./route.ts";
 import { SplitHandle, StreetView } from "./components/StreetView.tsx";
-import { ShowDock, StartShow } from "./components/Transport.tsx";
+import { ShowDock } from "./components/Transport.tsx";
 import { SketchesLink, SketchPages } from "./sketches/SketchPages.tsx";
 
 const NO_RAILS: Rail[] = [];
@@ -217,8 +217,8 @@ function Shell() {
   // map's own. While anything's selected, a panel about it comes in along the
   // left edge (or up from the bottom, on a phone), and the tags move over;
   // what it looks like floats in the map's bottom left (not on a phone).
-  // Along the bottom, while a show's on, the show clock's dock; with none,
-  // the button to start one is in the HUD (Transport.tsx).
+  // Along the bottom, while a show's on, the show clock's dock (Transport.tsx;
+  // a show starts from the account menu).
   const hasSelection = selectedHere.size > 0;
   const narrow = useNarrow();
   // With streetview open, the room from its camera takes one side and the map
@@ -273,7 +273,6 @@ function Shell() {
           ) : (
             <TagChips lights={here} selected={selectedHere} onSelect={selectByTag} />
           )}
-          <StartShow />
           <SketchesLink />
           <UserMenu />
         </div>

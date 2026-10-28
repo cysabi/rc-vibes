@@ -4,6 +4,7 @@ import { setAdminMode, setLiveMode, useAdminMode, useLiveMode } from "../setting
 import { Avatar } from "./Avatar.tsx";
 import { Menu } from "./Menu.tsx";
 import { Segmented } from "./Segmented.tsx";
+import { ShowMenuItem } from "./Transport.tsx";
 
 const GAMUTS: { value: GamutChoice; label: string }[] = [
   { value: "auto", label: "Auto" },
@@ -11,7 +12,7 @@ const GAMUTS: { value: GamutChoice; label: string }[] = [
   { value: "display-p3", label: "P3" },
 ];
 
-/** Who's logged in, as an avatar that opens admin mode, live mode, how colors show, and logging out. */
+/** Who's logged in, as an avatar that opens admin mode, live mode, how colors show, starting or ending a show, and logging out. */
 export function UserMenu() {
   const me = useMe();
   const admin = useAdminMode();
@@ -53,6 +54,7 @@ export function UserMenu() {
             <small>{hdrNote(display)}</small>
           </span>
         </label>
+        <ShowMenuItem />
         <button className="menu-item" onClick={() => logout.mutate()} disabled={logout.isPending}>
           Log out
         </button>
