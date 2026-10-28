@@ -67,9 +67,11 @@ const spot: z.ZodType<Spot | null> = z
   ])
   .nullable();
 const railShape: z.ZodType<RailShape | null> = z.object({ floor: z.number().int(), from: point, to: point }).nullable();
-// What's done to the show clock (shared/show.ts); its ranges are show.ts's to check.
+// What's done to the show (shared/show.ts); its ranges are show.ts's to check.
 const when = z.number().finite();
 const transportAction: z.ZodType<TransportAction> = z.discriminatedUnion("do", [
+  z.object({ do: z.literal("start"), at: when }),
+  z.object({ do: z.literal("end"), at: when }),
   z.object({ do: z.literal("play"), at: when }),
   z.object({ do: z.literal("stop"), at: when }),
   z.object({ do: z.literal("seek"), at: when, t: z.number().finite() }),

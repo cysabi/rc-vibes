@@ -2,20 +2,23 @@
 // transport (play or stop, where the piece is, click it to set; back to the
 // start) and the tempo (a light on the beat, warm on a bar's first; the
 // beats a minute, click to type; Tap; Sync, this beat's a bar's first), and
-// the nudge. Each acts on the room's one clock at once, live mode or not:
-// it's the room's, never a pending edit. A press is put in arclamp's time as
-// it happened (rtime.ts), so it lands where it was meant however long it
-// takes to get there: Tap and Sync as the finger comes down, not up. The
-// time and beat shown are the room's, by arclamp's time: the map plays the
-// room a moment later.
+// the nudge, and ending the show. It's there for everyone while a show's on;
+// with none, StartShow is, in the HUD, and the clock rests (shared/show.ts).
+// Each acts on the room's one clock at once, live mode or not: it's the
+// room's, never a pending edit. A press is put in arclamp's time as it
+// happened (rtime.ts), so it lands where it was meant however long it takes
+// to get there: Tap and Sync as the finger comes down, not up. The time and
+// beat shown are the room's, by arclamp's time: the map plays the room a
+// moment later.
 //
-// Keys, away from anything typed in: P plays or stops, T taps, B syncs.
+// Keys, away from anything typed in, while the dock's there: P plays or
+// stops, T taps, B syncs.
 
 import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent } from "react";
 import { BEATS_PER_BAR, beatAt, MAX_BPM, MIN_BPM, tappedBpm, timeAt, type TransportAction } from "../../shared/show.ts";
-import { MoreIcon } from "../icons.tsx";
+import { MoreIcon, PlayIcon } from "../icons.tsx";
 import { rNow, rOfEvent } from "../rtime.ts";
-import { sendTransport, useShowClock } from "../scene.ts";
+import { sendTransport, useShowClock, useShowOn } from "../scene.ts";
 import { Menu } from "./Menu.tsx";
 
 // Taps further apart than this start a tempo over; the last this many make it.
@@ -49,7 +52,36 @@ const press = (act: (e: { timeStamp: number }) => void) => ({
   },
 });
 
-export function Transport({ onHeight }: { onHeight: (px: number) => void }) {
+/** A show beginning, for the whole room: in the HUD while none is on. */
+export function StartShow() {
+  const on = useShowOn();
+  const [error, setError] = useState<string | null>(null);
+  if (on) return null;
+  const start = (e: MouseEvent) =>
+    void sendTransport({ do: "start", at: rOfEvent(e) }).then(
+      () => setError(null),
+      (err: Error) => setError(err.message),
+    );
+  return (
+    <>
+      <button className="glass-button start-show" onClick={start} title="For everyone: the show clock's dock, the piece at 0:00, the beat going on">
+        <PlayIcon /> Start show
+      </button>
+      {error && (
+        <span className="map-note" role="alert">
+          {error}
+        </span>
+      )}
+    </>
+  );
+}
+
+/** The dock, while a show's on. */
+export function ShowDock({ onHeight }: { onHeight: (px: number) => void }) {
+  return useShowOn() ? <Transport onHeight={onHeight} /> : null;
+}
+
+function Transport({ onHeight }: { onHeight: (px: number) => void }) {
   const clock = useShowClock();
   const dock = useRef<HTMLDivElement>(null);
   const time = useRef<HTMLButtonElement>(null);
@@ -207,8 +239,8 @@ export function Transport({ onHeight }: { onHeight: (px: number) => void }) {
         )}
         <span className="dock-spacer" />
         <div className="dock-more">
-          <Menu align="end" side="above" className="transport-button" title="Nudge the show clock" label={<MoreIcon />}>
-            <p className="menu-heading">Show clock</p>
+          <Menu align="end" side="above" className="transport-button" title="Nudge the show clock, or end the show" label={<MoreIcon />}>
+            <p className="menu-heading">Show</p>
             <div className="menu-field">
               <span>
                 Nudge: {clock.nudge > 0 ? "+" : ""}
@@ -224,6 +256,9 @@ export function Transport({ onHeight }: { onHeight: (px: number) => void }) {
                 </button>
               </span>
             </div>
+            <button className="menu-item" onClick={(e) => void act({ do: "end", at: rOfEvent(e) })} title="For everyone: the dock goes, and the clock rests at 120 beats a minute">
+              End show
+            </button>
           </Menu>
         </div>
       </div>

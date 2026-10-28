@@ -1,7 +1,7 @@
 import { beforeEach, describe, expect, it, vi } from "vitest";
 import { Here, roomOf } from "./here.ts";
 import type { VibesHost } from "./param.ts";
-import { beatAt, showClock, timeAt, type ShowClock } from "./wire.ts";
+import { beatAt, RESTING_BPM, restingClock, showClock, timeAt, type ShowClock } from "./wire.ts";
 
 const g = globalThis as Record<string, unknown>;
 const room = roomOf({ initial_time: 0, lights: [{ id: 1, channels: { on: 0 }, coords: { mm_x: 0, mm_y: 0, floor: 4 } }] });
@@ -47,10 +47,19 @@ describe("the show clock, as the wire has it", () => {
 });
 
 describe("show", () => {
-  it("is 0, stopped, with no tempo, till vibes says otherwise", async () => {
+  it("rests till vibes says otherwise: playing, at 120, on the grid from 1970, the piece from the sketch's start", async () => {
     const { show } = await load();
-    expect([show.time(at(T)), show.playing(at(T)), show.beat(at(T)), show.bar(at(T)), show.bpm(at(T))]).toEqual([0, false, 0, 0, 0]);
-    expect(show.clock.every(1).env()(at(T))).toBe(0);
+    const here = new Here(0, 0, 7.5, 0, T + 250, room.lights[0]!, room);
+    expect(show.time(here)).toBe(7.5);
+    expect(show.playing(here)).toBe(true);
+    expect(show.bpm(here)).toBe(RESTING_BPM);
+    expect(show.clock.bpm).toBe(RESTING_BPM);
+    // T is a whole bar from 1970; a quarter second on, half a beat.
+    expect(show.beat(here) % 4).toBeCloseTo(0.5, 4);
+    expect(show.bar(at(T + 2000)) % 1).toBeCloseTo(0, 4);
+    // Where vibes' resting clock is, whenever it began.
+    expect(show.beat(here)).toBeCloseTo(beatAt(restingClock(T - 5000), T + 250), 4);
+    expect(show.clock.every(1).env({ attack: 0.01, release: 0.3 })(at(T + 10))).toBeCloseTo(1, 4);
   });
 
   it("reads the clock vibes sends at each frame's own time", async () => {

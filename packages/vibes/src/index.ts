@@ -51,5 +51,6 @@ export { clock, type Clock, type Every } from "./signal.ts";
 export { param, type ParamOptions, type VibesHost } from "./param.ts";
 export { show, type Show } from "./show.ts";
 export type { ColorValue, LightFilter, ParamSpec, ParamValue, ShowClock } from "./wire.ts";
+export { RESTING_BPM } from "./wire.ts";
 export { chance, clamp, decay, ease, fract, hash, lerp, noiseAt, remap, saw, smoothstep, square, tri, wave } from "./shape.ts";
 export { sketch, type Look, type LookResult, type Looks, type SketchOptions, type SwitchLook, type SwitchResult } from "./sketch.ts";

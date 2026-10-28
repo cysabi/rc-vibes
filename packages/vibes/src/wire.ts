@@ -126,6 +126,17 @@ export interface ClockEvent {
 /** Beats to a bar: a downbeat is a whole multiple of it. */
 export const BEATS_PER_BAR = 4;
 
+/** The tempo the room rests at, with no show on: so a sketch that moves on the beat moves well anyway. */
+export const RESTING_BPM = 120;
+
+/**
+ * The clock with no show on, anchored at `at` (the show's own time: arclamp's,
+ * less the nudge): playing, the piece starting then, and beating at
+ * RESTING_BPM on one grid for every sketch, counted from 1970, so any two
+ * sketches resting are on the same beat, whenever either started.
+ */
+export const restingClock = (at: number, nudge = 0): ShowClock => ({ playing: true, at, t: 0, bpm: RESTING_BPM, beat: (at * RESTING_BPM) / 60_000, nudge });
+
 /** Where the piece is (seconds) at `ms`, in arclamp's time. */
 export const timeAt = (c: ShowClock, ms: number): number => c.t + (c.playing ? (ms - c.nudge - c.at) / 1000 : 0);
 

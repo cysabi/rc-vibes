@@ -18,13 +18,14 @@
 //
 // It comes from vibes on the sketch's stream, as its params do (param.ts),
 // when the stream opens and each time it changes; between, it runs on by
-// itself. Till vibes has said (or with no stream: a sketch run elsewhere),
-// it's 0, stopped, with no tempo.
+// itself. With no show on, it rests: playing, at 120 beats a minute, on a
+// beat every sketch shares. Till vibes has said (or with no stream: a sketch
+// run elsewhere), it rests too, the piece starting with the sketch.
 
 import { field, type Field } from "./field.ts";
 import { heardClock } from "./param.ts";
 import { beatClock, type Clock } from "./signal.ts";
-import { BEATS_PER_BAR, beatAt, timeAt } from "./wire.ts";
+import { BEATS_PER_BAR, beatAt, RESTING_BPM, timeAt } from "./wire.ts";
 
 export interface Show {
   /** Where the piece is, in seconds. */
@@ -41,19 +42,24 @@ export interface Show {
   readonly clock: Clock;
 }
 
+// Till vibes has said: resting, on the grid vibes rests on, from 1970.
 const beat = field(({ now }) => {
   const c = heardClock();
-  return c ? beatAt(c, now) : 0;
+  return c ? beatAt(c, now) : (now * RESTING_BPM) / 60_000;
 });
+const bpmNow = () => {
+  const c = heardClock();
+  return c ? (c.bpm ?? 0) : RESTING_BPM;
+};
 
 export const show: Show = {
-  time: field(({ now }) => {
+  time: field(({ now, t }) => {
     const c = heardClock();
-    return c ? timeAt(c, now) : 0;
+    return c ? timeAt(c, now) : t;
   }),
-  playing: field(() => heardClock()?.playing ?? false),
+  playing: field(() => heardClock()?.playing ?? true),
   beat,
   bar: field((here) => beat(here) / BEATS_PER_BAR),
-  bpm: field(() => heardClock()?.bpm ?? 0),
-  clock: beatClock(beat, () => heardClock()?.bpm ?? 0),
+  bpm: field(bpmNow),
+  clock: beatClock(beat, bpmNow),
 };

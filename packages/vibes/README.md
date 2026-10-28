@@ -281,8 +281,12 @@ const look = show.clock.every(4).seq([palettes.dusk, palettes.sea]); // a new lo
 export const update = sketch(osc(3, 0.1).color(look).boost(hit, 0.8));
 ```
 
-Till vibes says otherwise (or run anywhere without it), it's 0, stopped,
-with no tempo, and `show.clock` doesn't move.
+With no show on, the clock rests: playing, at `RESTING_BPM` (120) on a beat
+every sketch shares, so a sketch that moves on the beat looks right anyway.
+Starting a show in vibes keeps that beat going and puts the piece at 0:00,
+stopped; ending one rests the clock again. Till vibes says otherwise (or run
+anywhere without it), it rests too, with `show.time` counting from the
+sketch's start.
 
 ## Params
 

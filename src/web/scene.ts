@@ -7,14 +7,14 @@
 // stack of shaders, top first, the room tone, and the pools) and the lights'
 // layout (useLayout). The tree leaves scripts out (scriptHash says which
 // each shader's is); the preview needs them to run pending edits, so they're
-// fetched once each, by hash, and put back. And the show clock (useShowClock,
-// sendTransport), with arclamp's time to read it by, asked of vibes on the
-// same socket (rtime.ts).
+// fetched once each, by hash, and put back. And the show (useShowOn,
+// useShowClock, sendTransport), with arclamp's time to read its clock by,
+// asked of vibes on the same socket (rtime.ts).
 
 import { useCallback, useState, useSyncExternalStore } from "react";
 import type { RoomTemplate } from "../shared/arclamp.ts";
 import { fanOps, pathOf, unfanOps, withOps, type LiveTree, type Op, type Pool, type RoomMessage, type RoomRequest } from "../shared/live.ts";
-import { STOPPED, type ShowClock, type TransportAction } from "../shared/show.ts";
+import { RESTING, type ShowClock, type TransportAction } from "../shared/show.ts";
 import type { Lights, Placement, RailChange, Shader, ShaderKey, TagChange, TypeChange } from "../shared/vibes.ts";
 import { apiSocket, request } from "./api.ts";
 import { heard as heardTime, pageNow } from "./rtime.ts";
@@ -36,11 +36,12 @@ interface State {
   scene: Scene | undefined;
   layout: Lights | undefined;
   error: Error | null;
-  /** The show clock (shared/show.ts). */
+  /** Whether a show's on, and its clock (shared/show.ts). */
+  showOn: boolean;
   clock: ShowClock;
 }
 
-let state: State = { scene: undefined, layout: undefined, error: null, clock: STOPPED };
+let state: State = { scene: undefined, layout: undefined, error: null, showOn: RESTING.on, clock: RESTING.clock };
 let tree: LiveTree | null = null;
 // The last change the copy here has, of which run of vibes.
 let rev: number | null = null;
@@ -83,7 +84,7 @@ function publish() {
         }
       : undefined;
   }
-  state = { scene, layout, error: null, clock: tree.show?.clock ?? STOPPED };
+  state = { scene, layout, error: null, showOn: tree.show?.on ?? RESTING.on, clock: tree.show?.clock ?? RESTING.clock };
   for (const l of listeners) l();
 }
 
@@ -310,7 +311,12 @@ export function useLights(): { data: Lights | undefined; error: Error | null } {
   return { data: s.layout, error: s.scene ? null : s.error };
 }
 
-/** The show clock (shared/show.ts), as vibes last said it. */
+/** Whether a show's on (shared/show.ts), as vibes last said. */
+export function useShowOn(): boolean {
+  return useSyncExternalStore(subscribe, () => state.showOn);
+}
+
+/** The show clock (shared/show.ts), as vibes last said it: resting, with no show on. */
 export function useShowClock(): ShowClock {
   return useSyncExternalStore(subscribe, () => state.clock);
 }
@@ -318,7 +324,7 @@ export function useShowClock(): ShowClock {
 /** The show clock as vibes last said it, outside React (the map's simulation). */
 export const showClockNow = () => state.clock;
 
-/** Something done to the show clock, at once whatever the mode (it's the room's: never a pending edit). */
+/** Something done to the show (starting or ending one, too), at once whatever the mode (it's the room's: never a pending edit). */
 export const sendTransport = (action: TransportAction) => sendUpdate([[pathOf("show", "transport"), action]]);
 
 /** A change to the map: rails drawn or moved, lights moved, turned to another orientation, and/or tagged. */

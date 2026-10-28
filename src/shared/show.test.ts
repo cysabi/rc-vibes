@@ -1,9 +1,45 @@
 import { describe, expect, it } from "vitest";
-import { beatAt, STOPPED, tappedBpm, timeAt, transported, type ShowClock, type TransportAction } from "./show.ts";
+import { BEATS_PER_BAR, beatAt, RESTING_BPM, restingClock, tappedBpm, timeAt, transported, type ShowClock, type TransportAction } from "./show.ts";
 
 const T = 1_800_000_000_000;
 const playing: ShowClock = { playing: true, at: T, t: 10, bpm: 120, beat: 8, nudge: 0 };
+// Stopped at 0, with no tempo (a clock saved before there was a resting one).
+const STOPPED: ShowClock = { playing: false, at: 0, t: 0, bpm: null, beat: null, nudge: 0 };
 const run = (c: ShowClock, ...actions: TransportAction[]) => actions.reduce(transported, c);
+
+describe("the resting clock", () => {
+  it("plays from where it's anchored, at the resting tempo, on one grid whenever it was anchored", () => {
+    const a = restingClock(T);
+    expect(a).toMatchObject({ playing: true, t: 0, bpm: RESTING_BPM });
+    expect(timeAt(a, T + 1500)).toBeCloseTo(1.5, 9);
+    const b = restingClock(T + 12_345);
+    expect(beatAt(b, T + 60_000)).toBeCloseTo(beatAt(a, T + 60_000), 4);
+    // From 1970: T is a whole bar.
+    expect(beatAt(a, T) % BEATS_PER_BAR).toBeCloseTo(0, 4);
+  });
+
+  it("is on the grid moved by the nudge", () => {
+    const c = restingClock(T - 200, 200);
+    expect(beatAt(c, T + 200)).toBeCloseTo(beatAt(restingClock(T), T), 4);
+  });
+});
+
+describe("a show, started and ended", () => {
+  it("starts at 0:00, stopped, the beat going on as it was", () => {
+    const resting = restingClock(T);
+    const started = run(resting, { do: "start", at: T + 3000 });
+    expect(started).toMatchObject({ playing: false, t: 0, bpm: RESTING_BPM });
+    expect(timeAt(started, T + 9000)).toBe(0);
+    expect(beatAt(started, T + 9000)).toBeCloseTo(beatAt(resting, T + 9000), 4);
+  });
+
+  it("ends resting, from then, the nudge kept", () => {
+    const show = run(playing, { do: "nudge", ms: 40 }, { do: "tempo", at: T + 1000, bpm: 97 });
+    const ended = run(show, { do: "end", at: T + 5000 });
+    expect(ended).toEqual(restingClock(T + 5000 - 40, 40));
+    expect(timeAt(ended, T + 6000)).toBeCloseTo(1, 9);
+  });
+});
 
 describe("the show clock, acted on", () => {
   it("plays from where it stopped, and stops where it's got to", () => {

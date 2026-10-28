@@ -13,13 +13,30 @@
 //
 // The anchor's own time is the show's: arclamp's, less the nudge (wire.ts),
 // so a nudge moves the room's beat, and acting doesn't.
+//
+// A show is on or off, for the whole room (show/on). Off, the clock rests
+// (wire.ts' restingClock): playing, at 120 beats a minute on a grid every
+// sketch shares, so one that moves on the beat moves well anyway; nobody can
+// do anything to it but start a show. Starting one keeps the beat going and
+// puts the piece at 0:00, stopped, for someone to play; ending one rests the
+// clock again, the nudge kept (the room's sound is as late as it was).
 
-import { BEATS_PER_BAR, type ShowClock } from "../../packages/vibes/src/wire.ts";
+import { BEATS_PER_BAR, restingClock, type ShowClock } from "../../packages/vibes/src/wire.ts";
 
-export { BEATS_PER_BAR, beatAt, showClock, timeAt, type ShowClock } from "../../packages/vibes/src/wire.ts";
+export { BEATS_PER_BAR, beatAt, RESTING_BPM, restingClock, showClock, timeAt, type ShowClock } from "../../packages/vibes/src/wire.ts";
+
+/** The show: whether one's on, and its clock (resting, while none is). */
+export interface ShowState {
+  on: boolean;
+  clock: ShowClock;
+}
 
 /** What a page does to the clock, at `at` (arclamp's time). */
 export type TransportAction =
+  /** A show begins: the piece at 0:00, stopped, the beat going on. */
+  | { do: "start"; at: number }
+  /** The show's over: the clock rests. */
+  | { do: "end"; at: number }
   | { do: "play"; at: number }
   | { do: "stop"; at: number }
   /** To `t` seconds into the piece. */
@@ -35,17 +52,20 @@ export const MIN_BPM = 20;
 export const MAX_BPM = 300;
 export const MAX_NUDGE_MS = 1000;
 
-/** Before anyone's touched it: stopped at 0, no tempo. */
-export const STOPPED: ShowClock = { playing: false, at: 0, t: 0, bpm: null, beat: null, nudge: 0 };
+/** No show on, as a page has it till vibes says: resting, the piece counted from 1970 (vibes' rests from when it began). */
+export const RESTING: ShowState = { on: false, clock: restingClock(0) };
 
 /** The clock after an action: anchored where it was at the action's moment (never before its own anchor). */
 export function transported(c: ShowClock, a: TransportAction): ShowClock {
   if (a.do === "nudge") return { ...c, nudge: a.ms };
   const at = Math.max(a.at - c.nudge, c.at);
+  if (a.do === "end") return restingClock(at, c.nudge);
   const t = c.playing ? c.t + (at - c.at) / 1000 : c.t;
   const beat = c.bpm !== null && c.beat !== null ? c.beat + ((at - c.at) * c.bpm) / 60_000 : null;
   const now: ShowClock = { ...c, at, t, beat };
   switch (a.do) {
+    case "start":
+      return { ...now, t: 0, playing: false };
     case "play":
       return { ...now, playing: true };
     case "stop":

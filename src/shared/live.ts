@@ -29,9 +29,9 @@
 //   layout/lights/<light>/type        another orientation (an arclamp type)
 //   layout/lights/<light>/tags        its whole set of tags
 //   layout/rails/<rail>               RailShape, or null: taken away
-//   show/transport                    TransportAction: something done to the show clock (shared/show.ts)
+//   show/transport                    TransportAction: something done to the show (shared/show.ts)
 //
-// (show/clock is vibes' own: the clock each action makes.)
+// (show/on and show/clock are vibes' own: what each action makes.)
 //
 // Nothing is an array but a value: paths only go through objects.
 //
@@ -45,7 +45,7 @@
 
 import type { Channels, LightInfo, Rail } from "./arclamp.ts";
 import type { ParamSpec, ParamValue } from "./params.ts";
-import { STOPPED, type ShowClock } from "./show.ts";
+import { RESTING, type ShowState } from "./show.ts";
 import type { Shader, ShaderKey } from "./vibes.ts";
 
 /** Where a value is in the tree: its keys, joined with "/". */
@@ -95,11 +95,11 @@ export interface LiveTree {
   pools: Record<string, Pool>;
   /** Null until vibes has had the lights from arclamp. */
   layout: Layout | null;
-  /** The show clock (shared/show.ts). */
-  show: { clock: ShowClock };
+  /** Whether a show's on, and its clock (shared/show.ts). */
+  show: ShowState;
 }
 
-export const EMPTY_TREE: LiveTree = { roomtone: {}, shaders: {}, stack: [], pools: {}, layout: null, show: { clock: STOPPED } };
+export const EMPTY_TREE: LiveTree = { roomtone: {}, shaders: {}, stack: [], pools: {}, layout: null, show: RESTING };
 
 /** A sketch put in the room, as an update says it (at shaders/<+key>, its pending edit's key). */
 export interface AddSpec {

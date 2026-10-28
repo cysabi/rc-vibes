@@ -2,7 +2,7 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { Channels, LightInfo } from "../shared/arclamp.ts";
 import type { Op, RoomMessage } from "../shared/live.ts";
 import type { ParamSpec } from "../shared/params.ts";
-import { STOPPED } from "../shared/show.ts";
+import { RESTING } from "../shared/show.ts";
 import type { Me } from "../shared/vibes.ts";
 import { openDb } from "./db.ts";
 import type { Instances } from "./instances.ts";
@@ -268,7 +268,7 @@ describe("making updates", () => {
         act: (a) => {
           if (a.do === "tempo" && a.bpm < 20) throw new Refused(400, "bad_tempo", "too slow");
           calls.push(`show ${a.do}`);
-          return STOPPED;
+          return RESTING.clock;
         },
       },
     });
