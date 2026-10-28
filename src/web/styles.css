@@ -1047,8 +1047,9 @@ kbd {
   cursor: grabbing;
 }
 
-/* Room tone keeps the handle's room, so the names line up, but has none. */
-.layer.base .layer-grip {
+/* Room tone and Base Color keep the handle's room, so the names line up, but have none. */
+.layer.base .layer-grip,
+.layer.fixed .layer-grip {
   visibility: hidden;
 }
 

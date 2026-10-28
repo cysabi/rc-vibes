@@ -33,9 +33,10 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import type { Channels, LightInfo } from "../../shared/arclamp.ts";
-import { BASE_COLOR, isBaseColor } from "../../shared/base-color.ts";
+import { BASE_COLOR, BASE_COLOR_SPECS, isBaseColor } from "../../shared/base-color.ts";
 import { baseType, isBinary, isOn, lemtoneOf, requestedOf } from "../../shared/fixtures.ts";
 import { colorName, lemtoneCode, lumensText } from "../../shared/lemtone.ts";
+import { appliesTo, lemtoneOf as lemtoneOfColor, valuesAt, type ColorValue } from "../../shared/params.ts";
 import { tagLabel } from "../../shared/tags.ts";
 
 import { useBranchHead, useStatus } from "../api.ts";
@@ -355,6 +356,7 @@ export function SelectionPanel({ floor, here, selected, shader, onShader, onClos
                         <FixedRow
                           key={row.layer.key}
                           row={row}
+                          summary={baseSummary(row.layer, chosen)}
                           onSwitch={(on) => setOn(row, on)}
                           onOpen={() => onShader(row.layer.key)}
                           details={detailsOf(row.layer, chosen)}
@@ -416,6 +418,8 @@ interface RowProps {
   details: ReactNode | null;
   opened: boolean;
   onToggle: () => void;
+  /** Under its name in place of its commit (Base Color's: what it sets these lights to, baseSummary). */
+  summary?: string;
 }
 
 /**
@@ -486,7 +490,7 @@ function FixedRow(props: RowProps) {
     </>
   );
   return (
-    <li className={`layer${row.state === "off" ? " off" : ""}${expandable ? " expandable" : ""}${open ? " open" : ""}`}>
+    <li className={`layer fixed${row.state === "off" ? " off" : ""}${expandable ? " expandable" : ""}${open ? " open" : ""}`}>
       {expandable ? (
         <div className="layer-head" onClick={(e) => !(e.target as Element).closest("button") && onToggle()}>
           {head}
@@ -511,7 +515,7 @@ function FixedRow(props: RowProps) {
  * it shows under its row, or, if it shows nothing, a quiet dot in its place,
  * so every row ends in the same column.
  */
-function RowParts({ row, onSwitch, onOpen, details, opened, onToggle }: RowProps) {
+function RowParts({ row, onSwitch, onOpen, details, opened, onToggle, summary }: RowProps) {
   const { layer, state } = row;
   const tip =
     state === "on"
@@ -522,7 +526,7 @@ function RowParts({ row, onSwitch, onOpen, details, opened, onToggle }: RowProps
           ? `${layer.name} is off for these lights. Switch it back on for them.`
           : `${layer.name} is on for some of these lights. Switch it on for all of them.`;
   const sketch = layer.sketch;
-  const meta = metaOf(row);
+  const meta = metaOf(row, summary);
   return (
     <>
       <span className="layer-node" aria-hidden="true" />
@@ -571,13 +575,14 @@ function RowParts({ row, onSwitch, onOpen, details, opened, onToggle }: RowProps
 /** What its switch says, if it's not just on: on for some of these, or off (here, or everywhere). */
 const switchNote = ({ layer, state }: Row) => (state === "mixed" ? "on for some of these" : state === "off" ? (layer.muted ? "off" : "off here") : null);
 
-/** Under a shader's name: its commit (or branch), if it's a sketch's, and anything that's become of it. */
-function metaOf(row: Row): string | null {
+/** Under a shader's name: its commit (or branch), if it's a sketch's, or the summary given in its place; and anything that's become of it. */
+function metaOf(row: Row, summary?: string): string | null {
   const { layer } = row;
   const parts: string[] = [];
   const sketch = layer.sketch;
   const instance = layer.instance;
-  if (sketch) parts.push(instance ? commitName(sketch.commit, instance.branch, instance.head) : sketch.commit.slice(0, 7));
+  if (summary !== undefined) parts.push(summary);
+  else if (sketch) parts.push(instance ? commitName(sketch.commit, instance.branch, instance.head) : sketch.commit.slice(0, 7));
   if (layer.stage === "building") parts.push("building…");
   const status = statusOf(layer) ?? switchNote(row);
   if (status) parts.push(status);
@@ -676,6 +681,27 @@ function toneSummary(lights: LightInfo[], template: Record<string, Channels>): s
       colors.add(t && t.brightness > 0 ? lemtoneCode(t) : "off");
     }
   }
+  return summaryOf(colors, oldBulbs);
+}
+
+/** What Base Color sets these lights to, as room tone's row says it: "3000K · 546 lm · F1.00 · old bulbs off". */
+function baseSummary(layer: Layer, lights: LightInfo[]): string {
+  const colors = new Set<string>();
+  const oldBulbs = new Set<string>();
+  for (const spec of BASE_COLOR_SPECS) {
+    const ids = lights.filter((l) => appliesTo(spec, l)).map((l) => l.id);
+    for (const v of valuesAt(spec, layer.params?.values[spec.name], ids)) {
+      if (spec.kind === "color") {
+        const t = lemtoneOfColor(v as ColorValue);
+        colors.add(t.brightness > 0 ? lemtoneCode(t) : "off");
+      } else oldBulbs.add(v ? "on" : "off");
+    }
+  }
+  return summaryOf(colors, oldBulbs);
+}
+
+/** Colors and old bulbs' on or off, each one when they're alike, else "mixed". */
+function summaryOf(colors: Set<string>, oldBulbs: Set<string>): string {
   const one = (set: Set<string>) => (set.size === 1 ? [...set][0]! : "mixed");
   const parts: string[] = [];
   if (colors.size > 0) parts.push(one(colors));

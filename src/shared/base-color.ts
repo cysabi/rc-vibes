@@ -23,7 +23,7 @@ export const BASE_COLOR = {
 /** Its params, as its code declares them (src/base-color/main.ts) and with those very options. */
 export const BASE_COLOR_PARAMS = {
   /** Each color light's color: a warm white until it's set. */
-  color: { name: "color", default: color("2700K").at(400), options: { label: "Color" } },
+  color: { name: "color", default: color("3000K").at(700), options: { label: "Color" } },
   /** Each old bulb, on or off. */
   on: { name: "on", default: true, options: { label: "Old bulbs", lights: "switch" as const } },
 };
