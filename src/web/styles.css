@@ -136,8 +136,7 @@ p {
 .drawer-sheet.open,
 .map-note,
 .pending,
-.hover-card,
-.transport {
+.hover-card {
   background: var(--glass);
   -webkit-backdrop-filter: var(--blur);
   backdrop-filter: var(--blur);
@@ -293,7 +292,8 @@ kbd {
 .app {
   --inset-top: calc(var(--hud-h, 56px) + 8px);
   --inset-right: var(--gap);
-  --inset-bottom: 52px;
+  /* Above the show clock's dock (--dock-h: App.tsx). */
+  --inset-bottom: calc(52px + var(--dock-h, 0px));
   --inset-left: var(--gap);
   --panel-w: 360px;
   position: relative;
@@ -306,7 +306,7 @@ kbd {
 .app.has-selection {
   --inset-left: calc(var(--panel-w) + var(--gap));
   /* What it looks like is in the bottom left corner. */
-  --inset-bottom: max(52px, calc(var(--preview-h, 0px) + var(--gap) * 2));
+  --inset-bottom: calc(max(52px, calc(var(--preview-h, 0px) + var(--gap) * 2)) + var(--dock-h, 0px));
 }
 
 .app.has-selection .hud-bar {
@@ -2073,6 +2073,11 @@ button.layer-chevron:hover {
     --inset-bottom: calc(var(--sheet-h, 0px) + 52px);
   }
 
+  /* The show clock's dock makes way for the sheet. */
+  .app.has-selection .show-dock {
+    display: none;
+  }
+
   /* What it looks like isn't shown here (see App), so there's no dusk for it. */
   .map-scrim {
     display: none;
@@ -2420,140 +2425,152 @@ button.layer-chevron:hover {
   color: var(--ink);
 }
 
-.menu-note {
-  padding: 6px 10px 8px;
-  color: var(--mute);
-  font-size: 11.5px;
-  line-height: 1.45;
+/* The show clock's dock, along the bottom of the map (Transport.tsx): one
+   bar, the transport and the tempo each a pill in it. */
+.show-dock {
+  position: absolute;
+  right: var(--inset-right);
+  bottom: var(--gap);
+  left: var(--inset-left);
+  z-index: 9;
+  display: flex;
+  flex-direction: column;
+  border-radius: var(--radius);
+  background: var(--glass-strong);
+  -webkit-backdrop-filter: var(--blur);
+  backdrop-filter: var(--blur);
+  box-shadow:
+    inset 0 0 0 1px var(--edge),
+    var(--float);
 }
 
-/* The show clock's transport (Transport.tsx): one glass pill along the top,
-   its time and tempo in the mono face, a dot for each beat of a bar. */
+.dock-bar {
+  display: flex;
+  flex-wrap: wrap;
+  align-items: center;
+  gap: 8px;
+  min-width: 0;
+  padding: 7px 8px 7px 10px;
+}
+
+.dock-spacer {
+  flex: 1;
+}
+
+/* The transport (the show clock): play or stop, the time (click to set), back to the start. */
 .transport {
-  display: inline-flex;
-  flex: none;
+  display: flex;
   align-items: center;
   gap: 2px;
-  height: 38px;
-  padding: 0 5px;
-  border-radius: 13px;
+  min-height: 34px;
+  padding: 0 6px;
+  border-radius: 999px;
+  background: var(--well);
 }
 
-.transport-button {
-  display: inline-grid;
-  place-items: center;
+.transport-button,
+.transport-time {
   min-width: 28px;
   height: 28px;
-  padding: 0 8px;
-  border-radius: 9px;
-  background: none;
-  color: var(--ink-2);
-  font-weight: 550;
-  white-space: nowrap;
-  transition:
-    background 0.15s,
-    color 0.15s;
+  padding: 0 6px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  cursor: pointer;
 }
 
-.transport-button.play,
-.transport-button.more {
-  padding: 0;
-}
-
-.transport-button:hover:not(:disabled),
+.transport-button:hover,
+.transport-time:hover,
 .transport-button[aria-expanded="true"] {
-  background: var(--fill-2);
-  color: var(--ink);
-}
-
-.transport-button:active:not(:disabled) {
-  background: var(--fill-3);
-}
-
-.transport-button:disabled {
-  color: var(--mute);
-  cursor: default;
-}
-
-.transport-time,
-.transport-bpm input {
-  font: 500 12.5px/1 var(--mono-font);
-  font-variant-numeric: tabular-nums;
-  font-variation-settings: "MONO" 1;
-  color: var(--ink);
+  background: rgb(255 255 255 / 0.1);
 }
 
 .transport-time {
-  min-width: 52px;
-  padding: 0 4px;
+  width: 60px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
 }
 
-.transport-beats {
-  display: inline-flex;
-  gap: 4px;
-  padding: 0 6px;
-}
-
-.transport-beats > span {
-  width: 6px;
-  height: 6px;
-  border-radius: 50%;
-  background: var(--fill-3);
-  transition: background 0.08s;
-}
-
-.transport-beats > .on {
-  background: var(--ink-2);
-}
-
-.transport-beats.fresh > .on {
-  background: var(--ink);
-  box-shadow: 0 0 6px rgb(255 255 255 / 0.55);
-}
-
-.transport-beats.none > span {
-  background: var(--fill-2);
-}
-
-.transport-bpm {
-  display: inline-flex;
-  align-items: baseline;
-  gap: 4px;
-  padding: 0 4px 0 2px;
-  color: var(--mute);
-  font-size: 10.5px;
-  font-weight: 600;
-  letter-spacing: 0.04em;
-}
-
-.transport-bpm input {
-  width: 42px;
-  padding: 4px 4px;
-  border: none;
-  border-radius: 7px;
-  background: none;
-  text-align: right;
-}
-
-.transport-bpm input:hover,
-.transport-bpm input:focus {
-  background: var(--fill-2);
+input.transport-time {
+  background: rgb(255 255 255 / 0.1);
   outline: none;
 }
 
-.menu-field > .transport-nudge {
+/* The tempo: a light on the beat (warm on the downbeat), the BPM, Tap, Sync. */
+.tempo {
   display: flex;
-  gap: 6px;
+  align-items: center;
+  gap: 2px;
+  min-height: 34px;
+  padding: 0 4px 0 10px;
+  border-radius: 999px;
+  background: var(--well);
 }
 
-.transport-nudge .transport-button {
-  width: 44px;
+.tempo-light {
+  width: 9px;
+  height: 9px;
+  margin-right: 4px;
+  border-radius: 50%;
+  background: var(--ink);
+  opacity: 0.15;
+}
+
+.tempo-light.bar {
+  background: var(--warn);
+}
+
+.tempo-bpm,
+.tempo-tap,
+.tempo-sync {
+  height: 26px;
+  padding: 0 8px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: inherit;
+  font: inherit;
+  font-size: 12.5px;
+  cursor: pointer;
+}
+
+/* The same width whatever the tempo, so the bar doesn't change size as it's tapped. */
+.tempo-bpm {
+  width: 82px;
+  font-variant-numeric: tabular-nums;
+  text-align: center;
+}
+
+.tempo-bpm small {
+  color: var(--mute);
+  font-size: 10px;
+}
+
+input.tempo-bpm {
+  background: var(--fill-3);
+  outline: none;
+}
+
+.tempo-bpm:hover,
+.tempo-tap:hover,
+.tempo-sync:hover:not(:disabled) {
   background: var(--fill-2);
 }
 
-.transport-error {
-  max-width: 180px;
-  padding: 0 6px;
+.tempo-tap:active,
+.tempo-sync:active:not(:disabled) {
+  background: var(--fill-3);
+}
+
+.tempo-sync:disabled {
+  cursor: default;
+  opacity: 0.4;
+}
+
+.dock-error {
+  min-width: 0;
   overflow: hidden;
   color: var(--bad);
   font-size: 11.5px;
@@ -2561,13 +2578,20 @@ button.layer-chevron:hover {
   white-space: nowrap;
 }
 
-/* A phone: the time, play and tap; the rest's a desktop's. */
-@media (max-width: 640px) {
-  .transport-beats,
-  .transport-bpm span,
-  .transport-error {
-    display: none;
-  }
+.menu-field > .dock-nudge {
+  display: flex;
+  gap: 6px;
+}
+
+.dock-nudge .transport-button {
+  width: 44px;
+  background: var(--fill-2);
+}
+
+/* Admin mode's clock readout (ClockSync.tsx), beside the map's delay: how
+   near this page is to the room's time, in all, then by part. */
+.clock-parts {
+  justify-self: start;
 }
 
 /* Segmented controls: a recessed track, equal-width options, and a raised
@@ -3109,11 +3133,11 @@ button.tag-name:hover {
   cursor: grabbing;
 }
 
-/* The bottom edge: the drawer spans it, with the scale and zoom just above. */
+/* The bottom edge: the drawer spans it, with the scale and zoom just above (all above the show clock's dock). */
 .map-bottom {
   position: absolute;
   right: var(--inset-right);
-  bottom: 0;
+  bottom: var(--dock-h, 0px);
   left: var(--inset-left);
   display: flex;
   flex-direction: column;

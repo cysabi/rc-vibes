@@ -70,6 +70,7 @@ import {
   type Sample,
   type View,
 } from "../viewport.ts";
+import { ClockSync } from "./ClockSync.tsx";
 import { Drawer } from "./Drawer.tsx";
 import { Latency } from "./Latency.tsx";
 import { Segmented } from "./Segmented.tsx";
@@ -1276,6 +1277,7 @@ export function RoomMap({ lights, rails, floor, onFloor, changed, selected, onSe
       <Drawer lights={unplaced} onDrop={dropFromDrawer} lead={corner}>
         {view && (
           <div className="map-corner">
+            {admin && <ClockSync />}
             {admin && <Latency />}
             <ScaleBar scale={view.scale} />
             <div className="zoom">

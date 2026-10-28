@@ -1,28 +1,27 @@
-// The show clock's transport (shared/show.ts), along the top of the map:
-// play and stop, where the piece is, the beat (a dot for each of a bar's
-// four, lit on the one it's on), the tempo (typed, or tapped), and Sync
-// (this beat's a bar's first). Each acts on the room's one clock at once,
-// live mode or not: it's the room's, never a pending edit. A press is put in
-// arclamp's time as it happened (rtime.ts), so it lands where it was meant
-// however long it takes to get there. The time and beat shown are the
-// room's, by arclamp's time: the map plays the room a moment later.
+// The show clock's dock (shared/show.ts), along the bottom of the map: the
+// transport (play or stop, where the piece is, click it to set; back to the
+// start) and the tempo (a light on the beat, warm on a bar's first; the
+// beats a minute, click to type; Tap; Sync, this beat's a bar's first), and
+// the nudge. Each acts on the room's one clock at once, live mode or not:
+// it's the room's, never a pending edit. A press is put in arclamp's time as
+// it happened (rtime.ts), so it lands where it was meant however long it
+// takes to get there: Tap and Sync as the finger comes down, not up. The
+// time and beat shown are the room's, by arclamp's time: the map plays the
+// room a moment later.
 //
 // Keys, away from anything typed in: P plays or stops, T taps, B syncs.
 
-import { useEffect, useRef, useState } from "react";
+import { useEffect, useLayoutEffect, useRef, useState, type KeyboardEvent as ReactKeyboardEvent, type MouseEvent } from "react";
 import { BEATS_PER_BAR, beatAt, MAX_BPM, MIN_BPM, tappedBpm, timeAt, type TransportAction } from "../../shared/show.ts";
-import { MoreIcon, PlayIcon, StopIcon } from "../icons.tsx";
-import { rNow, rOfEvent, useTimeSync, type TimeSync } from "../rtime.ts";
+import { MoreIcon } from "../icons.tsx";
+import { rNow, rOfEvent } from "../rtime.ts";
 import { sendTransport, useShowClock } from "../scene.ts";
-import { useAdminMode } from "../settings.ts";
 import { Menu } from "./Menu.tsx";
 
 // Taps further apart than this start a tempo over; the last this many make it.
 const TAP_GAP_MS = 2000;
 const TAPS = 8;
 const NUDGE_STEP_MS = 10;
-// A beat's dot is bright this much of a beat after it comes.
-const FRESH = 0.2;
 
 /** A piece's time as m:ss.s. */
 export const clockText = (t: number) => {
@@ -30,35 +29,61 @@ export const clockText = (t: number) => {
   return `${Math.floor(s / 60)}:${(s % 60).toFixed(1).padStart(4, "0")}`;
 };
 
-const bpmText = (bpm: number | null) => (bpm === null ? "" : bpm.toFixed(1).replace(/\.0$/, ""));
-
-/** How near this page is to arclamp's time, for admin mode. */
-function syncText(s: TimeSync): string {
-  if (s.offset === null) return "Not yet in time with the room.";
-  const vibes = s.vibesError === null ? "vibes hasn't reached arclamp yet" : `vibes ±${s.vibesError.toFixed(1)} ms from arclamp`;
-  return `This page is ±${(s.error ?? 0).toFixed(1)} ms from vibes; ${vibes}.`;
+/** A time typed as m:ss (or seconds), in seconds; null if it isn't one. */
+export function parseClockText(text: string): number | null {
+  const m = /^\s*(?:(\d+):)?(\d+(?:\.\d*)?)\s*$/.exec(text);
+  if (!m) return null;
+  const t = Number(m[1] ?? 0) * 60 + Number(m[2]);
+  return Number.isFinite(t) ? t : null;
 }
 
-export function Transport() {
+const bpmText = (bpm: number) => (Number.isInteger(bpm) ? String(bpm) : bpm.toFixed(1));
+
+/** A button's press, at its moment: a pointer's as it comes down; a click's only if the keyboard made it (Enter or Space). */
+const press = (act: (e: { timeStamp: number }) => void) => ({
+  onPointerDown: (p: { button: number; timeStamp: number }) => {
+    if (p.button === 0) act(p);
+  },
+  onClick: (c: MouseEvent) => {
+    if (c.detail === 0) act(c);
+  },
+});
+
+export function Transport({ onHeight }: { onHeight: (px: number) => void }) {
   const clock = useShowClock();
-  const admin = useAdminMode();
-  const sync = useTimeSync();
-  const time = useRef<HTMLSpanElement>(null);
-  const dots = useRef<HTMLSpanElement>(null);
+  const dock = useRef<HTMLDivElement>(null);
+  const time = useRef<HTMLButtonElement>(null);
+  const light = useRef<HTMLSpanElement>(null);
   const taps = useRef<number[]>([]);
-  const [typed, setTyped] = useState<string | null>(null);
+  const [typedTime, setTypedTime] = useState<string | null>(null);
+  const [typedBpm, setTypedBpm] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
 
-  // Where the piece is, and the beat, each frame, straight into the page.
+  // As tall as it is, for the map to keep its own along the bottom above it.
+  useLayoutEffect(() => {
+    const el = dock.current;
+    if (!el) return;
+    const measure = () => onHeight(el.offsetHeight);
+    measure();
+    const observer = new ResizeObserver(measure);
+    observer.observe(el);
+    return () => {
+      observer.disconnect();
+      onHeight(0);
+    };
+  }, [onHeight]);
+
+  // Where the piece is, and the light on the beat (bright on it, fading to
+  // the next; warm on a bar's first), each frame, straight into the page.
   useEffect(() => {
     let raf = requestAnimationFrame(function step() {
       const now = rNow();
       if (time.current) time.current.textContent = clockText(timeAt(clock, now));
-      if (dots.current) {
+      if (light.current) {
         const beat = clock.bpm === null ? null : beatAt(clock, now);
-        const on = beat === null ? -1 : (((Math.floor(beat) % BEATS_PER_BAR) + BEATS_PER_BAR) % BEATS_PER_BAR);
-        [...dots.current.children].forEach((d, i) => d.classList.toggle("on", i === on));
-        dots.current.classList.toggle("fresh", beat !== null && beat - Math.floor(beat) < FRESH);
+        const into = beat === null ? 1 : beat - Math.floor(beat);
+        light.current.style.opacity = String(0.15 + 0.85 * (1 - into) ** 2);
+        light.current.classList.toggle("bar", beat !== null && ((Math.floor(beat) % BEATS_PER_BAR) + BEATS_PER_BAR) % BEATS_PER_BAR === 0);
       }
       raf = requestAnimationFrame(step);
     });
@@ -70,7 +95,7 @@ export function Transport() {
       () => setError(null),
       (err: Error) => setError(err.message),
     );
-  const playStop = (e: { timeStamp: number }) => act({ do: clock.playing ? "stop" : "play", at: rOfEvent(e) });
+  const playStop = (e: { timeStamp: number }) => void act({ do: clock.playing ? "stop" : "play", at: rOfEvent(e) });
   const syncNow = (e: { timeStamp: number }) => {
     if (clock.bpm !== null) void act({ do: "downbeat", at: rOfEvent(e) });
   };
@@ -83,11 +108,22 @@ export function Transport() {
     const bpm = tappedBpm(list);
     if (bpm !== null) void act({ do: "tempo", bpm, at: rOfEvent(e), onBeat: true });
   };
-  const typedBpm = () => {
-    if (typed === null) return;
-    const bpm = Number(typed);
-    setTyped(null);
-    if (typed.trim() !== "" && bpm >= MIN_BPM && bpm <= MAX_BPM && bpm !== clock.bpm) void act({ do: "tempo", bpm, at: rNow() });
+
+  const timeKey = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      const t = parseClockText(typedTime ?? "");
+      if (t !== null) void act({ do: "seek", at: rOfEvent(e), t });
+      setTypedTime(null);
+    }
+    if (e.key === "Escape") setTypedTime(null);
+  };
+  const bpmKey = (e: ReactKeyboardEvent<HTMLInputElement>) => {
+    if (e.key === "Enter") {
+      const bpm = Number(typedBpm);
+      if (typedBpm?.trim() && bpm >= MIN_BPM && bpm <= MAX_BPM) void act({ do: "tempo", bpm: Math.round(bpm * 10) / 10, at: rOfEvent(e) });
+      setTypedBpm(null);
+    }
+    if (e.key === "Escape") setTypedBpm(null);
   };
 
   // P, T and B, away from anything typed in.
@@ -98,7 +134,7 @@ export function Transport() {
       if (e.metaKey || e.ctrlKey || e.altKey || e.repeat) return;
       if (e.target instanceof Element && e.target.closest("input, textarea, select, [contenteditable], .cm-editor")) return;
       const k = keys.current;
-      if (e.key === "p") void k.playStop(e);
+      if (e.key === "p") k.playStop(e);
       else if (e.key === "t") k.tap(e);
       else if (e.key === "b") k.syncNow(e);
       else return;
@@ -109,70 +145,84 @@ export function Transport() {
   }, []);
 
   return (
-    <div className="transport" role="group" aria-label="Show clock">
-      <button className="transport-button play" onClick={(e) => void playStop(e)} aria-label={clock.playing ? "Stop" : "Play"} title={clock.playing ? "Stop (P)" : "Play (P)"}>
-        {clock.playing ? <StopIcon /> : <PlayIcon />}
-      </button>
-      <span className="transport-time" ref={time} title="Where the piece is">
-        {clockText(timeAt(clock, rNow()))}
-      </span>
-      <span className={`transport-beats${clock.bpm === null ? " none" : ""}`} ref={dots} aria-hidden="true">
-        {Array.from({ length: BEATS_PER_BAR }, (_, i) => (
-          <span key={i} />
-        ))}
-      </span>
-      <label className="transport-bpm" title="The tempo, in beats a minute">
-        <input
-          inputMode="decimal"
-          aria-label="Tempo, in beats a minute"
-          placeholder="–"
-          value={typed ?? bpmText(clock.bpm)}
-          onFocus={() => setTyped(bpmText(clock.bpm))}
-          onChange={(e) => setTyped(e.target.value)}
-          onBlur={typedBpm}
-          onKeyDown={(e) => {
-            if (e.key === "Enter") e.currentTarget.blur();
-            if (e.key === "Escape") {
-              setTyped(null);
-              e.currentTarget.blur();
-            }
-          }}
-        />
-        <span>BPM</span>
-      </label>
-      <button className="transport-button" onClick={tap} title="Tap the beat to set the tempo (T)">
-        Tap
-      </button>
-      <button className="transport-button" onClick={syncNow} disabled={clock.bpm === null} title="Now is a bar's first beat (B)">
-        Sync
-      </button>
-      <Menu align="end" className="transport-button more" title="More for the show clock" label={<MoreIcon />}>
-        <p className="menu-heading">Show clock</p>
-        <button className="menu-item" onClick={() => void act({ do: "seek", at: rNow(), t: 0 })}>
-          Back to the start
-        </button>
-        <div className="menu-field">
-          <span>
-            Nudge: {clock.nudge > 0 ? "+" : ""}
-            {clock.nudge} ms
-            <small>Moves the room's beat later, for sound that reaches the room late (or earlier).</small>
-          </span>
-          <span className="transport-nudge">
-            <button className="transport-button" onClick={() => void act({ do: "nudge", ms: clock.nudge - NUDGE_STEP_MS })} aria-label="Earlier">
-              −
+    <div className="show-dock" ref={dock}>
+      <div className="dock-bar">
+        <div className="transport" title="The show clock: every sketch that follows it agrees where the piece is">
+          <button className="transport-button" {...press(playStop)} aria-label={clock.playing ? "Stop the show clock" : "Start the show clock"} title={clock.playing ? "Stop (P)" : "Play (P)"}>
+            {clock.playing ? "❚❚" : "▶"}
+          </button>
+          {typedTime === null ? (
+            <button className="transport-time mono" ref={time} onClick={() => setTypedTime(clockText(timeAt(clock, rNow())))} title="Set the time (m:ss)">
+              {clockText(timeAt(clock, rNow()))}
             </button>
-            <button className="transport-button" onClick={() => void act({ do: "nudge", ms: clock.nudge + NUDGE_STEP_MS })} aria-label="Later">
-              +
-            </button>
-          </span>
+          ) : (
+            <input
+              className="transport-time mono"
+              autoFocus
+              value={typedTime}
+              size={5}
+              onChange={(e) => setTypedTime(e.target.value)}
+              onKeyDown={timeKey}
+              onBlur={() => setTypedTime(null)}
+              aria-label="The time, m:ss"
+            />
+          )}
+          <button className="transport-button" onClick={(e) => void act({ do: "seek", at: rOfEvent(e), t: 0 })} aria-label="Back to the start" title="Back to the start">
+            ⟲
+          </button>
         </div>
-        {admin && <p className="menu-note">{syncText(sync)}</p>}
-      </Menu>
-      {error && (
-        <span className="transport-error" role="alert" title={error}>
-          {error}
-        </span>
-      )}
+        <div className="tempo" role="group" aria-label="Tempo">
+          <span ref={light} className="tempo-light" aria-hidden="true" />
+          {typedBpm === null ? (
+            <button className="tempo-bpm mono" onClick={() => setTypedBpm(clock.bpm === null ? "120" : bpmText(clock.bpm))} title="The tempo, in beats a minute: click to type one">
+              {clock.bpm === null ? "—" : bpmText(clock.bpm)}
+              <small> BPM</small>
+            </button>
+          ) : (
+            <input
+              className="tempo-bpm mono"
+              autoFocus
+              value={typedBpm}
+              size={5}
+              inputMode="decimal"
+              onChange={(e) => setTypedBpm(e.target.value)}
+              onKeyDown={bpmKey}
+              onBlur={() => setTypedBpm(null)}
+              aria-label="Beats a minute"
+            />
+          )}
+          <button className="tempo-tap" {...press(tap)} title="Tap on the beat (T): from the third tap, the tempo">
+            Tap
+          </button>
+          <button className="tempo-sync" {...press(syncNow)} disabled={clock.bpm === null} title="Sync (B): now is a bar's first beat">
+            Sync
+          </button>
+        </div>
+        {error && (
+          <span className="dock-error" role="alert" title={error}>
+            {error}
+          </span>
+        )}
+        <span className="dock-spacer" />
+        <Menu align="end" className="transport-button" title="Nudge the show clock" label={<MoreIcon />}>
+          <p className="menu-heading">Show clock</p>
+          <div className="menu-field">
+            <span>
+              Nudge: {clock.nudge > 0 ? "+" : ""}
+              {clock.nudge} ms
+              <small>Moves the room's beat later, for sound that reaches the room late (or earlier).</small>
+            </span>
+            <span className="dock-nudge">
+              <button className="transport-button" onClick={() => void act({ do: "nudge", ms: clock.nudge - NUDGE_STEP_MS })} aria-label="Earlier">
+                −
+              </button>
+              <button className="transport-button" onClick={() => void act({ do: "nudge", ms: clock.nudge + NUDGE_STEP_MS })} aria-label="Later">
+                +
+              </button>
+            </span>
+          </div>
+        </Menu>
+      </div>
     </div>
   );
 }

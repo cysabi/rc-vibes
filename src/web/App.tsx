@@ -205,6 +205,10 @@ function Shell() {
     observer.observe(bar.current!);
     return () => observer.disconnect();
   }, []);
+  // The show clock's dock along the bottom, likewise (--dock-h): the map's own along the bottom go above it.
+  const dockHeight = useCallback((px: number) => {
+    app.current?.style.setProperty("--dock-h", px > 0 ? `calc(${px}px + var(--gap))` : "0px");
+  }, []);
 
   // The map is the base of everything, always; all else floats over it. Along
   // the top, the HUD: banners about degraded states, then the tags to select
@@ -213,6 +217,7 @@ function Shell() {
   // map's own. While anything's selected, a panel about it comes in along the
   // left edge (or up from the bottom, on a phone), and the tags move over;
   // what it looks like floats in the map's bottom left (not on a phone).
+  // Along the bottom, the show clock's dock (Transport.tsx).
   const hasSelection = selectedHere.size > 0;
   const narrow = useNarrow();
   // With streetview open, the room from its camera takes one side and the map
@@ -256,6 +261,7 @@ function Shell() {
           }}
         />
       )}
+      <Transport onHeight={dockHeight} />
       <div className="hud" ref={hud}>
         <Banners />
         <div className="hud-bar" ref={bar}>
@@ -266,7 +272,6 @@ function Shell() {
           ) : (
             <TagChips lights={here} selected={selectedHere} onSelect={selectByTag} />
           )}
-          <Transport />
           <SketchesLink />
           <UserMenu />
         </div>

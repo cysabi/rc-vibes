@@ -82,7 +82,9 @@ export function RoomToneEditor({ lights, template, over }: Props) {
       {over.length > 0 && (
         <div className="note tone-over">
           <InfoIcon />
-          <span>{namesOf(over)} draw over these lights, so the room may not show all of this.</span>
+          <span>
+            {namesOf(over)} {over.length === 1 ? "draws" : "draw"} over these lights, so the room may not show all of this.
+          </span>
           <button className="peek" {...hold} title="Show the room tone alone while you hold this">
             Hold to peek
           </button>
