@@ -6,7 +6,7 @@ import type { Me } from "../shared/vibes.ts";
 import { openDb } from "./db.ts";
 import type { Instances } from "./instances.ts";
 import type { LayoutEdits } from "./layout.ts";
-import { createPools, type Pools } from "./pools.ts";
+import { ColorPatch, createPools, type Pools } from "./pools.ts";
 import { Refused, type Shaders } from "./shaders.ts";
 import { createUpdates, MAX_OPS, mergeBatches, parseOps, Unmade, type Updates } from "./updates.ts";
 
@@ -102,6 +102,10 @@ describe("checking an update", () => {
       [[`pools/${P}/values/two words/1`, 1]],
       [[`pools/${P}/values/speed/0`, 1]],
       [[`pools/${P}/values/speed/1`, "fast"]],
+      [[`pools/${P}/values/tint/1/lm`]],
+      [[`pools/${P}/values/tint/1/hue`, 3]],
+      [[`pools/${P}/values/tint/1/lm`, "bright"]],
+      [[`pools/${P}/values/tint/1/lm/x`, 3]],
       [["layout/lights/5/spot", { coords: { mm_x: 1 } }]],
       [["layout/lights/5/colour", "red"]],
       [["layout/lights/5/tags", ["Not A Tag"]]],
@@ -155,6 +159,30 @@ describe("updates made together", () => {
     expect(mergeBatches(parseOps([]), parseOps([])).sync).toBe(true);
     // The earlier's aren't changed.
     expect(a.roomtone).toEqual({ "1": { a: 0.1, b: 0.2 } });
+  });
+
+  it("have a color's numbers over the color before them, path by path, within an update and across them", () => {
+    const tint = (light: number) => `pools/${P}/values/tint/${light}`;
+    const c = { a: 0.1, b: 0.2, lm: 500, fidelity: 1 };
+    const one = parseOps([
+      [tint(1), c],
+      [`${tint(1)}/lm`, 40],
+      [`${tint(2)}/lm`, 40],
+      [`${tint(2)}/a`, 0.3],
+      [tint(3)],
+      [`${tint(3)}/lm`, 90],
+      [`${tint(4)}/lm`, 90],
+      [tint(4), c],
+    ]);
+    expect([...one.values.get(P)!.get("tint")!]).toEqual([
+      [1, { ...c, lm: 40 }],
+      [2, new ColorPatch({ lm: 40, a: 0.3 })],
+      [3, new ColorPatch({ lm: 90 }, true)],
+      [4, c],
+    ]);
+    const m = mergeBatches(one, parseOps([[`${tint(2)}/b`, 0.5], [`${tint(4)}/lm`, 1]]));
+    expect(m.values.get(P)!.get("tint")!.get(2)).toEqual(new ColorPatch({ lm: 40, a: 0.3, b: 0.5 }));
+    expect(m.values.get(P)!.get("tint")!.get(4)).toEqual({ ...c, lm: 1 });
   });
 });
 
@@ -478,6 +506,22 @@ describe("making updates", () => {
     p.send([[`pools/${P}/values/speed/1`, 3]]);
     await until(() => p.heard.length === 2);
     expect(logged).toHaveLength(1);
+  });
+
+  it("changes a color's numbers over each light's color: a brightness over lights of different colors", async () => {
+    const tint: ParamSpec = { kind: "color", name: "tint", label: "Tint", lights: {}, default: { a: 0, b: 0, lm: 300, fidelity: 1 } };
+    pools.declare(P, [tint], `user:${ada.id}`);
+    await pools.set(P, "tint", [[1, { a: 0.1, b: 0.2, lm: 500, fidelity: 1 }], [2, { a: -0.1, b: 0, lm: 200, fidelity: 0.5 }]], `user:${ada.id}`);
+    const p = page();
+    p.send([1, 2, 3].map((l): Op => [`pools/${P}/values/tint/${l}/lm`, 40]));
+    await until(() => p.heard.length === 1);
+    expect(p.heard[0]).toMatchObject({ type: "done" });
+    expect(pools.get(P)!.values.tint).toEqual({
+      "1": { a: 0.1, b: 0.2, lm: 40, fidelity: 1 },
+      "2": { a: -0.1, b: 0, lm: 40, fidelity: 0.5 },
+      // At the default: the default's color, with this brightness.
+      "3": { a: 0, b: 0, lm: 40, fidelity: 1 },
+    });
   });
 
   it("answers an update with no changes once the tree's up to date, at once", async () => {

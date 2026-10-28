@@ -273,6 +273,29 @@ describe("a shader's params, in its pool", () => {
     expect(opsOf(pooled, currentDraft())).toEqual([]);
     expect(pendingCount(pooled, currentDraft())).toBe(0);
   });
+
+  it("sends just the numbers of a color that change, each number's lights together", () => {
+    const tint: ParamSpec = { kind: "color", name: "tint", label: "Tint", lights: {}, default: { a: 0, b: 0, lm: 300, fidelity: 1 } };
+    const red = { a: 0.2, b: 0.1, lm: 500, fidelity: 1 };
+    const blue = { a: -0.1, b: -0.2, lm: 200, fidelity: 1 };
+    const colored = withPools(room(shader(12, { pool: "p1" })), { p1: { declared: [tint], values: { tint: { "1": red, "2": blue } } } });
+    // Over both; and light 3, at the default, over the default's color.
+    drafts.setParam("rclamp-12", "tint", [
+      [1, { ...red, lm: 40, a: 0.3 }],
+      [2, { ...blue, lm: 40, a: 0.3 }],
+      [3, { a: 0.5, b: 0, lm: 300, fidelity: 1 }],
+    ]);
+    expect(opsOf(colored, currentDraft())).toEqual([
+      ["pools/p1/values/tint/1/a", 0.3],
+      ["pools/p1/values/tint/2/a", 0.3],
+      ["pools/p1/values/tint/3/a", 0.5],
+      ["pools/p1/values/tint/1/lm", 40],
+      ["pools/p1/values/tint/2/lm", 40],
+    ]);
+    // Back to the default, or a value that isn't a color: whole.
+    drafts.setParam("rclamp-12", "tint", [[1, null]]);
+    expect(opsOf(colored, currentDraft())[0]).toEqual(["pools/p1/values/tint/1"]);
+  });
 });
 
 describe("apply", () => {

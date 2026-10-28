@@ -24,6 +24,7 @@
 //   stack                             every shader's key, top first
 //   pools/<pool>/declared             ParamSpec[], by whoever runs its code
 //   pools/<pool>/values/<param>/<light>  a value; taken away, back to the default
+//   pools/<pool>/values/<param>/<light>/<part>  one of a color's numbers (a, b, lm, fidelity)
 //   layout/lights/<light>/spot        Spot, or null: off the map
 //   layout/lights/<light>/type        another orientation (an arclamp type)
 //   layout/lights/<light>/tags        its whole set of tags
@@ -197,6 +198,7 @@ export const under = (path: Path, prefix: Path) => path === prefix || path.start
 const FANNABLE = [
   ["roomtone", "*", "?"],
   ["pools", "?", "values", "?", "*"],
+  ["pools", "?", "values", "?", "*", "?"],
   ["layout", "lights", "*", "?"],
 ];
 // A light's id as a key, as a lights field can say it: at most two bytes (arclamp's id_width).

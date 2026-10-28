@@ -18,7 +18,19 @@
 import { useSyncExternalStore } from "react";
 import type { Channels } from "../shared/arclamp.ts";
 import { pathOf, type AddSpec, type Op, type Pool } from "../shared/live.ts";
-import { cleanValue, sameValue, tableOf, withChanges, type Changes, type ParamSpec, type ParamValue, type ShaderParams } from "../shared/params.ts";
+import {
+  changedParts,
+  cleanValue,
+  sameValue,
+  tableOf,
+  withChanges,
+  type Changes,
+  type ColorPart,
+  type ColorValue,
+  type ParamSpec,
+  type ParamValue,
+  type ShaderParams,
+} from "../shared/params.ts";
 import type { Instance, ShaderKey, ShaderSketch } from "../shared/vibes.ts";
 import { invalidateScene, sendUpdate, UpdateError, type Scene, type SceneShader } from "./scene.ts";
 
@@ -273,7 +285,10 @@ function paramsOfPool(pool: Pool | undefined): ShaderParams | null {
 /**
  * Of what's pending for a pool's params, what isn't what it has already
  * (each light's value, or the default), as changes to it: a value, or, back
- * to the default, the value taken away.
+ * to the default, the value taken away; or, for a color with only some of
+ * its numbers changed (a brightness dragged over lights of different
+ * colors), just those, each number's lights together, so they go as one fan
+ * (shared/live.ts).
  */
 function paramOps(pool: string, declared: readonly ParamSpec[] | null, live: Pool["values"] | undefined, pending: ShaderPatch["params"]): Op[] {
   if (!declared || !pending) return [];
@@ -281,13 +296,23 @@ function paramOps(pool: string, declared: readonly ParamSpec[] | null, live: Poo
   for (const [name, byLight] of Object.entries(pending)) {
     const spec = declared.find((s) => s.name === name);
     if (!spec) continue;
+    const parts = new Map<ColorPart, Op[]>();
     for (const [id, v] of Object.entries(byLight)) {
       const kept = live?.[name]?.[id];
       const was = (kept !== undefined ? cleanValue(spec, kept) : null) ?? spec.default;
       if (sameValue(v ?? spec.default, was)) continue;
-      const at = pathOf("pools", pool, "values", name, id);
-      ops.push(v === null ? [at] : [at, v]);
+      const changed = v === null ? null : changedParts(kept ?? spec.default, v);
+      if (!changed) {
+        const at = pathOf("pools", pool, "values", name, id);
+        ops.push(v === null ? [at] : [at, v]);
+        continue;
+      }
+      for (const k of changed) {
+        if (!parts.has(k)) parts.set(k, []);
+        parts.get(k)!.push([pathOf("pools", pool, "values", name, id, k), (v as ColorValue)[k]]);
+      }
     }
+    for (const each of parts.values()) ops.push(...each);
   }
   return ops;
 }

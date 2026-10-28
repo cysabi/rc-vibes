@@ -118,6 +118,12 @@ describe("fans", () => {
     expect(fanOps(ops)[0]).toEqual(["pools/p/values/color/*", 1, lightsField([1, 2])]);
   });
 
+  it("fans one of a color's numbers over lights of different colors", () => {
+    const ops: Op[] = [1, 2, 3].map((id) => [`pools/p/values/color/${id}/lm`, 40]);
+    expect(fanOps(ops)).toEqual([["pools/p/values/color/*/lm", 40, lightsField([1, 2, 3])]]);
+    expect(unfanOps(fanOps(ops))).toEqual(ops);
+  });
+
   it("fans room tone's channels and the lights' layout, and nothing without a light in it", () => {
     expect(fanOps([["roomtone/1/brightness", 0.5], ["roomtone/2/brightness", 0.5]])).toEqual([["roomtone/*/brightness", 0.5, lightsField([1, 2])]]);
     expect(fanOps([["layout/lights/1/tags", ["couch"]], ["layout/lights/9/tags", ["couch"]]])).toEqual([["layout/lights/*/tags", ["couch"], lightsField([1, 9])]]);

@@ -106,3 +106,21 @@ export function paramText(v: number, step: number): string {
 /** A color param's value as room tone's color editor has it (brightness 1.0 = 1000 lm), and back. */
 export const lemtoneOf = (c: ColorValue): Lemtone => ({ a: c.a, b: c.b, brightness: c.lm / LUMENS_PER_BRIGHTNESS, fidelity: c.fidelity });
 export const colorOfLemtone = (t: Lemtone): ColorValue => ({ a: t.a, b: t.b, lm: t.brightness * LUMENS_PER_BRIGHTNESS, fidelity: t.fidelity });
+
+/**
+ * A color's numbers: each a path of its own under its light's in the live
+ * tree (shared/live.ts), so changing some of them (a brightness dragged over
+ * lights of different colors) changes just those.
+ */
+export const COLOR_PARTS = ["a", "b", "lm", "fidelity"] as const;
+export type ColorPart = (typeof COLOR_PARTS)[number];
+
+/** Whether a value is a color with every one of its numbers. */
+const wholeColor = (v: unknown): v is ColorValue =>
+  typeof v === "object" && v !== null && COLOR_PARTS.every((k) => typeof (v as Record<string, unknown>)[k] === "number");
+
+/** The numbers that differ from one color to the next; null where they aren't both whole colors (it changes whole). */
+export function changedParts(was: unknown, next: ParamValue): ColorPart[] | null {
+  if (!wholeColor(was) || !wholeColor(next)) return null;
+  return COLOR_PARTS.filter((k) => was[k] !== next[k]);
+}

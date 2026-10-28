@@ -26,7 +26,7 @@ import { z } from "zod";
 import type { Channels } from "../shared/arclamp.ts";
 import { isBaseColor } from "../shared/base-color.ts";
 import { keysOf, POOL_ID, type AddSpec, type Op, type RoomMessage } from "../shared/live.ts";
-import { PARAM_NAME, type ParamSpec, type ParamValue } from "../shared/params.ts";
+import { COLOR_PARTS, PARAM_NAME, type ColorPart, type ParamSpec } from "../shared/params.ts";
 import { RAIL_ID, type RailShape } from "../shared/rails.ts";
 import { MAX_TAGS, TAG } from "../shared/tags.ts";
 import type { Me, Placement, ShaderKey, Spot } from "../shared/vibes.ts";
@@ -35,7 +35,7 @@ import { isBranchName } from "./git.ts";
 import type { Instances } from "./instances.ts";
 import type { LayoutEdits } from "./layout.ts";
 import { declarationsOf } from "./params.ts";
-import { anyValue, type Pools } from "./pools.ts";
+import { anyValue, ColorPatch, laterChange, type LightChange, type Pools } from "./pools.ts";
 import { Refused, type Shaders } from "./shaders.ts";
 
 /** The most changes an update can carry. */
@@ -72,7 +72,7 @@ export interface Batch {
   shaders: Map<ShaderKey, { muted?: boolean; mask?: number[]; home?: number[] }>;
   stack: ShaderKey[] | null;
   declared: Map<string, ParamSpec[]>;
-  values: Map<string, Map<string, Map<number, ParamValue | null>>>;
+  values: Map<string, Map<string, Map<number, LightChange>>>;
   spots: Map<number, Spot | null>;
   types: Map<number, string>;
   tags: Map<number, string[]>;
@@ -166,12 +166,20 @@ export function parseOps(ops: readonly Op[], note?: string): Batch {
         if (k.length === 3 && k[2] === "declared" && set) {
           if (!Array.isArray(v)) throw bad(path, "is a list of params");
           b.declared.set(pool, declarationsOf(v).specs);
-        } else if (k.length === 5 && k[2] === "values" && PARAM_NAME.test(k[3]!) && LIGHT.test(k[4]!)) {
-          const value = set ? anyValue(v) : null;
-          if (set && value === null) throw bad(path, "is a number, true or false, or a color");
-          const byParam = b.values.get(pool) ?? new Map<string, Map<number, ParamValue | null>>();
-          const byLight = byParam.get(k[3]!) ?? new Map<number, ParamValue | null>();
-          byLight.set(Number(k[4]), value);
+        } else if ((k.length === 5 || k.length === 6) && k[2] === "values" && PARAM_NAME.test(k[3]!) && LIGHT.test(k[4]!)) {
+          let change: LightChange;
+          if (k.length === 6) {
+            // One of a color's numbers: over the light's color as it is (pools.ts).
+            if (!set || !COLOR_PARTS.includes(k[5] as ColorPart) || typeof v !== "number" || !Number.isFinite(v)) throw bad(path, "is one of a color's numbers");
+            change = new ColorPatch({ [k[5]!]: v });
+          } else {
+            change = set ? anyValue(v) : null;
+            if (set && change === null) throw bad(path, "is a number, true or false, or a color");
+          }
+          const byParam = b.values.get(pool) ?? new Map<string, Map<number, LightChange>>();
+          const byLight = byParam.get(k[3]!) ?? new Map<number, LightChange>();
+          const light = Number(k[4]);
+          byLight.set(light, laterChange(byLight.get(light), change));
           byParam.set(k[3]!, byLight);
           b.values.set(pool, byParam);
         } else throw bad(path);
@@ -209,8 +217,12 @@ export function mergeBatches(a: Batch, b: Batch): Batch {
   out.declared = new Map([...a.declared, ...b.declared]);
   out.values = new Map([...a.values].map(([p, m]) => [p, new Map([...m].map(([n, l]) => [n, new Map(l)]))]));
   for (const [p, m] of b.values) {
-    const into = out.values.get(p) ?? new Map<string, Map<number, ParamValue | null>>();
-    for (const [n, l] of m) into.set(n, new Map([...(into.get(n) ?? []), ...l]));
+    const into = out.values.get(p) ?? new Map<string, Map<number, LightChange>>();
+    for (const [n, l] of m) {
+      const byLight = new Map(into.get(n));
+      for (const [light, change] of l) byLight.set(light, laterChange(byLight.get(light), change));
+      into.set(n, byLight);
+    }
     out.values.set(p, into);
   }
   out.spots = new Map([...a.spots, ...b.spots]);

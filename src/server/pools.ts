@@ -15,7 +15,20 @@
 
 import type { LightInfo } from "../shared/arclamp.ts";
 import { pathOf, type Op, type Pool } from "../shared/live.ts";
-import { cleanValue, colorValue, groupsOf, lightsFor, sameValue, type Changes, type ParamSpec, type ParamTable, type ParamValue } from "../shared/params.ts";
+import {
+  changedParts,
+  cleanValue,
+  colorValue,
+  groupsOf,
+  lightsFor,
+  sameValue,
+  type Changes,
+  type ColorPart,
+  type ColorValue,
+  type ParamSpec,
+  type ParamTable,
+  type ParamValue,
+} from "../shared/params.ts";
 import type { Db, PoolRow } from "./db.ts";
 
 const SAVE_MS = 1000;
@@ -27,8 +40,39 @@ const SWEEP_MS = 10 * 60 * 1000;
 export const anyValue = (v: unknown): ParamValue | null =>
   typeof v === "number" ? (Number.isFinite(v) ? v : null) : typeof v === "boolean" ? v : colorValue(v);
 
-/** A change to one param's values, light by light: each light's new value, or null back to the default. */
-export type LightChanges = [light: number, value: ParamValue | null][];
+/**
+ * Some of a color's numbers changed (pools/<pool>/values/<param>/<light>/
+ * <part>: shared/live.ts), over the light's value as it is, or over the
+ * default (`fromDefault`), if it was put back to it first.
+ */
+export class ColorPatch {
+  readonly parts: Partial<ColorValue>;
+  readonly fromDefault: boolean;
+  constructor(parts: Partial<ColorValue>, fromDefault = false) {
+    this.parts = parts;
+    this.fromDefault = fromDefault;
+  }
+
+  /** The color it makes of a light's value (or the default); undefined if that isn't a color. */
+  over(was: ParamValue | undefined, spec: ParamSpec | null): unknown {
+    const base = this.fromDefault ? spec?.default : (was ?? spec?.default);
+    return typeof base === "object" ? { ...base, ...this.parts } : undefined;
+  }
+}
+
+/** A change to one light's value of a param: its new value, null back to the default, or some of its color's numbers. */
+export type LightChange = ParamValue | null | ColorPatch;
+
+/** A change to one param's values, light by light. */
+export type LightChanges = [light: number, value: LightChange][];
+
+/** One light's change, then another, as one: path by path, the later's numbers over the earlier's value. */
+export function laterChange(a: LightChange | undefined, b: LightChange): LightChange {
+  if (!(b instanceof ColorPatch) || a === undefined) return b;
+  if (a === null) return new ColorPatch(b.parts, true);
+  if (a instanceof ColorPatch) return new ColorPatch({ ...a.parts, ...b.parts }, a.fromDefault);
+  return typeof a === "object" ? { ...a, ...b.parts } : b;
+}
 
 export interface PoolDeps {
   db: Pick<Db, "pools" | "savePool" | "deletePool">;
@@ -145,22 +189,36 @@ export function createPools({ db, publish, lights, now = Date.now }: PoolDeps) {
       const allowed = spec ? isFor(spec) : () => true;
       const byLight = { ...p.values[name] };
       const ops: Op[] = [];
+      // A color with some of its numbers changed: just those, in the tree, each number's lights together (so they go as one fan: shared/live.ts).
+      const parts = new Map<ColorPart, Op[]>();
       const set: Changes = [];
-      for (const [light, raw] of changes) {
+      for (const [light, change] of changes) {
         if (!Number.isInteger(light) || light <= 0 || !allowed(light)) continue;
+        const was = byLight[String(light)];
+        const raw = change instanceof ColorPatch ? change.over(was, spec) : change;
+        if (raw === undefined) continue;
         const value = raw === null ? null : spec ? cleanValue(spec, raw) : anyValue(raw);
         if (raw !== null && value === null) continue;
-        const was = byLight[String(light)];
         // Back to the default is the same as not being listed.
         const next = value !== null && spec && sameValue(value, spec.default) ? null : value;
         if (next === null ? was === undefined : was !== undefined && sameValue(was, next)) continue;
         if (next === null) delete byLight[String(light)];
         else byLight[String(light)] = next;
-        ops.push(next === null ? [pathOf("pools", id, "values", name, light)] : [pathOf("pools", id, "values", name, light), next]);
+        const changed = next === null ? null : changedParts(was, next);
+        if (changed) {
+          for (const k of changed) {
+            if (!parts.has(k)) parts.set(k, []);
+            parts.get(k)!.push([pathOf("pools", id, "values", name, light, k), (next as ColorValue)[k]]);
+          }
+        } else {
+          const at = pathOf("pools", id, "values", name, light);
+          ops.push(next === null ? [at] : [at, next]);
+        }
         const g = set.find(([v]) => (v === null || next === null ? v === next : sameValue(v, next)));
         if (g) g[1].push(light);
         else set.push([next, [light]]);
       }
+      for (const each of parts.values()) ops.push(...each);
       if (ops.length === 0) return false;
       p.values = { ...p.values, [name]: byLight };
       save(p);

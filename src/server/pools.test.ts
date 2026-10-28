@@ -7,7 +7,7 @@ import type { LightInfo } from "../shared/arclamp.ts";
 import type { Op } from "../shared/live.ts";
 import type { Changes, ParamSpec } from "../shared/params.ts";
 import { openDb, type Db } from "./db.ts";
-import { anyValue, createPools, type LightChanges, type Pools } from "./pools.ts";
+import { anyValue, ColorPatch, createPools, laterChange, type LightChanges, type Pools } from "./pools.ts";
 
 const speed: ParamSpec = { kind: "number", name: "speed", label: "Speed", lights: {}, default: 7, min: 0, max: 20, step: 0.1 };
 const on: ParamSpec = { kind: "toggle", name: "on", label: "On", lights: { kinds: ["switch"] }, default: false };
@@ -25,6 +25,18 @@ describe("a value any param could have", () => {
     expect(anyValue({ a: 0.1, b: 0, lm: 10 })).toEqual({ a: 0.1, b: 0, lm: 10, fidelity: 1 });
     expect(anyValue("red")).toBeNull();
     expect(anyValue(null)).toBeNull();
+  });
+});
+
+describe("one light's changes, one after another", () => {
+  it("are the later, but for a color's numbers, which go over the earlier's", () => {
+    const c = { a: 0.1, b: 0.2, lm: 500, fidelity: 1 };
+    expect(laterChange(c, 3)).toBe(3);
+    expect(laterChange(new ColorPatch({ lm: 1 }), null)).toBeNull();
+    expect(laterChange(undefined, new ColorPatch({ lm: 1 }))).toEqual(new ColorPatch({ lm: 1 }));
+    expect(laterChange(c, new ColorPatch({ lm: 1 }))).toEqual({ ...c, lm: 1 });
+    expect(laterChange(null, new ColorPatch({ lm: 1 }))).toEqual(new ColorPatch({ lm: 1 }, true));
+    expect(laterChange(new ColorPatch({ a: 0 }, true), new ColorPatch({ lm: 1 }))).toEqual(new ColorPatch({ a: 0, lm: 1 }, true));
   });
 });
 
@@ -111,6 +123,36 @@ describe("pools", () => {
     expect(changes).toEqual([[P, "speed", [[null, [1, 2]]]]]);
     expect(await pools.set(P, "speed", [[1, null], [2, 7]], "user:ada")).toBe(false);
     expect(changes).toHaveLength(1);
+  });
+
+  it("change some of a color's numbers over its color, or the default's: in the tree just those, each number's lights together", async () => {
+    pools.declare(P, [tint], "user:ada");
+    await pools.set(P, "tint", [[1, { a: 0.1, b: 0.2, lm: 500, fidelity: 1 }], [2, { a: -0.1, b: 0, lm: 200, fidelity: 1 }]], "user:ada");
+    published.length = 0;
+    changes.length = 0;
+    expect(await pools.set(P, "tint", [[1, new ColorPatch({ lm: 40, a: 0.3 })], [2, new ColorPatch({ lm: 40, a: 0.3 })]], "user:ada")).toBe(true);
+    expect(pools.get(P)!.values.tint).toEqual({ "1": { a: 0.3, b: 0.2, lm: 40, fidelity: 1 }, "2": { a: 0.3, b: 0, lm: 40, fidelity: 1 } });
+    expect(published).toEqual([
+      [`pools/${P}/values/tint/1/a`, 0.3],
+      [`pools/${P}/values/tint/2/a`, 0.3],
+      [`pools/${P}/values/tint/1/lm`, 40],
+      [`pools/${P}/values/tint/2/lm`, 40],
+    ]);
+    // The stream has each light's whole color.
+    expect(changes).toEqual([[P, "tint", [[{ a: 0.3, b: 0.2, lm: 40, fidelity: 1 }, [1]], [{ a: 0.3, b: 0, lm: 40, fidelity: 1 }, [2]]]]]);
+    // A light at the default: the default's color, whole in the tree; or from the default, put back to it first.
+    await pools.set(P, "tint", [[2, null]], "user:ada");
+    published.length = 0;
+    expect(await pools.set(P, "tint", [[2, new ColorPatch({ lm: 90 })], [1, new ColorPatch({ lm: 90 }, true)]], "user:ada")).toBe(true);
+    expect(published).toEqual([
+      [`pools/${P}/values/tint/2`, { a: 0, b: 0, lm: 90, fidelity: 1 }],
+      [`pools/${P}/values/tint/1/a`, 0],
+      [`pools/${P}/values/tint/1/b`, 0],
+      [`pools/${P}/values/tint/1/lm`, 90],
+    ]);
+    // A number's no color to change the numbers of.
+    pools.declare(P, [tint, speed], "user:ada");
+    expect(await pools.set(P, "speed", [[1, new ColorPatch({ lm: 1 })]], "user:ada")).toBe(false);
   });
 
   it("pass over a param their code doesn't declare, once it's said what it does", async () => {
