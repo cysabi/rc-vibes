@@ -2,7 +2,8 @@
 // live state, kept as vibes sends it (the whole tree, then each change, each
 // numbered: a page that reconnects says the last it had, and gets what it
 // missed), and this page's updates to it (sendUpdate), each answered once the
-// tree shows it. From the tree, the room as the page shows it (useScene: the
+// tree shows it. Both ways, lights set to one value go as fans, opened again
+// as they come. From the tree, the room as the page shows it (useScene: the
 // stack of shaders, top first, the room tone, and the pools) and the lights'
 // layout (useLayout). The tree leaves scripts out (scriptHash says which
 // each shader's is); the preview needs them to run pending edits, so they're
@@ -10,7 +11,7 @@
 
 import { useCallback, useState, useSyncExternalStore } from "react";
 import type { RoomTemplate } from "../shared/arclamp.ts";
-import { pathOf, withOps, type LiveTree, type Op, type Pool, type RoomMessage, type RoomRequest } from "../shared/live.ts";
+import { fanOps, pathOf, unfanOps, withOps, type LiveTree, type Op, type Pool, type RoomMessage, type RoomRequest } from "../shared/live.ts";
 import type { Lights, Placement, RailChange, Shader, ShaderKey, TagChange, TypeChange } from "../shared/vibes.ts";
 import { apiSocket, request } from "./api.ts";
 
@@ -166,7 +167,7 @@ function connect(url: string, hello: string | null, greet: (ws: WebSocket) => vo
     heard = Date.now();
     if (hello) ws.send(hello);
     // The tree, or what's changed since the copy here.
-    ws.send(JSON.stringify({ type: "hello", rev, ...(epoch ? { epoch } : {}) } satisfies RoomRequest));
+    ws.send(JSON.stringify({ type: "hello", rev, ...(epoch ? { epoch } : {}), fans: true } satisfies RoomRequest));
     greet(ws);
   };
   ws.onmessage = (e: MessageEvent<string>) => {
@@ -179,16 +180,17 @@ function connect(url: string, hello: string | null, greet: (ws: WebSocket) => vo
       publish();
       void fetchScripts();
     } else if (m.type === "delta") {
-      // One missed (it can't be, on one socket, but if it were): the tree again, from the start.
-      if (!tree || rev === null || m.rev !== rev + 1) {
+      // One missed (it can't be, on one socket, but if it were), or not understood: the tree again, from the start.
+      const ops = unfanOps(m.ops);
+      if (!tree || rev === null || m.rev !== rev + 1 || typeof ops === "string") {
         rev = null;
         ws.close();
         return;
       }
-      tree = withOps(tree, m.ops);
+      tree = withOps(tree, ops);
       rev = m.rev;
       publishSoon();
-      if (m.ops.some(([path]) => path.startsWith("shaders/"))) void fetchScripts();
+      if (ops.some(([path]) => path.startsWith("shaders/"))) void fetchScripts();
     } else if (m.type === "done" || m.type === "refused") {
       const asked = waiting.get(m.id);
       waiting.delete(m.id);
@@ -246,7 +248,7 @@ export function sendUpdate(ops: Op[], note?: string): Promise<Record<string, Sha
     const id = crypto.randomUUID();
     waiting.set(id, { resolve, reject });
     open();
-    void greeted!.then((ws) => ws.send(JSON.stringify({ type: "update", id, ops, ...(note ? { note } : {}) } satisfies RoomRequest)));
+    void greeted!.then((ws) => ws.send(JSON.stringify({ type: "update", id, ops: fanOps(ops), ...(note ? { note } : {}) } satisfies RoomRequest)));
   });
 }
 

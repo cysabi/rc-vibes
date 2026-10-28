@@ -30,6 +30,14 @@
 //   layout/rails/<rail>               RailShape, or null: taken away
 //
 // Nothing is an array but a value: paths only go through objects.
+//
+// On the socket, many lights set to one value at once (a drag over every
+// light selected) can go as one op, a fan: the path with "*" for the light,
+// the value, and which lights, as a bitfield (lightsField). Each end opens a
+// fan into its ops as it arrives (unfanOps), so nothing past the socket sees
+// one: the tree, drafts, history and last-write-wins are path by path, as
+// ever. A page says in its hello that it reads fans; one that doesn't (from
+// before them) is sent every op on its own.
 
 import type { Channels, LightInfo, Rail } from "./arclamp.ts";
 import type { ParamSpec, ParamValue } from "./params.ts";
@@ -40,6 +48,12 @@ export type Path = string;
 
 /** A change: a path and its new value, or just a path, to take it away. */
 export type Op = [path: Path] | [path: Path, value: unknown];
+
+/** Lights set to one value, on the socket: the path with "*" for the light, the value, and the lights (lightsField). */
+export type FanOp = [path: Path, value: unknown, lights: string];
+
+/** An op as the socket carries it: on its own, or a fan of them. */
+export type WireOp = Op | FanOp;
 
 /**
  * A pool: params as some running code declares them, and their values, light
@@ -179,18 +193,147 @@ export function diff(a: unknown, b: unknown, prefix: Path = ""): Op[] {
 /** Whether `path` is `prefix` or under it. */
 export const under = (path: Path, prefix: Path) => path === prefix || path.startsWith(`${prefix}/`);
 
+// The paths with a light in them, that fans are of: "*" where the light is, "?" any one key.
+const FANNABLE = [
+  ["roomtone", "*", "?"],
+  ["pools", "?", "values", "?", "*"],
+  ["layout", "lights", "*", "?"],
+];
+// A light's id as a key, as a lights field can say it: at most two bytes (arclamp's id_width).
+const LIGHT_KEY = /^[1-9][0-9]{0,4}$/;
+const MOST_LIGHT = 0xffff;
+const BASE64URL = "ABCDEFGHIJKLMNOPQRSTUVWXYZabcdefghijklmnopqrstuvwxyz0123456789-_";
+// The longest a lights field can be: every light there can be.
+const MOST_FIELD = Math.ceil((((MOST_LIGHT >> 3) + 1) * 8) / 6);
+
+/** A path with a light in it as a fan has it ("*" for the light), and the light; null if it hasn't one. */
+function starred(path: Path): { star: Path; light: number } | null {
+  const keys = keysOf(path);
+  for (const t of FANNABLE) {
+    if (t.length !== keys.length) continue;
+    const at = t.indexOf("*");
+    const light = LIGHT_KEY.test(keys[at]!) ? Number(keys[at]) : 0;
+    if (light < 1 || light > MOST_LIGHT) continue;
+    if (!t.every((k, i) => k === "*" || (k === "?" ? keys[i] !== "*" : k === keys[i]))) continue;
+    return { star: keys.map((k, i) => (i === at ? "*" : k)).join("/"), light };
+  }
+  return null;
+}
+
+/** Whether a path is one with "*" for a light, as a fan has it. */
+const fannable = (star: Path) => {
+  const keys = keysOf(star);
+  return FANNABLE.some((t) => t.length === keys.length && t.every((k, i) => (k === "*" ? keys[i] === "*" : k === "?" ? keys[i] !== "*" && keys[i] !== "" : k === keys[i])));
+};
+
+/** Lights as a fan has them: a bitfield (light n is byte n >> 3's bit n & 7), as unpadded base64url. */
+export function lightsField(ids: Iterable<number>): string {
+  const list = [...ids];
+  const bytes = new Uint8Array(list.length === 0 ? 0 : (Math.max(...list) >> 3) + 1);
+  for (const id of list) bytes[id >> 3] = bytes[id >> 3]! | (1 << (id & 7));
+  let out = "";
+  for (let i = 0; i < bytes.length; i += 3) {
+    const n = (bytes[i]! << 16) | ((bytes[i + 1] ?? 0) << 8) | (bytes[i + 2] ?? 0);
+    const chars = Math.min(3, bytes.length - i) + 1;
+    for (let j = 0; j < chars; j++) out += BASE64URL[(n >> (18 - 6 * j)) & 63];
+  }
+  return out;
+}
+
+/** The lights a lights field says, lowest first; null if it isn't one. */
+export function lightsOf(field: string): number[] | null {
+  if (field.length > MOST_FIELD || field.length % 4 === 1) return null;
+  const ids: number[] = [];
+  let buffer = 0;
+  let bits = 0;
+  let byte = 0;
+  for (const c of field) {
+    const v = BASE64URL.indexOf(c);
+    if (v < 0) return null;
+    buffer = ((buffer << 6) | v) & 0x3fff;
+    bits += 6;
+    if (bits < 8) continue;
+    bits -= 8;
+    const b = (buffer >> bits) & 0xff;
+    for (let k = 0; k < 8; k++) if (b & (1 << k)) ids.push(byte * 8 + k);
+    byte += 1;
+  }
+  // There's no light 0.
+  return ids[0] === 0 ? null : ids;
+}
+
+/**
+ * Ops for the socket: in each run of ops in a row setting lights' values at
+ * one path but for the light, each light once, those set to the same value
+ * as one fan, where there's more than one. Opened (unfanOps), they're the
+ * same changes: each light in a run has its own path, so their order within
+ * it doesn't matter.
+ */
+export function fanOps(ops: readonly Op[]): WireOp[] {
+  const out: WireOp[] = [];
+  for (let i = 0; i < ops.length; ) {
+    const op = ops[i]!;
+    const first = op.length === 2 ? starred(op[0]) : null;
+    if (!first) {
+      out.push(op);
+      i += 1;
+      continue;
+    }
+    const groups = new Map<string | undefined, { value: unknown; lights: number[] }>();
+    const seen = new Set<number>();
+    for (; i < ops.length; i++) {
+      const o = ops[i]!;
+      if (o.length !== 2) break;
+      const s = starred(o[0]);
+      if (!s || s.star !== first.star || seen.has(s.light)) break;
+      seen.add(s.light);
+      const key = JSON.stringify(o[1]);
+      const g = groups.get(key);
+      if (g) g.lights.push(s.light);
+      else groups.set(key, { value: o[1], lights: [s.light] });
+    }
+    for (const { value, lights } of groups.values()) {
+      out.push(lights.length > 1 ? [first.star, value, lightsField(lights)] : [first.star.replace("*", String(lights[0])), value]);
+    }
+  }
+  return out;
+}
+
+/**
+ * Ops off the socket, each fan opened into its ops, lowest light first: or
+ * "bad", if a fan isn't of lights' paths, or "too_big", if there'd be more
+ * than `most` (found before making more than one fan's past it).
+ */
+export function unfanOps(ops: readonly WireOp[], most = Infinity): Op[] | "bad" | "too_big" {
+  const out: Op[] = [];
+  for (const op of ops) {
+    if (op.length !== 3) {
+      out.push(op);
+    } else {
+      const [star, value, field] = op;
+      const lights = typeof star === "string" && typeof field === "string" && fannable(star) ? lightsOf(field) : null;
+      if (!lights || lights.length === 0) return "bad";
+      if (out.length + lights.length > most) return "too_big";
+      for (const light of lights) out.push([star.replace("*", String(light)), value]);
+    }
+    if (out.length > most) return "too_big";
+  }
+  return out;
+}
+
 /** The room socket: what a page says (after `auth`, from another of vibes' addresses), and what vibes says. */
 export type RoomRequest =
   | { type: "auth"; token: string }
-  /** Ready for the tree: from scratch (null), or what's changed since `rev` (of vibes' run `epoch`, as the tree it had said). */
-  | { type: "hello"; rev: number | null; epoch?: string }
-  /** Changes, all or none; `note` says what for, for the history (a room tone choice's name). */
-  | { type: "update"; id: string; ops: Op[]; note?: string };
+  /** Ready for the tree: from scratch (null), or what's changed since `rev` (of vibes' run `epoch`, as the tree it had said); `fans`, if it reads them in deltas. */
+  | { type: "hello"; rev: number | null; epoch?: string; fans?: boolean }
+  /** Changes, all or none (fans among them); `note` says what for, for the history (a room tone choice's name). */
+  | { type: "update"; id: string; ops: WireOp[]; note?: string };
 
 export type RoomMessage =
   /** The whole tree, as of change `rev` of this run of vibes (`epoch`: its changes count from 0 again when it starts again). */
   | { type: "state"; rev: number; epoch: string; tree: LiveTree }
-  | { type: "delta"; rev: number; ops: Op[] }
+  /** Changes made: with fans, to a page that said it reads them. */
+  | { type: "delta"; rev: number; ops: WireOp[] }
   /** An update made, and shown in the tree; the shaders it added, by the keys of the edits that added them. */
   | { type: "done"; id: string; made: Record<string, ShaderKey> }
   /** An update not made (all of it, or, failing part way in arclamp, the rest of it), and why. */

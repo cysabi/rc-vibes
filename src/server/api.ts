@@ -9,7 +9,7 @@ import type { ContentfulStatusCode } from "hono/utils/http-status";
 import { HTTPException } from "hono/http-exception";
 import { z } from "zod";
 import { normalizeLights, type Channels, type LightsResponse } from "../shared/arclamp.ts";
-import type { RoomMessage } from "../shared/live.ts";
+import { unfanOps, type RoomMessage } from "../shared/live.ts";
 import { RAIL_ID } from "../shared/rails.ts";
 import { MAX_TAGS, TAG } from "../shared/tags.ts";
 import type { Lights, Me, Status } from "../shared/vibes.ts";
@@ -63,9 +63,10 @@ export interface ApiDeps {
 const STREAM_PING_MS = 10_000;
 // The most an update can say (each mask is at most 2000 lights).
 const MAX_UPDATE_BYTES = 4 * 1024 * 1024;
-const op = z.union([z.tuple([z.string().max(300)]), z.tuple([z.string().max(300), z.unknown()])]);
+// An op, or a fan of them (shared/live.ts): its lights field at most every light there can be.
+const op = z.union([z.tuple([z.string().max(300)]), z.tuple([z.string().max(300), z.unknown()]), z.tuple([z.string().max(300), z.unknown(), z.string().max(11_000)])]);
 const roomRequest = z.discriminatedUnion("type", [
-  z.object({ type: z.literal("hello"), rev: z.number().int().nullable(), epoch: z.string().max(100).optional() }),
+  z.object({ type: z.literal("hello"), rev: z.number().int().nullable(), epoch: z.string().max(100).optional(), fans: z.boolean().optional() }),
   z.object({ type: z.literal("update"), id: z.string().min(1).max(100), ops: z.array(op).max(MAX_OPS), note: z.string().max(60).optional() }),
   // A page from before the live state, asking the old way.
   z.object({ type: z.literal("apply"), id: z.string().max(100) }).passthrough(),
@@ -373,12 +374,17 @@ export function apiRoutes({ config, arclamp, db, relay, origins, lights, feed, l
             if (m.type === "hello") {
               // The tree, or what's changed since the page had it, then every change: nothing between them lost.
               unsubscribe();
-              const missed = m.rev === null ? null : live.since(m.rev, m.epoch);
+              const fans = m.fans === true;
+              const missed = m.rev === null ? null : live.since(m.rev, m.epoch, fans);
               if (missed) for (const d of missed) say(d);
               else say(live.state());
-              unsubscribe = live.subscribe(say);
+              unsubscribe = live.subscribe(say, fans);
             } else if (m.type === "update") {
-              session.take(m.id, m.ops, m.note);
+              // Its fans opened, it's ops like any other.
+              const ops = unfanOps(m.ops, MAX_OPS);
+              if (ops === "bad") answer({ type: "refused", id: m.id, error: "a fan is of lights' paths, with a lights field", code: "bad_update", made: {} });
+              else if (ops === "too_big") answer({ type: "refused", id: m.id, error: `an update carries at most ${MAX_OPS} changes`, code: "too_big", made: {} });
+              else session.take(m.id, ops, m.note);
             } else {
               // A page from before: it says why its changes don't go through.
               say(JSON.stringify({ type: "refused", id: m.id, at: 0, error: "vibes has changed since this page loaded: reload it", code: "reload", made: {} }));

@@ -1,4 +1,5 @@
 import { describe, expect, it } from "vitest";
+import { lightsField } from "../shared/live.ts";
 import type { Shader, SceneFeed } from "../shared/vibes.ts";
 import { createLiveState, layoutOf, sceneParts } from "./live.ts";
 
@@ -115,5 +116,21 @@ describe("the live state", () => {
     for (let i = 0; i < 4001; i++) live.publish([["stack", [String(i)]]]);
     expect(live.since(0, epoch)).toBeNull();
     expect(live.since(live.rev() - 10, epoch)).toHaveLength(10);
+  });
+
+  it("sends lights set to one value as a fan to a page that reads them, and each on its own to one that doesn't", () => {
+    const live = createLiveState();
+    const { epoch } = JSON.parse(live.state()) as { epoch: string };
+    const plain = listen(live);
+    const fanned: { ops: unknown[] }[] = [];
+    live.subscribe((json) => fanned.push(JSON.parse(json)), true);
+    const ops: [string, unknown][] = [1, 2, 3].map((id) => [`pools/p/values/on/${id}`, false]);
+    live.publish(ops);
+    expect(plain[0]!.ops).toEqual(ops);
+    expect(fanned[0]!.ops).toEqual([["pools/p/values/on/*", false, lightsField([1, 2, 3])]]);
+    // Catching up, likewise; the tree's path by path either way.
+    expect(JSON.parse(live.since(0, epoch)![0]!).ops).toEqual(ops);
+    expect(JSON.parse(live.since(0, epoch, true)![0]!).ops).toEqual(fanned[0]!.ops);
+    expect(live.tree().pools).toEqual({ p: { values: { on: { "1": false, "2": false, "3": false } } } });
   });
 });
