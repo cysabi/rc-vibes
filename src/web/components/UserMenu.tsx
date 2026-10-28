@@ -37,7 +37,7 @@ export function UserMenu() {
           <input type="checkbox" checked={liveMode} onChange={(e) => setLiveMode(e.target.checked)} />
           <span>
             Live
-            <small>Skips the preview: changes go to the room as you make them, with nothing to apply.</small>
+            <small>Skips the preview: changes go to the room as you make them, with nothing to apply. Off again when you reload.</small>
           </span>
         </label>
         <div className="menu-field">

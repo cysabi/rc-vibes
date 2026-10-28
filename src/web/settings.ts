@@ -1,22 +1,23 @@
 // Per-browser preferences. Admin mode only reveals room-wide and destructive
 // controls; everyone is allowed to turn it on. Live mode skips the preview:
-// edits go to the room as they're made.
+// edits go to the room as they're made. It's for this page only, never kept:
+// a reload starts out of it, previewing again.
 
 import { useSyncExternalStore } from "react";
 
-/** A switch kept in this browser, and a hook that follows it. */
-function flag(key: string) {
+/** A switch kept in this browser (or, with no key, only till the page goes), and a hook that follows it. */
+function flag(key: string | null) {
   const listeners = new Set<() => void>();
   let cached = false;
   try {
-    cached = localStorage.getItem(key) === "1";
+    if (key) cached = localStorage.getItem(key) === "1";
   } catch {
     // Storage blocked: it starts off.
   }
   const set = (on: boolean) => {
     try {
-      if (on) localStorage.setItem(key, "1");
-      else localStorage.removeItem(key);
+      if (key && on) localStorage.setItem(key, "1");
+      else if (key) localStorage.removeItem(key);
     } catch {
       // Storage blocked (private window): the switch just won't persist.
     }
@@ -35,7 +36,13 @@ function flag(key: string) {
 }
 
 export const [setAdminMode, useAdminMode] = flag("vibes.adminMode");
-export const [setLiveMode, useLiveMode] = flag("vibes.liveMode");
+export const [setLiveMode, useLiveMode] = flag(null);
+// Kept once, before it wasn't: let go of.
+try {
+  localStorage.removeItem("vibes.liveMode");
+} catch {
+  // Storage blocked: nothing kept to let go of.
+}
 // The map's light worked out a pixel at a time (lighting-exact.ts), while it's tried out.
 export const [setExactLight, useExactLight] = flag("vibes.exactLight");
 
