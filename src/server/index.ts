@@ -8,6 +8,8 @@ import { WebSocketServer } from "ws";
 import { apiRoutes, createLights, handleError } from "./api.ts";
 import { createArclamp } from "./arclamp.ts";
 import { authRoutes } from "./auth.ts";
+import { createBaseColor, type BaseColor } from "./base-color.ts";
+import { loadBaseColorScript } from "./base-color-script.ts";
 import { dockerRunner } from "./box-docker.ts";
 import { createBoxProxy } from "./box-proxy.ts";
 import { createBoxes, type BoxRunner } from "./boxes.ts";
@@ -65,8 +67,10 @@ layoutTimer.unref();
 const layout = createLayout({ db, arclampLights: lights.arclampLights, currentLights: lights.currentLights, changed: showLayout });
 
 // The scene, followed as it changes, its footprints from the light stream;
-// arclamp's health, likewise; and sketches put in the room (instances).
+// arclamp's health, likewise; and sketches put in the room (instances),
+// Base Color always among them, at the bottom (base-color.ts).
 let instances: Instances | null = null;
+let baseColor: BaseColor | null = null;
 // Pools' streams: each shader linked once (an eval), then a stream from it, taking each change.
 // Only where shaders can reach vibes (VIBES_SHADER_URL; env.ts).
 const params = builds && config.shaderUrl ? createParamLinks({ pools, arclamp, secret: config.sessionSecret, url: `${config.shaderUrl}/shader-api/params` }) : null;
@@ -78,6 +82,7 @@ const feed = createSceneFeed({
   layout: () => lights.arclampLights(),
   instances: () => instances,
   onShaders: (shaders) => params?.scene(shaders),
+  onScene: (shaders) => baseColor?.scene(shaders),
 });
 feed.subscribe((scene) => live.scene(scene));
 relay.subscribe((frame) => feed.touched(frame));
@@ -95,7 +100,20 @@ if (builds) {
     changed: () => feed.poke(),
     pools,
     gone: (pool) => params?.gone(pool),
+    wentIn: (id, d) => baseColor?.wentIn(id, d),
   });
+  if (config.signingKey) {
+    baseColor = createBaseColor({
+      signingKey: config.signingKey,
+      db,
+      instances,
+      pools,
+      arclamp: noted,
+      script: () => loadBaseColorScript(config.production),
+      linked: params ? (pool) => params.linked(pool) : null,
+    });
+    void baseColor.start();
+  }
 }
 
 const app = new Hono();

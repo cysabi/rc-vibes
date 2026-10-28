@@ -14,6 +14,7 @@
 
 import { useState } from "react";
 import type { LightInfo } from "../../shared/arclamp.ts";
+import { isBaseColor } from "../../shared/base-color.ts";
 import { tagLabel } from "../../shared/tags.ts";
 import type { Instance, ShaderSketch } from "../../shared/vibes.ts";
 import { request, useBranchHead } from "../api.ts";
@@ -35,10 +36,12 @@ export function ShaderTitle({ layer, onBack }: { layer: Layer; onBack: () => voi
       <div className="selection-title">
         <h2>{layer.name}</h2>
         <p className="muted">
-          {/* A sketch's, vibes made (with its own key, which arclamp names as who did). */}
-          {sketch
-            ? `@ ${instance ? commitName(sketch.commit, instance.branch, instance.head) : sketch.commit.slice(0, 7)}`
-            : `Made outside vibes · by ${layer.by}`}
+          {/* A sketch's, vibes made (with its own key, which arclamp names as who did); Base Color's is vibes' own. */}
+          {isBaseColor(layer.key)
+            ? "Part of vibes · always at the bottom"
+            : sketch
+              ? `@ ${instance ? commitName(sketch.commit, instance.branch, instance.head) : sketch.commit.slice(0, 7)}`
+              : `Made outside vibes · by ${layer.by}`}
           {sketch?.deleted && <span className="layer-badge">deleted</span>}
           {sketch?.edited && (
             <span className="layer-badge" title="Changed since vibes built it, so it isn't what its sketch's commit says">
@@ -67,6 +70,8 @@ interface BodyProps {
 
 export function ShaderBody({ layer, stack, removing, lights, selected, onGone }: BodyProps) {
   const { key, sketch, instance } = layer;
+  // Base Color (shared/base-color.ts): always in, on every light, its code vibes' own.
+  const base = isBaseColor(key);
   const reach = reachOf(layer);
   const state = switchState(layer);
   const masked = new Set(layer.mask);
@@ -109,7 +114,14 @@ export function ShaderBody({ layer, stack, removing, lights, selected, onGone }:
             <span className="switch-knob" />
           </button>
         </li>
-        {instance ? (
+        {base ? (
+          <li>
+            <span className="fact">
+              <span className="fact-name">On every light</span>
+              <span className="fact-meta">Base Color's home is the whole room</span>
+            </span>
+          </li>
+        ) : instance ? (
           <Home instance={instance} lights={lights} selected={selected} />
         ) : (
           <li>
@@ -131,11 +143,15 @@ export function ShaderBody({ layer, stack, removing, lights, selected, onGone }:
           </li>
         )}
       </ul>
-      <div className="shader-actions">
-        {sketch?.name != null && <OpenCode sketch={sketch} />}
-        {instance && <Update instance={instance} />}
-        {!removing && <RemoveShader layer={layer} onGone={onGone} />}
-      </div>
+      {base ? (
+        <p className="shader-note muted">Base Color is part of vibes, so it's always here: switch it off to show the room tone.</p>
+      ) : (
+        <div className="shader-actions">
+          {sketch?.name != null && <OpenCode sketch={sketch} />}
+          {instance && <Update instance={instance} />}
+          {!removing && <RemoveShader layer={layer} onGone={onGone} />}
+        </div>
+      )}
     </div>
   );
 }

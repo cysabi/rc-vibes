@@ -33,11 +33,13 @@ import {
 import { CSS } from "@dnd-kit/utilities";
 import { useEffect, useLayoutEffect, useRef, useState, type PointerEvent, type ReactNode } from "react";
 import type { Channels, LightInfo } from "../../shared/arclamp.ts";
+import { BASE_COLOR, isBaseColor } from "../../shared/base-color.ts";
 import { baseType, isBinary, isOn, lemtoneOf, requestedOf } from "../../shared/fixtures.ts";
 import { colorName, lemtoneCode, lumensText } from "../../shared/lemtone.ts";
 import { tagLabel } from "../../shared/tags.ts";
 
 import { useBranchHead, useStatus } from "../api.ts";
+import { useAdminMode } from "../settings.ts";
 import {
   changeable,
   drafts,
@@ -123,8 +125,10 @@ export function SelectionPanel({ floor, here, selected, shader, onShader, onClos
   const onThese = [...shown].reverse().filter((layer) => reachOf(layer).some((id) => selected.has(id)));
   const rows: Row[] = onThese.map((layer) => ({ layer, state: switchState(layer, ids) }));
 
-  // The layer whose parameters are open under it, one at a time: room tone's, to start with.
-  const [opened, setOpened] = useState<string | null>("roomtone");
+  // Room tone, the room's "normal", is for admin mode to change; Base Color's what everyone does.
+  const admin = useAdminMode();
+  // The layer whose parameters are open under it, one at a time: room tone's (in admin mode) or Base Color's, to start with.
+  const [opened, setOpened] = useState<string | null>(admin ? "roomtone" : BASE_COLOR.instance);
   // Picking a sketch to add to these lights.
   const [picking, setPicking] = useState(false);
   const status = useStatus();
@@ -149,7 +153,8 @@ export function SelectionPanel({ floor, here, selected, shader, onShader, onClos
     useSensor(PointerSensor, { activationConstraint: { distance: 4 } }),
     useSensor(KeyboardSensor, { coordinateGetter: sortableKeyboardCoordinates }),
   );
-  const listed = rows.filter((r) => changeable(r.layer) && !going.has(r.layer.key)).map((r) => r.layer.key);
+  // Base Color stays at the bottom: it's no place among them to move to.
+  const listed = rows.filter((r) => changeable(r.layer) && !going.has(r.layer.key) && !isBaseColor(r.layer.key)).map((r) => r.layer.key);
   const onDragEnd = ({ active, over }: DragEndEvent) => {
     if (!over || active.id === over.id) return;
     const moved = arrayMove(listed, listed.indexOf(String(active.id)), listed.indexOf(String(over.id)));
@@ -323,27 +328,39 @@ export function SelectionPanel({ floor, here, selected, shader, onShader, onClos
                 <SortableContext items={listed} strategy={verticalListSortingStrategy}>
                   <ol className="layers">
                     {/* Always the base, the rail's source: it can't move or be switched off. Its
-                        parameter, the color, opens under it (open to start with). */}
-                    <li className={opened === "roomtone" ? "layer base open" : "layer base"}>
-                      {/* All of its head (what lights up) opens and closes it; the button's for the keyboard. */}
-                      <div className="layer-head" onClick={() => setOpened(opened === "roomtone" ? null : "roomtone")}>
-                        <span className="layer-grip" aria-hidden="true" />
-                        <span className="layer-node" aria-hidden="true" />
-                        <button className="layer-text layer-toggle" aria-expanded={opened === "roomtone"}>
-                          <span className="layer-name">Room tone</span>
-                          <span className="layer-meta">{toneSummary(chosen, template)}</span>
-                        </button>
-                        <span className="layer-chevron" aria-hidden="true">
-                          <ChevronUpIcon />
-                        </span>
-                      </div>
-                      <Reveal open={opened === "roomtone"}>
-                        <RoomToneEditor lights={chosen} template={template} over={rows.filter((r) => r.state !== "off" && r.layer.script !== "" && !going.has(r.layer.key)).map((r) => r.layer.name)} />
-                      </Reveal>
-                    </li>
+                        parameter, the color, opens under it (open to start with). Admin mode's to change. */}
+                    {admin && (
+                      <li className={opened === "roomtone" ? "layer base open" : "layer base"}>
+                        {/* All of its head (what lights up) opens and closes it; the button's for the keyboard. */}
+                        <div className="layer-head" onClick={() => setOpened(opened === "roomtone" ? null : "roomtone")}>
+                          <span className="layer-grip" aria-hidden="true" />
+                          <span className="layer-node" aria-hidden="true" />
+                          <button className="layer-text layer-toggle" aria-expanded={opened === "roomtone"}>
+                            <span className="layer-name">Room tone</span>
+                            <span className="layer-meta">{toneSummary(chosen, template)}</span>
+                          </button>
+                          <span className="layer-chevron" aria-hidden="true">
+                            <ChevronUpIcon />
+                          </span>
+                        </div>
+                        <Reveal open={opened === "roomtone"}>
+                          <RoomToneEditor lights={chosen} template={template} over={rows.filter((r) => r.state !== "off" && r.layer.script !== "" && !going.has(r.layer.key)).map((r) => r.layer.name)} />
+                        </Reveal>
+                      </li>
+                    )}
                     {rows.map((row) =>
                       going.has(row.layer.key) ? (
                         <GoingRow key={row.layer.key} layer={row.layer} />
+                      ) : isBaseColor(row.layer.key) && changeable(row.layer) ? (
+                        <FixedRow
+                          key={row.layer.key}
+                          row={row}
+                          onSwitch={(on) => setOn(row, on)}
+                          onOpen={() => onShader(row.layer.key)}
+                          details={detailsOf(row.layer, chosen)}
+                          opened={opened === row.layer.key}
+                          onToggle={() => setOpened(opened === row.layer.key ? null : row.layer.key)}
+                        />
                       ) : changeable(row.layer) ? (
                         <SortableRow
                           key={row.layer.key}
@@ -438,6 +455,38 @@ function SortableRow(props: RowProps) {
       className={`layer${coming}${row.state === "off" ? " off" : ""}${expandable ? " expandable" : ""}${open ? " open" : ""}${isDragging ? " dragging" : ""}`}
       style={{ transform: CSS.Transform.toString(transform), transition }}
     >
+      {expandable ? (
+        <div className="layer-head" onClick={(e) => !(e.target as Element).closest("button") && onToggle()}>
+          {head}
+        </div>
+      ) : (
+        head
+      )}
+      {expandable && (
+        <Reveal open={open}>
+          <div className="layer-details">{details}</div>
+        </Reveal>
+      )}
+    </li>
+  );
+}
+
+/**
+ * Base Color's row (shared/base-color.ts): as any shader's, but always at the
+ * bottom, so with no handle to drag it by.
+ */
+function FixedRow(props: RowProps) {
+  const { row, details, opened, onToggle } = props;
+  const expandable = details !== null;
+  const open = opened && expandable;
+  const head = (
+    <>
+      <span className="layer-grip" aria-hidden="true" />
+      <RowParts {...props} />
+    </>
+  );
+  return (
+    <li className={`layer${row.state === "off" ? " off" : ""}${expandable ? " expandable" : ""}${open ? " open" : ""}`}>
       {expandable ? (
         <div className="layer-head" onClick={(e) => !(e.target as Element).closest("button") && onToggle()}>
           {head}

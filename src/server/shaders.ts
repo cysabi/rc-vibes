@@ -12,6 +12,7 @@ import { zValidator } from "@hono/zod-validator";
 import { Hono, type Context } from "hono";
 import { z } from "zod";
 import type { ShaderDescriptor } from "../shared/arclamp.ts";
+import { BASE_COLOR, isBaseColor } from "../shared/base-color.ts";
 import { cleanValue, PARAM_NAME, type Changes } from "../shared/params.ts";
 import type { Me, Person } from "../shared/vibes.ts";
 import type { Arclamp } from "./arclamp.ts";
@@ -140,6 +141,7 @@ export function createShaders({ config, arclamp, db, instances, pools = null }: 
      */
     async remove(key: string, user: Person) {
       const it = resolve(key, user);
+      if (isBaseColor(it?.instance?.id)) throw new Refused(403, "base_color", "Base Color is always in the room: mute it instead");
       if (it?.instance && instances) {
         await instances.remove(it.instance.id, user);
         return;
@@ -187,6 +189,7 @@ export function createShaders({ config, arclamp, db, instances, pools = null }: 
       const it = resolve(key, user);
       if (!it) throw new Refused(404, "not_found", "no such shader");
       if (!it.instance || !instances) throw new Refused(400, "no_home", "it wasn't put in from a sketch, so it has no home");
+      if (isBaseColor(it.instance.id)) throw new Refused(403, "base_color", "Base Color's home is every light");
       const moved = await instances.setHome(it.instance.id, home, user);
       if ("refused" in moved) throw new Refused(moved.status, moved.code, moved.refused);
     },
@@ -195,16 +198,18 @@ export function createShaders({ config, arclamp, db, instances, pools = null }: 
      * The stack in this order, top first. Those in the room are moved; each
      * not in yet is to go in just above the one under it here (or at the
      * bottom); gone ones are passed over. Any in the room it leaves out stay
-     * on top (put in since whoever asked last looked).
+     * on top (put in since whoever asked last looked). Base Color stays at
+     * the bottom, wherever the order puts it, or if it leaves it out.
      */
     async reorder(order: string[], user: Person) {
-      const shaders = order.map((key) => resolve(key, user));
+      const base = db.instance(BASE_COLOR.instance);
+      const shaders = order.map((key) => resolve(key, user)).filter((it) => !isBaseColor(it?.instance?.id));
       shaders.forEach((it, i) => {
         if (!it?.instance || it.arclampId !== null) return;
         const under = shaders.slice(i + 1).find((s) => s !== null);
         instances?.setAbove(it.instance.id, under ? (under.instance?.id ?? rclampKey(under.arclampId!)) : "");
       });
-      const ids = shaders.map((it) => it?.arclampId ?? null);
+      const ids = [...shaders.map((it) => it?.arclampId ?? null), ...(base?.shader_id != null ? [base.shader_id] : [])];
       const reorder = ordering.then(async () => {
         const now = (await arclamp.scene()).filter((d) => d.type === "js").sort((a, b) => b.position - a.position);
         const byId = new Map(now.map((d) => [d.id, d]));

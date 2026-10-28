@@ -1,9 +1,10 @@
-import { statSync } from "node:fs";
+import { statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
 import react from "@vitejs/plugin-react";
-import { build, defineConfig, type Plugin } from "vite";
-import { UPDATE_FOOTER } from "./src/shared/sketch-plan.ts";
+import { defineConfig, type Plugin } from "vite";
+import { BASE_COLOR_ENTRY, BASE_COLOR_SCRIPT } from "./src/server/base-color-script.ts";
+import { buildSketchScript } from "./src/server/sketch-script.ts";
 import { makeCutoffs, pack } from "./src/web/cutoffs.ts";
 
 const server = `http://127.0.0.1:${process.env.PORT ?? "8787"}`;
@@ -53,15 +54,7 @@ function previewPage(): Plugin {
   async function script(): Promise<string> {
     const at = statSync(sketch).mtimeMs;
     if (built?.at === at) return built.script;
-    const out = await build({
-      configFile: false,
-      root: path.dirname(sketch),
-      logLevel: "warn",
-      build: { write: false, minify: false, target: "es2022", lib: { entry: sketch, formats: ["iife"], name: "__sketch", fileName: () => "sketch.js" }, rolldownOptions: { output: { footer: UPDATE_FOOTER } } },
-    });
-    const chunk = (Array.isArray(out) ? out : [out]).flatMap((o) => (o as { output: { type: string; code?: string }[] }).output).find((o) => o.type === "chunk");
-    if (!chunk?.code) throw new Error("Vite made no script");
-    built = { at, script: chunk.code };
+    built = { at, script: await buildSketchScript(sketch) };
     return built.script;
   }
   return {
@@ -90,9 +83,24 @@ function previewPage(): Plugin {
   };
 }
 
+/**
+ * Base Color's script (src/shared/base-color.ts), built with vibes as the
+ * builder builds a sketch, beside the web app (not in it: it's for arclamp,
+ * not browsers). The server puts it in from there (base-color-script.ts).
+ */
+function baseColorScript(): Plugin {
+  return {
+    name: "vibes:base-color",
+    apply: "build",
+    async closeBundle() {
+      writeFileSync(BASE_COLOR_SCRIPT, await buildSketchScript(BASE_COLOR_ENTRY));
+    },
+  };
+}
+
 export default defineConfig({
   root: "src/web",
-  plugins: [react(), cutoffs(), previewPage()],
+  plugins: [react(), cutoffs(), previewPage(), baseColorScript()],
   build: { outDir: "../../dist/web", emptyOutDir: true },
   server: {
     port: 5173,

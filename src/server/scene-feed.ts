@@ -37,6 +37,7 @@ import type { Db, InstanceRow } from "./db.ts";
 import type { Config } from "./env.ts";
 import type { EventHandlers, Following } from "./event-stream.ts";
 import type { Instances } from "./instances.ts";
+import type { SceneShader } from "./base-color.ts";
 import type { SeenShader } from "./params.ts";
 import { rclampKey, shaderOfKey } from "./shaders.ts";
 import { readStamp, sketchOf } from "./stamp.ts";
@@ -67,6 +68,8 @@ export interface FeedDeps {
   instances?: () => Instances | null;
   /** Told the shaders in the scene that are instances' (by their stamps), each time it's made: for linking them for params (params.ts). */
   onShaders?: (shaders: SeenShader[]) => void;
+  /** Told every shader in the scene (not the room tone), each time it's made: for keeping Base Color (base-color.ts). */
+  onScene?: (shaders: SceneShader[]) => void;
   confirmMs?: number;
 }
 
@@ -81,7 +84,7 @@ const keep = ({ script: _script, changing: _changing, ...rest }: ShaderDescripto
 const sha = (s: string) => createHash("sha256").update(s).digest("hex");
 const sorted = (ids: Iterable<number>) => [...ids].sort((a, b) => a - b);
 
-export function createSceneFeed({ config, db, arclamp, follow, layout, instances = () => null, onShaders, confirmMs = CONFIRM_MS }: FeedDeps) {
+export function createSceneFeed({ config, db, arclamp, follow, layout, instances = () => null, onShaders, onScene, confirmMs = CONFIRM_MS }: FeedDeps) {
   const shaders = new Map<number, Kept>();
   // Whether it's been told the whole scene yet.
   let whole = false;
@@ -207,6 +210,7 @@ export function createSceneFeed({ config, db, arclamp, follow, layout, instances
       });
     }
     onShaders?.(ours);
+    onScene?.([...shaders.values()].filter((n) => n.type === "js").map((n) => ({ id: n.id, position: n.position, muted: n.muted, mask: n.mask ?? [] })));
     for (const hash of [...scripts.keys()]) {
       if (inUse.has(hash)) continue;
       scripts.delete(hash);

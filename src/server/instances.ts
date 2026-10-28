@@ -17,12 +17,19 @@
 // builds a newer commit (its branch's head, unless asked for another) and
 // swaps that in once built, the old one running meanwhile. Its home can move.
 // Taking it out, or its shader going some other way, is the end of it.
+//
+// Except for Base Color (shared/base-color.ts), the one instance vibes puts
+// in itself: its home is every light there is, it's always at the bottom (an
+// instance put in "at the bottom" goes just above it), it can't be taken out,
+// updated or moved home, and when its shader's gone it goes back in, as it
+// last was, with its pool kept (keepBase, lost).
 
 import { zValidator } from "@hono/zod-validator";
 import { Hono, type Context } from "hono";
 import { randomUUID } from "node:crypto";
 import { z } from "zod";
 import type { ShaderDescriptor } from "../shared/arclamp.ts";
+import { BASE_COLOR, isBaseColor } from "../shared/base-color.ts";
 import type { Instance, Me, Person } from "../shared/vibes.ts";
 import type { Arclamp } from "./arclamp.ts";
 import type { AuthEnv } from "./auth.ts";
@@ -37,7 +44,7 @@ import { readStamp, stampAs } from "./stamp.ts";
 const home = z.array(z.number().int()).min(1).max(2000);
 const branch = z.string().refine(isBranchName).default("main");
 
-type Status = 400 | 404 | 409 | 410 | 503;
+type Status = 400 | 403 | 404 | 409 | 410 | 503;
 const refuse = (c: Context, status: Status, error: string, code: string) => c.json({ error, code }, status);
 
 const detail = (b: BuildRow, s: SketchRow) => ({ sketch: s.id, commit: b.commit_sha, build: b.id });
@@ -58,11 +65,13 @@ export interface InstanceDeps {
   pools?: Pick<Pools, "adopt" | "remove"> | null;
   /** Told when an instance is gone, with its pool, to end its shader's stream of params (params.ts). */
   gone?: (pool: string) => void;
+  /** Told when Base Color has gone in anew, held muted until its params reach it (base-color.ts). */
+  wentIn?: (id: string, d: ShaderDescriptor) => void;
 }
 
 type Refusal = { refused: string; status: Status; code: string };
 
-export function createInstances({ config, db, arclamp, builds, lightIds, changed = () => {}, pools = null, gone = () => {} }: InstanceDeps) {
+export function createInstances({ config, db, arclamp, builds, lightIds, changed = () => {}, pools = null, gone = () => {}, wentIn = () => {} }: InstanceDeps) {
   const refusal = (refused: string, status: Status, code: string): Refusal => ({ refused, status, code });
 
   function view(row: InstanceRow): Instance {
@@ -92,11 +101,32 @@ export function createInstances({ config, db, arclamp, builds, lightIds, changed
     return (await lightIds()).filter((id) => !inside.has(id));
   }
 
+  /** Every light outside an instance's home: none for Base Color, whose home is every light there is, however many that comes to be. */
+  const outsideOf = (inst: InstanceRow) => (isBaseColor(inst.id) ? Promise.resolve([]) : outside(inst.home));
+
   /** An instance gone: its shader's stream of params ended, and its pool let go. */
   const letGo = (inst: InstanceRow) => {
     gone(inst.pool_id);
     pools?.remove(inst.pool_id);
   };
+
+  /**
+   * An instance whose shader's gone: forgotten, its pool with it. Base Color
+   * isn't: it goes back in as it last was (its row has what was wanted of it
+   * last), its pool and values kept; only its old stream ends.
+   */
+  function lost(inst: InstanceRow) {
+    if (isBaseColor(inst.id)) {
+      gone(inst.pool_id);
+      db.updateInstance(inst.id, { shader_id: null, state: "building", error: null });
+      changed();
+      void place(inst.id);
+      return;
+    }
+    db.deleteInstance(inst.id);
+    letGo(inst);
+    changed();
+  }
 
   const failed = (id: string, error: string) => {
     db.updateInstance(id, { state: "failed", error });
@@ -111,18 +141,27 @@ export function createInstances({ config, db, arclamp, builds, lightIds, changed
   /** What's wanted of an instance as it goes in: muted or not, and its whole mask. */
   async function wanted(id: string) {
     const inst = db.instance(id)!;
-    return { muted: inst.muted, mask: inst.mask ?? (await outside(inst.home)) };
+    return { muted: inst.muted, mask: inst.mask ?? (await outsideOf(inst)) };
+  }
+
+  /** The bottom of the stack, for everything but Base Color: just above it, wherever it is now (1 if it isn't in). */
+  function bottom(scene: ShaderDescriptor[]): number {
+    const base = db.instance(BASE_COLOR.instance);
+    const d = base?.shader_id != null ? scene.find((s) => s.id === base.shader_id && s.type === "js") : undefined;
+    return d ? d.position + 1 : 1;
   }
 
   /**
    * Where a shader goes in, just above the one with the key `above` ("" the
-   * bottom): arclamp's position for it; undefined for the top, as when that
-   * shader's gone. One that isn't in yet stands for wherever it's to go.
+   * bottom, above Base Color; Base Color itself, under everything): arclamp's
+   * position for it; undefined for the top, as when that shader's gone. One
+   * that isn't in yet stands for wherever it's to go.
    */
-  function positionOf(above: string | null, scene: ShaderDescriptor[]): number | undefined {
+  function positionOf(id: string, above: string | null, scene: ShaderDescriptor[]): number | undefined {
+    if (isBaseColor(id)) return 1;
     const seen = new Set<string>();
     for (let key = above; key !== null && !seen.has(key); ) {
-      if (key === "") return 1;
+      if (key === "") return bottom(scene);
       seen.add(key);
       const it = shaderOfKey(db, key);
       if (!it) return undefined;
@@ -174,20 +213,29 @@ export function createInstances({ config, db, arclamp, builds, lightIds, changed
       if (!script) return failed(id, "its stamp doesn't check out (was vibes' key changed?): put it in again");
       const scene = await arclamp.scene();
       // Put in already, by its stamp (vibes stopped before it noted its shader): that's it.
-      let d = scene.find((s) => {
+      const found = scene.find((s) => {
         const read = s.type === "js" && s.script !== undefined ? readStamp(s.script, config.signingKey) : null;
         return read?.verified && read.stamp.shader === id;
       });
+      // Base Color going in anew goes in muted, until its params have reached
+      // it (held: base-color.ts lets it go): else it would light the room in
+      // its defaults until then.
+      const held = !found && isBaseColor(id);
+      const want = async () => ({ ...(await wanted(id)), ...(held ? { muted: true } : {}) });
       // Muted and masked as it goes in, so its first frame lights only what
       // it may: arclamp's shaders render as soon as they're in.
-      d ??= await arclamp.createShader(script, positionOf(inst.above, scene), await wanted(id));
+      const d = found ?? (await arclamp.createShader(script, positionOf(id, inst.above, scene), await want()));
       // Its shader, noted at once, so the scene shows it as this instance (not someone else's shader) from the start.
       db.updateInstance(id, { shader_id: d.id });
+      // Any other instance still noted as this shader is long gone: arclamp
+      // gave its id to this one (counting again from 1 after it restarted).
+      for (const other of db.instances()) if (other.id !== id && other.shader_id === d.id) lost(other);
       // Brought to what's wanted now: anything wanted while it went in (after
       // it's noted, want catches up), or all of it, from an arclamp that
       // doesn't take them on create.
-      await bringTo(d, await wanted(id));
+      await bringTo(d, await want());
       db.updateInstance(id, { state: "live", error: null });
+      if (held) wentIn(id, d);
       db.log({ user: { id: inst.by_id, name: inst.by_name }, action: "shader.create", shaderId: d.id, shaderName: sketch.name, detail: { ...detail(build, sketch), home: inst.home.length } });
       changed();
     } catch (err) {
@@ -316,6 +364,7 @@ export function createInstances({ config, db, arclamp, builds, lightIds, changed
     async update(id: string, rev: string | undefined, user: Me): Promise<{ instance: Instance } | Refusal> {
       const inst = db.instance(id);
       if (!inst) return refusal("no such instance", 404, "not_found");
+      if (isBaseColor(id)) return refusal("Base Color's code is vibes' own: it changes with vibes", 403, "base_color");
       if (inst.state !== "live") return refusal("it isn't in the room yet", 409, "not_live");
       const started = await builds.start(inst.sketch_id, rev ?? inst.branch, user);
       if ("refused" in started) return refusal(started.refused, started.status, "cant_build");
@@ -334,6 +383,7 @@ export function createInstances({ config, db, arclamp, builds, lightIds, changed
     async setHome(id: string, homeLights: number[], user: Me): Promise<{ instance: Instance } | Refusal> {
       const inst = db.instance(id);
       if (!inst) return refusal("no such instance", 404, "not_found");
+      if (isBaseColor(id)) return refusal("Base Color's home is every light", 403, "base_color");
       const bad = await badHome(homeLights);
       if (bad) return refusal(bad, 400, "bad_home");
       const next = sorted(homeLights);
@@ -358,7 +408,7 @@ export function createInstances({ config, db, arclamp, builds, lightIds, changed
     async want(id: string, patch: { muted?: boolean; mask?: number[] }): Promise<boolean> {
       const inst = db.instance(id);
       if (!inst || inst.shader_id !== null) return false;
-      const mask = patch.mask && sorted([...patch.mask, ...(await outside(inst.home))]);
+      const mask = patch.mask && sorted([...patch.mask, ...(await outsideOf(inst))]);
       db.updateInstance(id, { ...(patch.muted !== undefined ? { muted: patch.muted } : {}), ...(mask ? { mask } : {}) });
       changed();
       // Gone in meanwhile, after place looked at what's wanted: caught up now.
@@ -373,10 +423,10 @@ export function createInstances({ config, db, arclamp, builds, lightIds, changed
       changed();
     },
 
-    /** An instance out of the room: its shader removed, if it's there, and it forgotten. */
+    /** An instance out of the room: its shader removed, if it's there, and it forgotten. Never Base Color (shaders.remove refuses it). */
     async remove(id: string, user: Person): Promise<boolean> {
       const inst = db.instance(id);
-      if (!inst) return false;
+      if (!inst || isBaseColor(id)) return false;
       if (inst.shader_id !== null) {
         try {
           await arclamp.deleteShader(inst.shader_id);
@@ -395,16 +445,41 @@ export function createInstances({ config, db, arclamp, builds, lightIds, changed
     /** A mask for a shader, with every light outside its instance's home added: its home stays all it can light. */
     async within(shaderId: number, mask: number[]): Promise<number[]> {
       const inst = db.instanceOfShader(shaderId);
-      return inst ? sorted([...mask, ...(await outside(inst.home))]) : mask;
+      return inst ? sorted([...mask, ...(await outsideOf(inst))]) : mask;
     },
 
-    /** A shader's gone (removed through vibes or not): so is its instance. */
+    /** A shader's gone (removed through vibes or not): so is its instance (Base Color goes back in). */
     forget(shaderId: number) {
       const inst = db.instanceOfShader(shaderId);
-      if (!inst) return;
-      db.deleteInstance(inst.id);
-      letGo(inst);
-      changed();
+      if (inst) lost(inst);
+    },
+
+    /**
+     * Base Color (shared/base-color.ts) in the room, on this build: made, if
+     * it hasn't been, on every light and at the bottom, its pool its own;
+     * moved on to this build, if it's on another (a vibes with other code for
+     * it); put in, if it isn't, or tried again, if it couldn't go in. Made
+     * just now, its pool's first values are `seed`'s to set, before it goes in.
+     */
+    async keepBase(buildId: string, by: Person, seed: () => Promise<void> = async () => {}): Promise<void> {
+      const id = BASE_COLOR.instance;
+      const inst = db.instance(id);
+      if (!inst) {
+        db.addInstance({ id, sketch_id: BASE_COLOR.sketch, build_id: buildId, home: await lightIds(), by_id: by.id, by_name: by.name, at: Date.now(), muted: false, mask: [], above: "", pool_id: BASE_COLOR.pool });
+        pools?.adopt(BASE_COLOR.pool, `instance:${id}`);
+        await seed();
+        changed();
+      } else if (inst.build_id !== buildId) {
+        if (inst.state === "live" && inst.shader_id !== null) {
+          db.updateInstance(id, { next_build_id: buildId, error: null });
+          await swap(id);
+        } else db.updateInstance(id, { build_id: buildId });
+      }
+      // Its home is every light: kept so as lights come and go (it can light them all anyway).
+      const all = await lightIds();
+      if (!sameIds(db.instance(id)!.home, all)) db.updateInstance(id, { home: sorted(all) });
+      if (db.instance(id)!.state === "failed") db.updateInstance(id, { state: "building", error: null });
+      if (db.instance(id)!.state === "building") await place(id);
     },
   };
 }

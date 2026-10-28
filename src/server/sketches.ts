@@ -17,6 +17,7 @@ import { Hono, type Context } from "hono";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { z } from "zod";
+import { isBaseColor } from "../shared/base-color.ts";
 import { POOL_ID } from "../shared/live.ts";
 import { PARAM_NAME } from "../shared/params.ts";
 import type { Me, Sketch, SketchChanges } from "../shared/vibes.ts";
@@ -66,8 +67,12 @@ export function sketchRoutes(sketches: SketchesConfig, db: Db, boxes: Boxes, bui
   }
 
   return new Hono<AuthEnv>()
+    // Base Color's sketch is vibes' own code (shared/base-color.ts): not one of
+    // these, to open, build, publish or delete.
+    .use("/:id/*", async (c, next) => (isBaseColor(c.req.param("id")) ? notFound(c) : next()))
+    .use("/:id", async (c, next) => (isBaseColor(c.req.param("id")) ? notFound(c) : next()))
     .get("/", async (c) => {
-      const list = await Promise.all(db.sketches().map(summary));
+      const list = await Promise.all(db.sketches().filter((s) => !isBaseColor(s.id)).map(summary));
       list.sort((a, b) => b.updatedAt - a.updatedAt);
       return c.json({ sketches: list });
     })
