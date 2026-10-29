@@ -17,7 +17,7 @@
 
 import { useSyncExternalStore } from "react";
 import type { Channels } from "../shared/arclamp.ts";
-import { isBaseColor } from "../shared/base-color.ts";
+import { BASE_TONE_NAME, isBaseColor } from "../shared/base-color.ts";
 import { keysOf, pathOf, type AddSpec, type Op, type Pool } from "../shared/live.ts";
 import {
   changedParts,
@@ -252,7 +252,7 @@ export function domainOf(layer: Layer): number[] {
  * mask left as it was); otherwise unmuted and masked from every other light.
  * An instance (or a sketch being added) can only light its home, so lights
  * outside it are added to it; one put in some other way has no home, its
- * mask is all there is. Base Color's home is every light, and nobody moves
+ * mask is all there is. The base Tone's home is every light, and nobody moves
  * it (vibes refuses to): just its mask, for it.
  */
 export function domainPatch(layer: Layer, ids: Iterable<number>, all: readonly number[]): ShaderPatch {
@@ -353,7 +353,8 @@ function layerOfShader(scene: Scene, shader: SceneShader, d: Draft): Layer {
     key: shader.key,
     stage: shader.stage,
     shader,
-    name: shader.name,
+    // The base Tone is a Tone set as the base: called so everywhere.
+    name: isBaseColor(shader.key) ? BASE_TONE_NAME : shader.name,
     sketch: shader.sketch,
     script: shader.script ?? "",
     muted: patch.muted ?? shader.muted,

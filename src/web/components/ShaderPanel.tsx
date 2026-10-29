@@ -7,6 +7,7 @@
 
 import { useState } from "react";
 import type { Instance, ShaderSketch } from "../../shared/vibes.ts";
+import { isDefaultSketch } from "../../shared/default-sketches.ts";
 import { sameValue, valuesAt, type ParamValue } from "../../shared/params.ts";
 import { request, useBranchHead } from "../api.ts";
 import { currentDraft, domainOf, drafts, layersOf, reachOf, type Adding, type Layer } from "../draft.ts";
@@ -38,9 +39,12 @@ export function ComingActions({ instance }: { instance: Instance }) {
     });
   return (
     <>
-      <button className="quiet shader-action" onClick={() => navigate(`/sketches/${instance.sketchId}`)}>
-        <CodeIcon /> Open Sketch
-      </button>
+      {/* vibes' own sketch's code is vibes': nothing to open. */}
+      {!isDefaultSketch(instance.sketchId) && (
+        <button className="quiet shader-action" onClick={() => navigate(`/sketches/${instance.sketchId}`)}>
+          <CodeIcon /> Open Sketch
+        </button>
+      )}
       {instance.state === "failed" && <Rebuild commit={instance.commit} branch={instance.branch} head={instance.head} disabled={busy} onClick={() => void retry()} />}
       <button
         className="quiet danger shader-action shader-delete"
@@ -63,9 +67,11 @@ export function AddingActions({ adding }: { adding: Adding }) {
   const head = useBranchHead(adding.sketchId, adding.branch);
   return (
     <>
-      <button className="quiet shader-action" onClick={() => navigate(`/sketches/${adding.sketchId}`)}>
-        <CodeIcon /> Open Sketch
-      </button>
+      {!isDefaultSketch(adding.sketchId) && (
+        <button className="quiet shader-action" onClick={() => navigate(`/sketches/${adding.sketchId}`)}>
+          <CodeIcon /> Open Sketch
+        </button>
+      )}
       {build?.state === "failed" && <Rebuild commit={build.commit} branch={adding.branch} head={head} onClick={() => drafts.rebuild(adding.key)} />}
       <button className="quiet danger shader-action shader-delete" aria-label="Don't add it" onClick={() => drafts.unadd(adding.key)}>
         <TrashIcon />

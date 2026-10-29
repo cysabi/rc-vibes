@@ -1,6 +1,6 @@
 // A sketch's one script, built as the builder builds a sketch (sketch-plan.ts):
 // Vite's iife of its entry, its update() made global. For the scripts vibes
-// builds itself: Base Color's (base-color.ts), and the preview page's
+// builds itself: the base Tone's (base-color.ts), and the preview page's
 // (vite.config.ts). Vite is only there to build with, so it's loaded only
 // when one's built.
 

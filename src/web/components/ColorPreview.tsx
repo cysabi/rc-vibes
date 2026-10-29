@@ -1,22 +1,24 @@
 // What the selected lights look like right now (as the bulbs make what
 // they're asked for), the way Hue shows a room,
-// gathered in the bottom left of the map (on a wide screen; a phone hasn't
+// gathered in the map's top left (on a wide screen; a phone hasn't
 // the room) with no card, like a car's
 // instruments: their colors as dots on a color wheel, or, for the whites, on
 // a field of color temperature across and tint up and down (Color · White
-// over it); under it, brightness and fidelity as a tick per light along a
-// track, in the color it's showing. (Old bulbs, just on or off, aren't here.) Lights at exactly the same value share one dot
-// (with a count) or tick. Nothing here is a handle: it's a readout. It
+// over it); under it, brightness and fidelity as a small metaball per light
+// along a track, in the color it's showing. (Old bulbs, just on or off, aren't here.)
+// Lights at exactly the same value share one dot (with a count) or ball.
+// Every ball on the wheel has a thin rim, so the little card isn't all
+// outline. Nothing here is a handle: it's a readout. It
 // follows the live room (or the preview, while there are pending edits) a
 // few times a second.
 
 import { useEffect, useLayoutEffect, useRef, useState, type CSSProperties } from "react";
 import type { LightInfo } from "../../shared/arclamp.ts";
 import { isBinary, madeOf, requestedOf } from "../../shared/fixtures.ts";
-import { kelvinOf, lemtoneCss, lookOf, lumensText, swatch, whiteAB, type Gamut, type Lemtone, type Vec3 } from "../../shared/lemtone.ts";
+import { kelvinOf, lookOf, lumensText, swatch, whiteAB, type Gamut, type Lemtone, type Vec3 } from "../../shared/lemtone.ts";
 import { useGamut } from "../display.ts";
 import { useFrames } from "../live.ts";
-import { dotsOf, exact, gather, type Placed } from "../marks.ts";
+import { dotsOf, exact, type Group, type Placed } from "../marks.ts";
 import { wheelColor, wheelSpot } from "../wheel.ts";
 import { heightOf, tintAt, toneText } from "../whites.ts";
 import { Goo } from "./Goo.tsx";
@@ -164,13 +166,50 @@ export function ColorPreview({ lights }: Props) {
 
 // ---- marks ----------------------------------------------------------------------
 
-/** Lights along a track (`x` from 0 to 1) painted `track`: a tick each, in the color it's showing, as bright as it looks. */
+// Every ball's rim in the look card (px): thinner than the goo's own, so a small card isn't all outline.
+const THIN_RIM = 1.5;
+// A ball on the wheel or the white field (px across): a light's, and a count's
+// (room for its number), nearer alike than the picker's (marks.ts' sizeOf), so
+// two lights together don't look so much more than one.
+const lookSize = (n: number) => (n === 1 ? 16 : n < 100 ? 21 : 26);
+const thinRim = (g: Group) => ({ size: lookSize(g.ids.length), rimPx: THIN_RIM });
+
+// A ball on a track (px across): a light's small, a little wider than the
+// track, so they sit on it rather than cover it; a count's room for its number,
+// within the track's row.
+const TRACK_BALL = 14;
+const TRACK_COUNT_BALL = 17;
+const trackSize = (n: number) => (n > 1 ? TRACK_COUNT_BALL : TRACK_BALL);
+const trackBall = (g: Group) => ({ size: trackSize(g.ids.length), rimPx: THIN_RIM });
+// Counts on a track join as soon as they overlap at all (marks.ts' dotsOf), so a blob has one number.
+const TRACK_JOIN = 0.01;
+
+/**
+ * Lights along a track (`x` from 0 to 1) painted `track`: as the wheel's are,
+ * metaballs in the colors they're showing, lights at exactly the same value
+ * one ball (bigger, with how many), balls near each other running together:
+ * a single light mostly under a count is counted there, and counts that
+ * overlap are one blob with one number (marks.ts' dotsOf).
+ */
 function Ticks({ placed, track, gamut }: { placed: Placed[]; track: string; gamut: Gamut }) {
+  const box = useRef<HTMLDivElement>(null);
+  // How wide it is as it's laid out (the card's as wide as the wheel's box), for where the balls go on it.
+  const [size, setSize] = useState<{ w: number; h: number }>({ w: 0, h: 0 });
+  useLayoutEffect(() => {
+    const el = box.current!;
+    const measure = () => setSize((s) => (s.w === el.clientWidth && s.h === el.clientHeight ? s : { w: el.clientWidth, h: el.clientHeight }));
+    measure();
+    const watch = new ResizeObserver(measure);
+    watch.observe(el);
+    return () => watch.disconnect();
+  }, []);
+  const marks = dotsOf(
+    placed.map((p) => ({ ...p, x: p.x * size.w, y: size.h / 2 })),
+    { size: trackSize, joinCover: TRACK_JOIN },
+  );
   return (
-    <div className="ticks" style={{ "--track": track } as CSSProperties}>
-      {gather(placed).map((g) => (
-        <span key={g.key} className="tick" style={{ left: `${g.x * 100}%`, background: lemtoneCss(g.t, gamut) }} />
-      ))}
+    <div ref={box} className="ticks" style={{ "--track": track } as CSSProperties}>
+      {size.w > 0 && <Goo marks={marks} width={size.w} height={size.h} gamut={gamut} lookOf={trackBall} />}
     </div>
   );
 }
@@ -196,7 +235,7 @@ function Wheel({ spots, gamut, size }: { spots: Spot[]; gamut: Gamut; size: numb
   return (
     <div className="wheel" style={{ width: size, height: size }}>
       <canvas key={gamut} ref={canvas} style={{ width: size, height: size }} aria-hidden="true" />
-      <Goo marks={dotsOf(placed)} width={size} height={size} gamut={gamut} />
+      <Goo marks={dotsOf(placed, { size: lookSize })} width={size} height={size} gamut={gamut} lookOf={thinRim} />
     </div>
   );
 }
@@ -263,14 +302,12 @@ function WhiteField({ spots, gamut, size, hidden }: { spots: WhiteSpot[]; gamut:
     <div className="white-view">
       <div className="white-strip" style={{ width: size, height: size }}>
         <canvas key={gamut} ref={canvas} aria-hidden="true" />
-        <span className="field-note warm">warm</span>
-        <span className="field-note cool">cool</span>
         {hidden > 0 && (
           <span className="field-note left-out">
             +{hidden} not white
           </span>
         )}
-        <Goo marks={dotsOf(placed)} width={size} height={size} gamut={gamut} />
+        <Goo marks={dotsOf(placed, { size: lookSize })} width={size} height={size} gamut={gamut} lookOf={thinRim} />
       </div>
     </div>
   );
@@ -325,11 +362,7 @@ function Fidelity({ spots, gamut }: { spots: Spot[]; gamut: Gamut }) {
         <span className="mono">{lo === hi ? `F${hi.toFixed(2)}` : `F${lo.toFixed(2)}–${hi.toFixed(2)}`}</span>
       </div>
       {/* As the picker's fidelity slider, a little lifted off the dark. */}
-      <Ticks
-        placed={placed}
-        track="linear-gradient(90deg, #5b4c92, #8a7352 60%, #b49c75)"
-        gamut={gamut}
-      />
+      <Ticks placed={placed} track="linear-gradient(90deg, #5b4c92, #8a7352 60%, #b49c75)" gamut={gamut} />
     </div>
   );
 }

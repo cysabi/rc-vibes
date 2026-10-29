@@ -22,12 +22,14 @@ export const liveTiming = (): PlayoutStats => playout.stats();
 let liveFrame: Frame | null = null;
 let simFrame: Frame | null = null;
 let simulated = false;
+// Peeking at the saved room (peek.ts' SAVED): the room's own frames shown, the preview still running behind them.
+let showingRoom = false;
 let connected = false;
 const frameListeners = new Set<(f: Frame) => void>();
 const statusListeners = new Set<() => void>();
 
-/** The frame to show: the preview's while simulating, else the room's. */
-export const latestFrame = () => (simulated ? (simFrame ?? liveFrame) : liveFrame);
+/** The frame to show: the preview's while simulating (unless peeking at the saved room), else the room's. */
+export const latestFrame = () => (simulated && !showingRoom ? (simFrame ?? liveFrame) : liveFrame);
 
 function notify(f: Frame) {
   for (const l of frameListeners) l(f);
@@ -44,7 +46,19 @@ export function setSimulated(on: boolean) {
 export function pushSimFrame(f: Frame) {
   if (!simulated) return;
   simFrame = f;
-  notify(f);
+  if (!showingRoom) notify(f);
+}
+
+/**
+ * Show the room's own frames (the saved pipeline, as it runs), whatever's
+ * pending, or go back to the preview. The preview keeps running meanwhile,
+ * so nothing in it starts over.
+ */
+export function setShowingRoom(on: boolean) {
+  if (showingRoom === on) return;
+  showingRoom = on;
+  const f = latestFrame();
+  if (f) notify(f);
 }
 
 /** Called for every new frame. Returns an unsubscribe function. */
@@ -108,7 +122,7 @@ export function useLiveStream(layout: LightsResponse | undefined) {
         console.warn("bad light frame", err);
         return;
       }
-      if (!simulated) notify(liveFrame);
+      if (!simulated || showingRoom) notify(liveFrame);
     };
 
     // At vibes' API address, saying who's there first if that's another site (apiSocket).

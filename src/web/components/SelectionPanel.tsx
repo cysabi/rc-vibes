@@ -6,9 +6,9 @@
 // heights (just its head, most of what's in it, or the whole screen), and its
 // head drags it between them, settling where it's let go. Its title says
 // how many lights are selected, beside a button that lets go of them all. Then what's on
-// these lights, as the room builds their light: the base tone (room tone, in
+// these lights, as the room builds their light: Room Tone (arclamp's, in
 // admin view only), then each shader up the stack that's about any of them
-// (its home, or where its code's lit; Base Color's home is every light, its
+// (its home, or where its code's lit; the base Tone's home is every light, its
 // params opened under it to start with),
 // joined by a rail as the light builds up through them: in the room, on its
 // way in, or one you're adding. Each has a switch for whether it's on for
@@ -41,19 +41,20 @@ import {
 } from "../draft.ts";
 import { ChevronUpIcon, CloseIcon, SaveIcon, UndoIcon } from "../icons.tsx";
 import { useFrames } from "../live.ts";
-import { BASE_TONE, peek } from "../peek.ts";
+import { peek, ROOM_TONE, SAVED } from "../peek.ts";
 import { useNarrow } from "../narrow.ts";
 import { useLights, useScene, type Scene } from "../scene.ts";
 import { count } from "../words.ts";
 import { Reveal } from "./Reveal.tsx";
 import { Sidebar, SidebarDetails } from "./Sidebar.tsx";
 import { RoomToneEditor } from "./RoomToneEditor.tsx";
-import type { SelectMode } from "./RoomMap.tsx";
+import type { SelectMode } from "../selection.ts";
 import { Tooltip } from "./Tooltip.tsx";
 import { offDefault, paramRowsOf, resetParams, ShaderParams } from "./ShaderParams.tsx";
 import { TagChips } from "./TagChips.tsx";
 import { useOpened } from "../opened.ts";
-import { useFocus } from "../focus.ts";
+import { useOnFocus } from "../focus.ts";
+import { useShowUnsaved } from "../unsaved.ts";
 import { usePointsOut } from "../hint.ts";
 import { useStuckHeads } from "../stuck.ts";
 
@@ -99,6 +100,8 @@ interface Props {
 
 export function SelectionPanel({ here, selected, save, onSelect }: Props) {
   const panel = useRef<HTMLElement>(null);
+  // Unsaved changes, if they're shown (not in live mode: unsaved.ts).
+  const unsaved = useShowUnsaved() && save.pending > 0;
   const chosen = here.filter((l) => selected.has(l.id));
 
   // What's on these lights, bottom of the stack first: each shader whose
@@ -122,25 +125,22 @@ export function SelectionPanel({ here, selected, save, onSelect }: Props) {
     live,
   );
   const onThese = [...shown].reverse().filter((layer) => reachOf(layer).some((id) => selected.has(id)));
-  // The room tone, the room's "normal", is admin view's to change; everyone's color is Base Color's
+  // The room tone, the room's "normal", is admin view's to change; everyone's color is the base Tone's
   // (shared/base-color.ts: vibes' own shader at the bottom, on every light, always in).
   const admin = useAdminMode();
   const rows: Row[] = onThese.map((layer) => ({ layer, state: switchState(layer, ids) }));
 
   // The layers whose parameters are open under them, any number at once: room tone's, to start with.
   const opened = useOpened(["roomtone"]);
-  // Base Color's params are open under it to start with: it's closed once it's toggled.
+  // The base Tone's params are open under it to start with: it's closed once it's toggled.
   const isOpen = (layer: Layer) => (isBaseColor(layer.key) ? !opened.isOpen(`closed:${layer.key}`) : opened.isOpen(layer.key));
   const toggle = (layer: Layer) => opened.toggle(isBaseColor(layer.key) ? `closed:${layer.key}` : layer.key);
   // A layer picked in the layers panel: its row the only one open (room
-  // tone's and Base Color's shut too, those open to start with).
-  const focus = useFocus();
-  useEffect(() => {
-    if (!focus) return;
-    const base = shown.filter((l) => isBaseColor(l.key) && l.key !== focus.key).map((l) => `closed:${l.key}`);
-    opened.only([...base, focus.key]);
-    // Only for a new pick: not as the stack changes after it.
-  }, [focus]);
+  // tone's and the base Tone's shut too, those open to start with).
+  useOnFocus((key) => {
+    const base = shown.filter((l) => isBaseColor(l.key) && l.key !== key).map((l) => `closed:${l.key}`);
+    opened.only([...base, key]);
+  });
   /** A shader switched off for these lights, or on: pending edits, like a mute. */
   const setOn = (row: Row, on: boolean) => drafts.patchShader(row.layer.key, switchFor(row.layer, ids, on, all));
 
@@ -246,7 +246,7 @@ export function SelectionPanel({ here, selected, save, onSelect }: Props) {
       ref={panel}
       side="right"
       label="Selection"
-      className={[save.pending > 0 && "unsaved", sheet && dragged !== null && "dragging", sheet && rest === "full" && dragged === null && "full"].filter(Boolean).join(" ")}
+      className={[unsaved && "unsaved", sheet && dragged !== null && "dragging", sheet && rest === "full" && dragged === null && "full"].filter(Boolean).join(" ")}
       style={sheet ? { height: dragged ?? heights[rest] } : undefined}
       headRef={head}
       headProps={grab}
@@ -281,7 +281,7 @@ export function SelectionPanel({ here, selected, save, onSelect }: Props) {
               </div>
               <div className="layer-head toggle" {...toggling(opened.isOpen("roomtone"), () => opened.toggle("roomtone"))}>
                 <span className="layer-text">
-                  <span className="layer-name">Base tone</span>
+                  <span className="layer-name">Room Tone</span>
                 </span>
                 <Chevron />
               </div>
@@ -321,7 +321,9 @@ export function SelectionPanel({ here, selected, save, onSelect }: Props) {
 function UnsavedMark({ here, onSelect }: { here: LightInfo[]; onSelect: Props["onSelect"] }) {
   const scene = useScene();
   const draft = useDraft();
-  const changed = scene.data ? changedLights(scene.data, draft) : [];
+  // Not in live mode, where they're sent as they're made (unsaved.ts).
+  const shown = useShowUnsaved();
+  const changed = shown && scene.data ? changedLights(scene.data, draft) : [];
   if (changed.length === 0) return null;
   return <ChangesMark changed={changed} here={here} onSelect={onSelect} />;
 }
@@ -407,11 +409,12 @@ export function IdlePanel({
   onSelect: Props["onSelect"];
   save: Saving;
 }) {
+  const unsaved = useShowUnsaved() && save.pending > 0;
   return (
     <Sidebar
       side="right"
       label="Selection"
-      className={save.pending > 0 ? "idle unsaved" : "idle"}
+      className={unsaved ? "idle unsaved" : "idle"}
       head={
         <>
           No lights selected
@@ -432,10 +435,23 @@ export function IdlePanel({
 function SaveButtons({ save }: { save: Saving }) {
   const { pending, saving, error } = save;
   const title = error ? `Couldn't save: ${error}` : saving ? "Saving…" : "Save";
-  if (pending === 0 && !error) return null;
+  // Not in live mode, where they're sent as they're made, unless that's failed (unsaved.ts).
+  const shown = useShowUnsaved();
+  // Under the pointer, discard shows the saved pipeline: the room without what's pending (peek.ts).
+  useEffect(() => () => peek.clear(SAVED), []);
+  const peekSaved = {
+    onPointerEnter: () => peek.set(SAVED),
+    onPointerLeave: () => peek.clear(SAVED),
+    onPointerCancel: () => peek.clear(SAVED),
+  };
+  const discard = () => {
+    peek.clear(SAVED);
+    save.onDiscard();
+  };
+  if ((pending === 0 || !shown) && !error) return null;
   return (
     <span className="save-buttons">
-      <button className="icon-button discard-button" onClick={save.onDiscard} disabled={saving} aria-label="Discard">
+      <button className="icon-button discard-button" onClick={discard} disabled={saving} aria-label="Discard" {...peekSaved}>
         <UndoIcon />
       </button>
       <button className={["icon-button", "save-button", "lit", error && "failed"].filter(Boolean).join(" ")} onClick={save.onSave} disabled={saving} aria-label={title}>
@@ -479,9 +495,9 @@ function LayerNode({ colors, hollow = false, ...rest }: { colors: string[]; holl
   );
 }
 
-/** The base tone's stop: hovering it peeks at the base tone alone (every shader set aside, on the map). */
+/** Room tone's stop: hovering it peeks at the room tone alone (every shader set aside, on the map). */
 function ToneNode({ colors }: { colors: string[] }) {
-  return <LayerNode colors={colors} {...usePeekable(BASE_TONE)} />;
+  return <LayerNode colors={colors} {...usePeekable(ROOM_TONE)} />;
 }
 
 /**
@@ -500,7 +516,7 @@ function usePeekable(key: string | null): HTMLAttributes<HTMLSpanElement> {
   };
 }
 
-/** The base tone's colors on these lights, as it sets them (an old bulb that's on, as its incandescent). */
+/** The room tone's colors on these lights, as it sets them (an old bulb that's on, as its incandescent). */
 function toneColors(lights: LightInfo[], template: Record<string, Channels>, gamut: ReturnType<typeof useGamut>): string[] {
   const colors = new Set<string>();
   for (const l of lights) {
@@ -567,7 +583,7 @@ interface RowProps {
 
 /**
  * What a shader shows under its row, opened, as room tone shows its color:
- * its params, for these lights (ShaderParams.tsx: Base Color's are a color
+ * its params, for these lights (ShaderParams.tsx: the base Tone's are a color
  * for each color light and on or off for the old bulbs); nothing, if it has
  * none for them.
  */

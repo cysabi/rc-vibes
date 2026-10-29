@@ -75,3 +75,17 @@ describe("dots on the wheel and strip", () => {
     expect(stack.map((g) => g.ids.length)).toEqual([1, 9, 14]);
   });
 });
+
+describe("balls on a track", () => {
+  // As the look card's tracks have them: a light 11px across, a count 18px; counts join as soon as they overlap.
+  const track = { size: (n: number) => (n > 1 ? 18 : 11), joinCover: 0.01 };
+  const along = (placed: Placed[]) => dotsOf(placed, track).map((g) => (g.into ? (g.ids.length === 1 ? "under" : "joined") : totalOf(g)));
+
+  it("join counts that overlap at all, so a blob has one number", () => {
+    expect(along([...lights(3, 0, 0), ...lights(2, 16, 0)])).toEqual(["joined", 5]);
+  });
+
+  it("keep counts that don't touch apart, each with its own", () => {
+    expect(along([...lights(3, 0, 0), ...lights(2, 19, 0)])).toEqual([2, 3]);
+  });
+});

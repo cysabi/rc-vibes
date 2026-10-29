@@ -17,7 +17,7 @@ import { Hono, type Context } from "hono";
 import { randomUUID } from "node:crypto";
 import path from "node:path";
 import { z } from "zod";
-import { isBaseColor } from "../shared/base-color.ts";
+import { isDefaultSketch } from "../shared/default-sketches.ts";
 import { POOL_ID } from "../shared/live.ts";
 import { PARAM_NAME } from "../shared/params.ts";
 import type { Me, Sketch, SketchChanges } from "../shared/vibes.ts";
@@ -28,6 +28,7 @@ import type { AuthEnv } from "./auth.ts";
 import { boxOfToken, type Boxes } from "./boxes.ts";
 import { view as buildView, type Builds } from "./builds.ts";
 import { changesIn } from "./changes.ts";
+import type { DefaultSketches } from "./default-sketches.ts";
 import type { Db, SketchRow } from "./db.ts";
 import type { Config, SketchesConfig } from "./env.ts";
 import { createRepo, forkRepo, headOf, serveGit } from "./git.ts";
@@ -50,8 +51,8 @@ const UNDERWAY: Record<string, string> = { "rebase-merge": "rebase", "rebase-app
 
 const authorOf = (user: Me) => ({ name: user.name, email: `${user.id.replace(/[^a-z0-9]+/gi, "-")}@users.vibes.invalid` });
 
-/** /api/sketches, for people logged in. */
-export function sketchRoutes(sketches: SketchesConfig, db: Db, boxes: Boxes, builds: Builds) {
+/** /api/sketches, for people logged in. `defaults` makes vibes' own sketches' builds (default-sketches.ts): there's no repo of them to build. */
+export function sketchRoutes(sketches: SketchesConfig, db: Db, boxes: Boxes, builds: Builds, defaults: Pick<DefaultSketches, "build"> | null = null) {
   // Development's fake changes (VIBES_FAKE_CHANGES) that have been "pushed", by sketch.
   const fakePushed = new Set<string>();
   async function summary(row: SketchRow): Promise<Sketch> {
@@ -65,16 +66,34 @@ export function sketchRoutes(sketches: SketchesConfig, db: Db, boxes: Boxes, bui
       updatedBy: head?.by ?? row.by_name,
       head: head?.commit ?? null,
       ...(row.deleted_at !== null ? { deleted: { at: row.deleted_at, by: row.deleted_by_name ?? "" } } : {}),
+      ...(isDefaultSketch(row.id) ? { builtIn: true } : {}),
     };
   }
 
+  /**
+   * vibes' own sketches (shared/default-sketches.ts) are its code: in the
+   * list, to add like any other, but with no repo to open, build, publish,
+   * fork or delete. Their changes are always none, and building one is its
+   * own build, made by vibes.
+   */
+  const defaultSketchRoute = async (c: Context, next: () => Promise<void>) => {
+    const id = c.req.param("id") ?? "";
+    if (!isDefaultSketch(id)) return next();
+    const tail = c.req.path.slice(c.req.path.indexOf(id) + id.length);
+    if (c.req.method === "GET" && tail === "/changes") return c.json({ files: 0, commits: 0 });
+    if (c.req.method === "POST" && tail === "/builds") {
+      const b = defaults ? db.build(await defaults.build(id)) : undefined;
+      return b ? c.json(buildView(b)) : c.json({ error: "it isn't built yet", code: "cant_build" }, 503);
+    }
+    if (c.req.method === "GET" && (tail === "" || tail.startsWith("/builds"))) return next();
+    return notFound(c);
+  };
+
   return new Hono<AuthEnv>()
-    // Base Color's sketch is vibes' own code (shared/base-color.ts): not one of
-    // these, to open, build, publish or delete.
-    .use("/:id/*", async (c, next) => (isBaseColor(c.req.param("id")) ? notFound(c) : next()))
-    .use("/:id", async (c, next) => (isBaseColor(c.req.param("id")) ? notFound(c) : next()))
+    .use("/:id/*", defaultSketchRoute)
+    .use("/:id", defaultSketchRoute)
     .get("/", async (c) => {
-      const list = await Promise.all(db.sketches().filter((s) => !isBaseColor(s.id)).map(summary));
+      const list = await Promise.all(db.sketches().map(summary));
       list.sort((a, b) => b.updatedAt - a.updatedAt);
       return c.json({ sketches: list });
     })

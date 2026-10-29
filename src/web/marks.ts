@@ -116,12 +116,16 @@ for (let i = 0; i < 10; i++) {
  * Counts join when one covers at least half of the other (and so on, one to
  * the next): the one with the most lights counts them all, and they're drawn
  * as one blob. Counts that overlap less stay apart.
+ *
+ * Its dots are `size` across (the goo's own, by default); on a track, where
+ * they're all on one line, counts join as soon as they overlap at all
+ * (`joinCover`), so a blob never carries two numbers.
  */
-export function dotsOf(placed: Placed[]): Group[] {
+export function dotsOf(placed: Placed[], { size = sizeOf, joinCover = JOIN_COVER }: { size?: (n: number) => number; joinCover?: number } = {}): Group[] {
   const stack = gather(placed).sort((a, b) => a.ids.length - b.ids.length);
   const counts = stack.filter((g) => g.ids.length > 1).reverse();
-  const radius = new Map(counts.map((c) => [c, sizeOf(c.ids.length) / 2]));
-  const r = sizeOf(1) / 2;
+  const radius = new Map(counts.map((c) => [c, size(c.ids.length) / 2]));
+  const r = size(1) / 2;
   for (const g of stack) {
     if (g.ids.length > 1) continue;
     const near = counts.filter((c) => Math.hypot(c.x - g.x, c.y - g.y) < r + radius.get(c)!);
@@ -151,7 +155,7 @@ export function dotsOf(placed: Placed[]): Group[] {
   const find = (c: Group): Group => (leadOf.get(c) === c ? c : find(leadOf.get(c)!));
   for (const [i, a] of counts.entries()) {
     for (const b of counts.slice(i + 1)) {
-      if (coverOf(sizeOf(a.ids.length) / 2, sizeOf(b.ids.length) / 2, Math.hypot(a.x - b.x, a.y - b.y)) >= JOIN_COVER) {
+      if (coverOf(size(a.ids.length) / 2, size(b.ids.length) / 2, Math.hypot(a.x - b.x, a.y - b.y)) >= joinCover) {
         leadOf.set(find(a), find(b));
       }
     }

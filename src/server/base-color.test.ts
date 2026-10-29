@@ -6,6 +6,8 @@ import type { RoomMessage } from "../shared/live.ts";
 import type { Me } from "../shared/vibes.ts";
 import type { AuthEnv } from "./auth.ts";
 import { createBaseColor, type BaseColor } from "./base-color.ts";
+import { createDefaultSketches, type DefaultSketches } from "./default-sketches.ts";
+import { DEFAULT_SKETCHES } from "../shared/default-sketches.ts";
 import type { Builds } from "./builds.ts";
 import { openDb, type Db } from "./db.ts";
 import { loadConfig } from "./env.ts";
@@ -34,7 +36,7 @@ const roomtone: ShaderDescriptor = {
   muted: false,
   created_by: "system",
   modified_by: "system",
-  template: { lights: { "1": { a: 0.1, b: 0.2, brightness: 0.5, fidelity: 1 }, "2": { a: -0.05, b: 0.1, brightness: 0.25, fidelity: 0.5 }, "6": { on: 0 } } },
+  template: { lights: { "1": { a: 0.1, b: 0.2, brightness: 0.5, fidelity: 1 }, "2": { a: -0.05, b: 0.1, brightness: 0.25, fidelity: 0.5 }, "6": { on: 1 } } },
 };
 
 let db: Db;
@@ -45,6 +47,7 @@ let pools: Pools;
 let instances: Instances;
 let shaders: Shaders;
 let base: BaseColor;
+let defaults: DefaultSketches;
 let linkedNow: boolean;
 let next: number;
 
@@ -110,7 +113,8 @@ beforeEach(() => {
   pools = createPools({ db, publish: () => {}, lights: async () => INFO });
   instances = createInstances({ config, db, arclamp, builds, lightIds: async () => LIGHTS, pools, wentIn: (id, d) => base.wentIn(id, d) });
   shaders = createShaders({ config, arclamp, db, instances, pools });
-  base = createBaseColor({ signingKey: KEY, db, instances, pools, arclamp, script: async () => SCRIPT, linked: () => linkedNow, holdMs: 2000, retryMs: 60_000 });
+  defaults = createDefaultSketches({ signingKey: KEY, db, script: async (s) => `${SCRIPT}// ${s.entry}\n` });
+  base = createBaseColor({ db, defaults, instances, pools, arclamp, linked: () => linkedNow, holdMs: 2000, retryMs: 60_000 });
 });
 
 afterEach(() => base.stop());
@@ -122,10 +126,10 @@ async function started() {
   await settle(80);
 }
 
-describe("Base Color", () => {
-  it("goes in as vibes starts: vibes' own sketch and build, at the bottom, on every light, its values the room tone's", async () => {
+describe("Base Tone", () => {
+  it("goes in as vibes starts: vibes' own sketch and build, at the bottom, on every light, at its defaults", async () => {
     await base.start();
-    expect(db.sketch(BASE_COLOR.sketch)?.name).toBe("Base Color");
+    expect(db.sketch(BASE_COLOR.sketch)?.name).toBe("Tone");
     const inst = db.instance(BASE_COLOR.instance)!;
     expect(inst).toMatchObject({ state: "live", home: LIGHTS, pool_id: BASE_COLOR.pool, sketch_id: BASE_COLOR.sketch });
     // Its script, stamped as a build of its sketch, as this instance.
@@ -133,10 +137,17 @@ describe("Base Color", () => {
     expect(read).toMatchObject({ verified: true, stamp: { sketch: BASE_COLOR.sketch, shader: BASE_COLOR.instance, builder: "vibes" } });
     // Held muted, on every light (no mask), until its params reach it.
     expect(calls).toEqual([`create ${inst.shader_id} at 1 muted`]);
+    // Nothing copied in from the room tone, or anywhere: every light at its defaults.
     const pool = pools.get(BASE_COLOR.pool)!;
     expect(pool.declared).toEqual(BASE_COLOR_SPECS);
-    expect(pool.values.color).toEqual({ "1": { a: 0.1, b: 0.2, lm: 500, fidelity: 1 }, "2": { a: -0.05, b: 0.1, lm: 250, fidelity: 0.5 } });
-    expect(pool.values.on).toEqual({ "6": false });
+    expect(pool.values.color ?? {}).toEqual({});
+    expect(pool.values.on ?? {}).toEqual({});
+  });
+
+  it("made when it was Base Color, is Tone now", async () => {
+    db.addSketch({ id: BASE_COLOR.sketch, name: "Base Color", by_id: "vibes", by_name: "vibes", at: 1 });
+    await base.start();
+    expect(db.sketch(BASE_COLOR.sketch)?.name).toBe("Tone");
   });
 
   it("is let go of, muted, once its params reach it; or once it's waited long enough", async () => {
@@ -179,13 +190,27 @@ describe("Base Color", () => {
     expect(pools.get(BASE_COLOR.pool)!.values).toEqual(values);
   });
 
-  it("can't be taken out, its code updated or its home moved, by any key", async () => {
+  it("can't have its code updated or its home moved, by any key", async () => {
     await started();
-    await expect(shaders.remove(BASE_COLOR.instance, ada)).rejects.toMatchObject({ status: 403, code: "base_color" });
-    await expect(shaders.remove(`rclamp-${baseId()}`, ada)).rejects.toMatchObject({ status: 403, code: "base_color" });
     await expect(shaders.setHome(BASE_COLOR.instance, [1], ada)).rejects.toMatchObject({ status: 403, code: "base_color" });
     expect(await instances.update(BASE_COLOR.instance, undefined, ada)).toMatchObject({ code: "base_color" });
     expect(scene.has(baseId()!)).toBe(true);
+  });
+
+  it("taken out (the server lets it), is gone, pool and all; a new one goes in, at its defaults", async () => {
+    await started();
+    const was = baseId()!;
+    await pools.set(BASE_COLOR.pool, "on", [[6, true]], `instance:${BASE_COLOR.instance}`);
+    await shaders.remove(BASE_COLOR.instance, ada);
+    expect(scene.has(was)).toBe(false);
+    expect(db.instance(BASE_COLOR.instance)).toBeUndefined();
+    // Not put back meanwhile by its shader going: only by vibes, anew.
+    await settle(20);
+    expect(db.instance(BASE_COLOR.instance)).toBeUndefined();
+    await started();
+    expect(baseId()).not.toBeNull();
+    expect(baseId()).not.toBe(was);
+    expect(pools.get(BASE_COLOR.pool)!.values.on ?? {}).toEqual({});
   });
 
   it("can be muted and masked like any shader", async () => {
@@ -196,19 +221,15 @@ describe("Base Color", () => {
     expect(scene.get(id)).toMatchObject({ muted: true, mask: [2] });
   });
 
-  it("an update taking it out, or moving its home, is refused whole", async () => {
+  it("an update moving its home is refused whole", async () => {
     await started();
     const layout = {} as unknown as LayoutEdits;
     const updates = createUpdates({ shaders, instances, pools, layout, setRoomtone: async () => {}, shown: async () => {} });
     const told: RoomMessage[] = [];
     const session = updates.session(ada, (m) => told.push(m));
-    session.take("u1", [[`shaders/${BASE_COLOR.instance}`]]);
     session.take("u2", [[`shaders/${BASE_COLOR.instance}/instance/home`, [1, 2]]]);
     await settle(20);
-    expect(told).toMatchObject([
-      { type: "refused", id: "u1", code: "base_color" },
-      { type: "refused", id: "u2", code: "base_color" },
-    ]);
+    expect(told).toMatchObject([{ type: "refused", id: "u2", code: "base_color" }]);
     expect(scene.has(baseId()!)).toBe(true);
   });
 
@@ -256,18 +277,56 @@ describe("Base Color", () => {
     expect(db.instanceOfShader(1)?.id).toBe(BASE_COLOR.instance);
   });
 
-  it("isn't among the sketches, to open, build or delete", async () => {
+  it("is among the sketches, to add, built by vibes; with no code to open, fork, publish or delete", async () => {
     await started();
     const app = new Hono<AuthEnv>()
       .use("*", async (c, next) => {
         c.set("user", ada);
         await next();
       })
-      .route("/", sketchRoutes({ dir: "/nonexistent" } as never, db, {} as never, {} as never));
-    expect(await (await app.request("/")).json()).toEqual({ sketches: [] });
-    expect((await app.request(`/${BASE_COLOR.sketch}`)).status).toBe(404);
-    expect((await app.request(`/${BASE_COLOR.sketch}`, { method: "DELETE" })).status).toBe(404);
-    expect((await app.request(`/${BASE_COLOR.sketch}/builds`, { method: "POST", body: "{}", headers: { "content-type": "application/json" } })).status).toBe(404);
+      .route("/", sketchRoutes({ dir: "/nonexistent" } as never, db, {} as never, {} as never, defaults));
+    expect(await (await app.request("/")).json()).toMatchObject({ sketches: [{ id: BASE_COLOR.sketch, name: "Tone", builtIn: true }] });
+    expect((await app.request(`/${BASE_COLOR.sketch}`)).status).toBe(200);
+    expect(await (await app.request(`/${BASE_COLOR.sketch}/changes`)).json()).toEqual({ files: 0, commits: 0 });
+    // Building it is its own build, made already: the one the base runs.
+    const built = (await (await app.request(`/${BASE_COLOR.sketch}/builds`, { method: "POST", body: "{}", headers: { "content-type": "application/json" } })).json()) as { id: string };
+    expect(built).toMatchObject({ id: db.instance(BASE_COLOR.instance)!.build_id, state: "built" });
+    expect((await app.request(`/${BASE_COLOR.sketch}/builds/${built.id}/script`)).status).toBe(200);
+    for (const [method, path] of [["DELETE", ""], ["POST", "/fork"], ["POST", "/box"], ["POST", "/publish"]] as const) {
+      expect((await app.request(`/${BASE_COLOR.sketch}${path}`, { method, body: "{}", headers: { "content-type": "application/json" } })).status).toBe(404);
+    }
     expect(db.sketch(BASE_COLOR.sketch)?.deleted_at).toBeNull();
+  });
+
+  it("another Tone goes in on the lights given, on vibes' own build, with a pool of its own", async () => {
+    await started();
+    const made = await instances.create(BASE_COLOR.sketch, { branch: "main" }, [1, 2], ada);
+    expect(made).toMatchObject({ instance: { sketchId: BASE_COLOR.sketch, home: [1, 2] } });
+    const id = (made as { instance: { id: string } }).instance.id;
+    expect(db.instance(id)!.build_id).toBe(db.instance(BASE_COLOR.instance)!.build_id);
+    expect(db.instance(id)!.pool_id).not.toBe(BASE_COLOR.pool);
+    // It's a Tone, not the base: taken out, it's just gone.
+    await shaders.remove(id, ada);
+    expect(db.instance(id)).toBeUndefined();
+    expect(db.instance(BASE_COLOR.instance)).toBeDefined();
+  });
+
+  it("every default sketch is made as vibes starts, its own build each, in the library to add", async () => {
+    await defaults.start();
+    for (const d of DEFAULT_SKETCHES) {
+      expect(db.sketch(d.id)?.name).toBe(d.name);
+      const [b] = db.buildsOf(d.id, 1);
+      expect(b).toMatchObject({ state: "built", builder: "vibes" });
+      expect(readStamp(b!.script!, KEY)).toMatchObject({ verified: true, stamp: { sketch: d.id } });
+    }
+    // Made once, however often it's asked for.
+    const transition = DEFAULT_SKETCHES.find((d) => d.entry === "transition")!;
+    expect(await defaults.build(transition.id)).toBe(await defaults.build(transition.id));
+    expect(db.buildsOf(transition.id)).toHaveLength(1);
+    // Put in like any other, on its own build, and never updated.
+    const made = await instances.create(transition.id, { branch: "main" }, [1, 2], ada);
+    const id = (made as { instance: { id: string } }).instance.id;
+    expect(db.instance(id)!.build_id).toBe(db.buildsOf(transition.id, 1)[0]!.id);
+    expect(await instances.update(id, undefined, ada)).toMatchObject({ code: "base_color" });
   });
 });

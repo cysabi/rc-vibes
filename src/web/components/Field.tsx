@@ -2,7 +2,7 @@
 // in play have on the right (one value, or the lowest to the highest:
 // rangeOf; or nothing; or something to do to it, a button), and its control
 // under them. Its kinds, each the same wherever it's used (room tone's, a
-// sketch's params, Base Color's among them):
+// sketch's params, the base Tone's among them):
 //
 //   SliderField        a number: one knob, or a range (Slider.tsx)
 //   ButtonSwitchField  on or off: Off · On (Segmented.tsx)

@@ -9,7 +9,8 @@
 // light has one ring, whoever selected it: the light of everyone's colors
 // added together (ringOf), yours a warm white. Just yours, it's the white
 // ring it always was; just someone else's, their color; theirs and yours,
-// their color washed out toward white; two people's, their colors mixed.
+// their color washed out toward white; two people's, their colors mixed. A
+// ring's never faded: what it is to you is in its line (web/selection.ts).
 
 import type { Person } from "./vibes.ts";
 
@@ -78,19 +79,17 @@ export const colorOf = (id: string, alpha = 1): string => cssRgb(rgbOf(id), alph
 
 /** Your own selection's ring: a warm white. */
 export const MINE: Rgb = [255, 250, 242];
-/** How strongly a ring shows (over the floor, as yours always has), however many people's it is. */
-export const RING_ALPHA = 0.55;
 
 /**
- * A selected light's one ring: everyone's colors added together as light is
- * (red and green make yellow; a color and white, that color washed out),
- * brought back down to what a screen can show by its brightest channel, so
- * the mix keeps its hue rather than clipping to white. Always RING_ALPHA:
- * more people make a different color, not a stronger ring. Null with no one.
+ * A selected light's one ring's color: everyone's colors added together as
+ * light is (red and green make yellow; a color and white, that color washed
+ * out), brought back down to what a screen can show by its brightest
+ * channel, so the mix keeps its hue rather than clipping to white. More
+ * people make a different color, not a stronger ring. Null with no one.
  */
-export function ringOf(colors: readonly Rgb[], alpha = RING_ALPHA): { rgb: Rgb; alpha: number } | null {
+export function ringOf(colors: readonly Rgb[]): Rgb | null {
   if (colors.length === 0) return null;
   const sum = [0, 1, 2].map((i) => colors.reduce((t, c) => t + c[i]!, 0));
   const scale = Math.min(1, 255 / Math.max(...sum, 1));
-  return { rgb: sum.map((v) => Math.round(v * scale)) as Rgb, alpha };
+  return sum.map((v) => Math.round(v * scale)) as Rgb;
 }

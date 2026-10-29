@@ -206,6 +206,8 @@ export interface Sketch {
   head: string | null;
   /** If it's been deleted: when, and by whom. Anyone can restore it, always. */
   deleted?: { at: number; by: string };
+  /** vibes' own (Tone's): added like any other, but with no code to open, fork or delete. */
+  builtIn?: true;
 }
 
 /**

@@ -5,7 +5,8 @@
 import { useCallback, useEffect, useMemo, useState } from "react";
 import type { Lights } from "../../shared/vibes.ts";
 import { ColorPreview } from "../components/ColorPreview.tsx";
-import { RoomMap, type SelectMode } from "../components/RoomMap.tsx";
+import { RoomMap } from "../components/RoomMap.tsx";
+import type { SelectMode } from "../selection.ts";
 
 export function PreviewMap({ layout }: { layout: Lights | null }) {
   const all = useMemo(() => layout?.lights ?? [], [layout]);

@@ -952,24 +952,14 @@ kbd {
   border-radius: var(--pick-radius, 10px);
 }
 
-/* Small, dark on the pale field, in its corners: which way is warm, which
-   cool, and how many lights aren't whites (so aren't on it). */
+/* Small, dark on the pale field, in its corner: how many lights aren't
+   whites (so aren't on it). */
 .field-note {
   position: absolute;
   color: rgb(28 20 12 / 0.6);
   font: 400 9.5px / 1 var(--mono-font);
   letter-spacing: 0.04em;
   pointer-events: none;
-}
-
-.field-note.warm {
-  bottom: 8px;
-  left: 8px;
-}
-
-.field-note.cool {
-  right: 8px;
-  bottom: 8px;
 }
 
 .field-note.left-out {
@@ -1006,13 +996,12 @@ kbd {
   white-space: nowrap;
 }
 
+/* Never cut short: the card's wide enough for its label and its value side by side. */
 .color-preview .field-head .label {
-  min-width: 0;
-  overflow: hidden;
+  flex: none;
   color: var(--label-ink);
   font-size: 10px;
   line-height: var(--label-h);
-  text-overflow: ellipsis;
 }
 
 .color-preview .field-head .mono {
@@ -1044,16 +1033,10 @@ kbd {
   transform: translateY(-50%);
 }
 
-.tick {
-  position: absolute;
-  top: 0;
-  bottom: 0;
-  width: 3px;
-  border-radius: 999px;
-  box-shadow:
-    0 0 0 1px rgb(0 0 0 / 0.6),
-    0 0 0 1.5px rgb(255 255 255 / 0.22);
-  transform: translateX(-50%);
+/* A count on a track (ColorPreview's Ticks): its number, small, to fit its ball. */
+.ticks .goo-mark {
+  font-size: 9.5px;
+  letter-spacing: -0.02em;
 }
 
 /* What's making the selection's light, bottom of the stack first: full-width
@@ -1196,11 +1179,13 @@ kbd {
 }
 
 /* Hovering a stop peeks at the room as the light is there (usePeekable):
-   the pointer turns to an eye there, saying so. */
+   the pointer turns to an eye there, saying so. Just an outline, dashed and
+   small, so the stop (and its color) still shows through it: white over a
+   faint dark edge, to read on any color. */
 .layer-node.peekable {
   cursor:
-    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='24' height='24' viewBox='0 0 24 24'%3E%3Cpath d='M2 12s3.6-6.5 10-6.5S22 12 22 12s-3.6 6.5-10 6.5S2 12 2 12z' fill='%23fff' stroke='%23000' stroke-width='1.5' stroke-linejoin='round'/%3E%3Ccircle cx='12' cy='12' r='3.2' fill='%23000'/%3E%3C/svg%3E")
-      12 12,
+    url("data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' width='20' height='20' viewBox='0 0 20 20' fill='none' stroke-linejoin='round'%3E%3Cpath d='M2 10s3-5.2 8-5.2S18 10 18 10s-3 5.2-8 5.2S2 10 2 10z' stroke='%23000' stroke-opacity='.45' stroke-width='2.6'/%3E%3Cpath d='M2 10s3-5.2 8-5.2S18 10 18 10s-3 5.2-8 5.2S2 10 2 10z' stroke='%23fff' stroke-width='1.2' stroke-dasharray='2.2 1.6'/%3E%3Ccircle cx='10' cy='10' r='2' stroke='%23000' stroke-opacity='.45' stroke-width='2.6'/%3E%3Ccircle cx='10' cy='10' r='2' stroke='%23fff' stroke-width='1.2'/%3E%3C/svg%3E")
+      10 10,
     zoom-in;
 }
 
@@ -1227,8 +1212,10 @@ kbd {
   background: var(--fill);
 }
 
-/* Lifted while it's dragged to another place. */
-.layer.dragging {
+/* Lifted while it's dragged to another place: solid, over the hover's
+   light (the pointer's on its head the whole drag), whether it's open or not. */
+.layer.dragging,
+.layer.dragging:has(> .layer-head.toggle) {
   position: relative;
   z-index: 2;
   background: var(--solid-2);
@@ -1488,6 +1475,16 @@ kbd {
 }
 
 /* Like the library's cards (sketches.css), a little smaller. */
+/* The library's sections: vibes' own (Default Sketches) first, then everyone's. */
+.add-sketch-section {
+  margin-bottom: 20px;
+}
+
+.add-sketch-section > .label,
+.add-sketch-section-head {
+  margin-bottom: 10px;
+}
+
 .add-sketch-grid {
   display: grid;
   grid-template-columns: repeat(auto-fill, minmax(200px, 1fr));
@@ -1595,17 +1592,6 @@ kbd {
 
 .add-sketch-none .muted {
   font-size: 12px;
-}
-/* Whether to include your changes: its words kept to a readable width, its choices under them. */
-.add-sketch-ask p {
-  max-width: 46ch;
-}
-.add-sketch-ask-actions {
-  display: flex;
-  flex-wrap: wrap;
-  justify-content: center;
-  gap: 8px;
-  margin-top: 4px;
 }
 
 .add-sketch-quiet {
@@ -3051,6 +3037,14 @@ button.layer-chevron:hover {
   touch-action: none;
 }
 
+/* The track takes presses as far out as the thumb reaches (half of it past
+   either end, and above and below), so all of the thumb can be grabbed. */
+.slider-track::after {
+  position: absolute;
+  inset: -5px -10px;
+  content: "";
+}
+
 .slider-thumb {
   position: absolute;
   top: 50%;
@@ -3851,6 +3845,16 @@ button.tag-name:hover {
   gap: 3px;
 }
 
+/* A layer on no lights: said on a faint fill, the width of its section. */
+.domain-empty {
+  display: block;
+  padding: 5px 9px;
+  border-radius: 7px;
+  background: var(--fill);
+  color: var(--mute);
+  font-size: 12.5px;
+}
+
 .lights-summary-line {
   display: flex;
   align-items: center;
@@ -4046,7 +4050,6 @@ html {
 
   .icon-button::after,
   .switch::after,
-  .slider-track::after,
   .layer-chevron::after,
   .tag-remove::after {
     content: "";
@@ -4063,9 +4066,9 @@ html {
     inset: -11px -3px;
   }
 
-  /* The track is 10px tall: 44 to touch. */
+  /* The track is 10px tall: 44 to touch, and as wide as the thumb reaches past its ends. */
   .slider-track::after {
-    inset: -17px -10px;
+    inset: -17px -13px;
   }
 
   .tag-remove::after {
@@ -4096,8 +4099,7 @@ html {
 
   /* The marks round the wheel only carry a title, which no finger can read;
      taps go through them to the map. */
-  .color-preview .goo-mark,
-  .color-preview .tick {
+  .color-preview .goo-mark {
     pointer-events: none;
   }
 }

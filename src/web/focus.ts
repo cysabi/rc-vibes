@@ -1,32 +1,45 @@
 // A layer picked in the layers panel (its row clicked, selecting its lights):
 // the selection panel answers by closing every row but that layer's, and
-// opening it. Each pick is new (its count), so picking the same layer again
-// closes the rest again.
+// opening it. A pick is something that happens, once, not state: the panel
+// open hears it as it's made. One made with no panel open (nothing was
+// selected) is kept for the panel the pick itself opens, as it mounts, and
+// for no later one: it's dropped once the click is done with.
 
-import { useSyncExternalStore } from "react";
+import { useLayoutEffect, useRef } from "react";
 import type { LayerKey } from "./draft.ts";
 
-export interface Focus {
-  key: LayerKey;
-  /** Which pick this is. */
-  n: number;
-}
+type Listener = (key: LayerKey) => void;
 
-let focus: Focus | null = null;
-const listeners = new Set<() => void>();
+const listeners = new Set<Listener>();
+let pending: LayerKey | null = null;
 
 /** The layers panel picked this layer. */
 export function focusLayer(key: LayerKey) {
-  focus = { key, n: (focus?.n ?? 0) + 1 };
-  for (const l of listeners) l();
+  if (listeners.size > 0) {
+    for (const l of listeners) l(key);
+    return;
+  }
+  pending = key;
+  // The panel the click opens mounts before this; any later one never sees it.
+  setTimeout(() => {
+    if (pending === key) pending = null;
+  });
 }
 
-export function useFocus(): Focus | null {
-  return useSyncExternalStore(
-    (l) => {
-      listeners.add(l);
-      return () => listeners.delete(l);
-    },
-    () => focus,
-  );
+/** Hear each pick as it's made (and the one that opened this, if one did). */
+export function useOnFocus(onFocus: Listener) {
+  const latest = useRef(onFocus);
+  latest.current = onFocus;
+  useLayoutEffect(() => {
+    const l: Listener = (key) => latest.current(key);
+    if (pending !== null) {
+      const key = pending;
+      pending = null;
+      l(key);
+    }
+    listeners.add(l);
+    return () => {
+      listeners.delete(l);
+    };
+  }, []);
 }

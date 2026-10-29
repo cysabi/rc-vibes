@@ -11,11 +11,13 @@
 // move: two fingers pan and pinch (a flick glides on), a double tap zooms in
 // and a two-finger tap zooms out.
 //
-// Click or tap a light to select it; shift adds to the selection and alt
-// (⌥) takes out of it (each the other way when there's nothing for it to
-// do: keyedMode), ⌘-click
+// Click or tap a light to select it; shift adds to the selection (or takes
+// out of it, all of them selected already) and alt (⌥) always takes out of it
+// (keyedMode), ⌘-click
 // toggles one light, ⌘A selects them all, and double-clicking a light selects
-// its whole rail. On a touch screen, dragging one finger draws a box that adds
+// its whole rail. Dragging out a box, shift and alt can be pressed or let go
+// of on the way, the box taking them on as they change; Escape lets go of the
+// box (or a drag of lights or a rail) and leaves the selection as it was. On a touch screen, dragging one finger draws a box that adds
 // to the selection, straight away; once anything's selected, taps add and
 // remove lights (and double taps whole rails) until the selection chip lets
 // go. Holding a finger on a light shows what it is, as hovering does.
@@ -68,7 +70,8 @@ import { cameraAt, Pegman, StreetViewSpots } from "./StreetViewMarks.tsx";
 import { TagEditor } from "./TagEditor.tsx";
 import { Tooltip } from "./Tooltip.tsx";
 import { LightsSummary } from "./LightsSummary.tsx";
-import { cssRgb, MINE, RING_ALPHA, ringOf, type Rgb } from "../../shared/presence.ts";
+import { cssRgb, MINE, ringOf, type Rgb } from "../../shared/presence.ts";
+import { keyedMode, RING_DASH, ringStyle, selectionWith, type SelectMode } from "../selection.ts";
 
 // Bulb radius in millimeters (a BR30 is 95 mm across; the old bulbs are A19s).
 // A bulb's marker, in millimeters on the plan: every bulb the same, whatever it really is.
@@ -101,41 +104,30 @@ const LONG_PRESS_MS = 450;
 const BOX_SLOP = 4;
 const BOX_SLOP_TOUCH = 10;
 
-/** Replace the selection; add to it; toggle each; or take each out of it. */
-export type SelectMode = "replace" | "add" | "toggle" | "remove";
-
 /**
- * A selection with a change made: `ids` by `mode`. A replace replaces just
- * what's in `scope` (the lights on the floor shown; everything, by default),
- * so a set that reaches past it (a domain, on every floor) keeps the rest.
- */
-export function selectionWith(prev: ReadonlySet<number>, ids: readonly number[], mode: SelectMode, scope?: ReadonlySet<number>): Set<number> {
-  if (mode === "replace") return new Set([...(scope ? [...prev].filter((id) => !scope.has(id)) : []), ...ids]);
-  const next = new Set(prev);
-  for (const id of ids) {
-    if (mode === "remove" || (mode === "toggle" && next.has(id))) next.delete(id);
-    else next.add(id);
-  }
-  return next;
-}
-
-/**
- * What a press does to the selection: shift adds, alt (⌥) takes away, each
- * the other way when there's nothing for it to do (keyedMode); neither,
+ * What a press does to the selection: shift adds (or takes away, all of it
+ * selected already), alt (⌥) always takes away (keyedMode); neither,
  * replaces. A finger's presses add.
  */
 type PressMode = "replace" | "add" | "remove";
+/** A change to the selection a gesture makes: these lights, by this mode. */
+interface Change {
+  ids: number[];
+  mode: SelectMode;
+}
+/** A change shown before it's made: the lights it's about, and the selection it leaves. */
+interface Preview {
+  targets: ReadonlySet<number>;
+  next: ReadonlySet<number>;
+}
+const sameChange = (a: Change, b: Change) => a.mode === b.mode && a.ids.length === b.ids.length && a.ids.every((id, i) => id === b.ids[i]);
+/** A click on one light: a replace as it is; shift's and alt's as keyedMode has them; ⌘'s toggle. */
+const clickChange = (id: number, mode: PressMode | "toggle", selected: ReadonlySet<number>): Change => ({
+  ids: [id],
+  mode: mode === "replace" || mode === "toggle" ? mode : keyedMode(mode, [id], selected),
+});
 const pressMode = (e: { shiftKey: boolean; altKey: boolean }, touch = false): PressMode => (e.altKey && !touch ? "remove" : touch || e.shiftKey ? "add" : "replace");
 
-/**
- * Shift or alt on some lights (one, a box of them, a layer's), as a selection
- * change. Shift adds them; only if every one's selected already does it let
- * go of them. Alt lets go of them; only if none is selected does it add them.
- */
-export function keyedMode(mode: "add" | "remove", ids: readonly number[], selected: ReadonlySet<number>): "add" | "remove" {
-  if (mode === "add") return ids.length > 0 && ids.every((id) => selected.has(id)) ? "remove" : "add";
-  return ids.some((id) => selected.has(id)) ? "remove" : "add";
-}
 
 interface Props {
   lights: LightInfo[];
@@ -148,14 +140,12 @@ interface Props {
   onSelect: (ids: number[], mode: SelectMode) => void;
   /** The lights other people have selected, each with their colors (web/presence.ts): their light in its ring. */
   others?: ReadonlyMap<number, Rgb[]>;
-  /** Lights to point out (a layer's, under the pointer in the layers panel): ringed, dashed, as if under the pointer here. */
+  /** Lights pointed out from a panel (a layer's row, an unsaved changes asterisk): hovered, as if under the pointer here. */
   hinted?: ReadonlySet<number>;
-  /** Lights to draw faded (selected ones a click elsewhere would let go of). */
-  faded?: ReadonlySet<number>;
-  /** Your own ring's color: a warm white, or (editing a domain, or a layer in focus) the focus blue. */
+  /** Selected lights what's pointed out from a panel would let go of, if it were clicked: about to be let go of. */
+  leaving?: ReadonlySet<number>;
+  /** Your own rings' color: a warm white, or (editing a domain, or a layer in focus) the focus blue. */
   mine?: Rgb;
-  /** How strongly the rings show: RING_ALPHA, or (editing a domain) solid. */
-  ringAlpha?: number;
   /** What the selection looks like: a card in the map's bottom right, beside the zoom, while its button there is on. */
   look?: ReactNode;
   /** Open streetview from a camera (the figure dropped on it); without it, there's no figure. */
@@ -230,9 +220,8 @@ export function RoomMap({
   onSelect,
   others = NO_OTHERS,
   hinted = NO_HINTED,
-  faded = NO_HINTED,
+  leaving = NO_HINTED,
   mine = MINE,
-  ringAlpha = RING_ALPHA,
   look,
   onStreetView,
   streetView = null,
@@ -272,10 +261,13 @@ export function RoomMap({
   const [railHover, setRailHover] = useState<RailHit | null>(null);
   // ⌘ (or Ctrl) held: the next drag pans. Shown as a grab cursor.
   const [panKey, setPanKey] = useState(false);
+  // Shift and alt held: what a click on the light under the pointer would do (hoverLeaving).
+  const [heldKeys, setHeldKeys] = useState({ shiftKey: false, altKey: false });
   const [panning, setPanning] = useState(false);
-  // While a box is being dragged out: the lights it would select (with the
-  // selection it adds to), summed up in a card until it's let go.
-  const [boxing, setBoxing] = useState<number[] | null>(null);
+  // While a box is being dragged out: the change letting it go makes (the
+  // lights in it, and how), the one thing its rings, its card and the
+  // selection itself all go by.
+  const [boxing, setBoxing] = useState<Change | null>(null);
   // Streetview: its cameras, the figure while it's dragged (map px), and a
   // click on it showing the cameras for a moment.
   const cameras = useStreetViews().data ?? NO_CAMERAS;
@@ -330,9 +322,20 @@ export function RoomMap({
     return lights.filter((l) => !on.has(l.id));
   }, [lights, placed]);
 
+  // What the gesture under way would do to the selection, as the change
+  // itself (the same one up() makes): a box being dragged out's; else a
+  // click on the light under the mouse (clickChange: replace, shift's or
+  // alt's, ⌘'s toggle), except while moving lights, where pressing a selected
+  // light drags them all. A finger held on a light only shows what it is.
+  // The rings show it (Preview), not anything worked out beside it.
+  const preview = useMemo((): Preview | null => {
+    const change = boxing ?? (hover && !moving && lastPointer.current !== "touch" ? clickChange(hover.id, panKey ? "toggle" : pressMode(heldKeys), selected) : null);
+    return change && { targets: new Set(change.ids), next: selectionWith(selected, change.ids, change.mode) };
+  }, [boxing, hover, moving, panKey, heldKeys, selected]);
+
   // Refs for the draw loop and the native wheel listener.
-  const live = useRef({ layout, selected, others, hinted, faded, mine, ringAlpha, hover, moving, railSel, railHover });
-  live.current = { layout, selected, others, hinted, faded, mine, ringAlpha, hover, moving, railSel, railHover };
+  const live = useRef({ layout, selected, others, hinted, leaving, preview, mine, hover, moving, railSel, railHover });
+  live.current = { layout, selected, others, hinted, leaving, preview, mine, hover, moving, railSel, railHover };
   const fitRef = useRef(layout.fit);
   fitRef.current = layout.fit;
   const sizeRef = useRef(size);
@@ -340,7 +343,7 @@ export function RoomMap({
 
   useEffect(() => {
     dirty.current = true;
-  }, [layout, selected, others, hinted, faded, mine, ringAlpha, hover, moving, railSel, railHover, gamut]);
+  }, [layout, selected, others, hinted, leaving, preview, mine, hover, moving, railSel, railHover, gamut]);
 
   // A new floor's plan goes where the view says before it's ever painted.
   useLayoutEffect(() => {
@@ -492,8 +495,14 @@ export function RoomMap({
   }, [frames]);
 
   useEffect(() => {
-    const sync = (e: KeyboardEvent) => setPanKey(e.metaKey || e.ctrlKey);
-    const clear = () => setPanKey(false);
+    const sync = (e: KeyboardEvent) => {
+      setPanKey(e.metaKey || e.ctrlKey);
+      setHeldKeys((k) => (k.shiftKey === e.shiftKey && k.altKey === e.altKey ? k : { shiftKey: e.shiftKey, altKey: e.altKey }));
+    };
+    const clear = () => {
+      setPanKey(false);
+      setHeldKeys({ shiftKey: false, altKey: false });
+    };
     window.addEventListener("keydown", sync);
     window.addEventListener("keyup", sync);
     window.addEventListener("blur", clear);
@@ -579,9 +588,9 @@ export function RoomMap({
           others: s.others,
           hovered: s.hover?.id ?? null,
           hinted: s.hinted,
-          faded: s.faded,
+          leaving: s.leaving,
+          preview: s.preview,
           mine: s.mine,
-          ringAlpha: s.ringAlpha,
           box: marquee.current,
           rails,
           railSel: d?.kind === "rail" ? d.id : s.railSel,
@@ -933,11 +942,7 @@ export function RoomMap({
         pr.peeked = false;
       }
       marquee.current = { x0: pr.x, y0: pr.y, x1: p.x, y1: p.y };
-      dirty.current = true;
-      const inside = boxed(marquee.current, view);
-      const mode = boxMode(pr, inside);
-      const next = mode === "add" ? [...new Set([...selected, ...inside])] : mode === "remove" ? [...selected].filter((id) => !inside.includes(id)) : inside;
-      setBoxing((prev) => (prev && prev.length === next.length && prev.every((id, i) => id === next[i]) ? prev : next));
+      boxChanged();
       return;
     }
     if (!pr && e.pointerType !== "touch") {
@@ -1013,17 +1018,89 @@ export function RoomMap({
     if (pr.mode === "replace") setRailSel(null);
     if (!box) {
       // One light: shift or alt toggles it (each, on one light, is just that).
-      if (pr.hit) onSelect([pr.hit.id], keyed(pr.mode, [pr.hit.id]));
-      else if (pr.mode === "replace") onSelect([], "replace");
+      if (pr.hit) {
+        const change = clickChange(pr.hit.id, pr.mode, selected);
+        onSelect(change.ids, change.mode);
+      } else if (pr.mode === "replace") onSelect([], "replace");
       return;
     }
-    const inside = boxed(box, view);
-    onSelect(inside, boxMode(pr, inside));
+    const change = boxChange(pr, box, view);
+    onSelect(change.ids, change.mode);
   };
+
+  /** A box being dragged out, as it is now (where it reaches, and its press's mode): the change letting it go would make, for its card and the rings. */
+  const boxChanged = () => {
+    const pr = press.current;
+    const box = marquee.current;
+    const view = viewRef.current;
+    dirty.current = true;
+    if (pr?.kind !== "box" || !box || !view) return;
+    const next = boxChange(pr, box, view);
+    setBoxing((prev) => (prev && sameChange(prev, next) ? prev : next));
+  };
+
+  /**
+   * Shift or alt pressed or let go while a mouse's box is down: it takes
+   * them on from then, as if they'd been held from the start (a press on a
+   * light not yet a box, too: its click goes as the keys say when it's let go).
+   */
+  const keysChanged = (e: { shiftKey: boolean; altKey: boolean }) => {
+    const pr = press.current;
+    if (pr?.kind !== "box" || pr.touch) return;
+    const mode = pressMode(e);
+    if (mode === pr.mode) return;
+    pr.mode = mode;
+    boxChanged();
+  };
+
+  /**
+   * Escape while dragging: the drag's let go of as if it had never started
+   * (a box selects nothing, lights and rails go back where they were, a rail
+   * being drawn isn't), and nothing else hears it (not App's, which would
+   * let go of the selection). Whether there was one.
+   */
+  const cancelDrag = (): boolean => {
+    const pr = press.current;
+    const d = drag.current;
+    const boxing = pr?.kind === "box" && marquee.current !== null;
+    const dragging = d !== null && (d.kind === "draw" || d.moved);
+    if (!boxing && !dragging) return false;
+    window.clearTimeout(longPress.current);
+    press.current = null;
+    marquee.current = null;
+    drag.current = null;
+    setBoxing(null);
+    dirty.current = true;
+    return true;
+  };
+  const dragKeys = useRef({ keysChanged, cancelDrag });
+  dragKeys.current = { keysChanged, cancelDrag };
+  useEffect(() => {
+    // Before anything else hears Escape (window's capture, ahead of every bubbling listener).
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === "Escape" && dragKeys.current.cancelDrag()) {
+        e.preventDefault();
+        e.stopPropagation();
+        return;
+      }
+      if (e.key === "Shift" || e.key === "Alt") dragKeys.current.keysChanged(e);
+    };
+    window.addEventListener("keydown", onKey, true);
+    window.addEventListener("keyup", onKey, true);
+    return () => {
+      window.removeEventListener("keydown", onKey, true);
+      window.removeEventListener("keyup", onKey, true);
+    };
+  }, []);
 
   /** A box's press, for the lights in it: shift's and alt's as keyedMode has them. A finger's boxes only add. */
   const boxMode = (pr: { mode: PressMode; touch: boolean }, inside: number[]): PressMode =>
     pr.mode === "replace" || pr.touch ? pr.mode : keyedMode(pr.mode, inside, selected);
+  /** What letting go of a box makes of the selection: the lights in it, by its press's mode. */
+  const boxChange = (pr: { mode: PressMode; touch: boolean }, box: { x0: number; y0: number; x1: number; y1: number }, view: View): Change => {
+    const inside = boxed(box, view);
+    return { ids: inside, mode: boxMode(pr, inside) };
+  };
 
   /** The lights inside a box on screen. */
   const boxed = (box: { x0: number; y0: number; x1: number; y1: number }, view: View) => {
@@ -1232,8 +1309,8 @@ export function RoomMap({
         onContextMenu={(e) => e.preventDefault()}
       />
       {view && hover && <LightTooltip light={hover} at={positionOf(hover, drag.current)} view={view} width={size?.width ?? 0} moving={moving} />}
-      {view && boxing && boxing.length > 0 && (
-        <SelectionCard lights={shown.filter((l) => boxing.includes(l.id))} at={(l) => positionOf(l, drag.current)} view={view} width={size?.width ?? 0} />
+      {view && preview && boxing && preview.next.size > 0 && (
+        <SelectionCard lights={shown.filter((l) => preview.next.has(l.id))} at={(l) => positionOf(l, drag.current)} view={view} width={size?.width ?? 0} />
       )}
       {view && onStreetView && cameras.length > 0 && (
         <StreetViewSpots
@@ -1535,14 +1612,16 @@ interface Scene {
   selected: ReadonlySet<number>;
   /** Other people's selections: each light's colors, added into its ring. */
   others: ReadonlyMap<number, Rgb[]>;
+  /** The light under the pointer. */
   hovered: number | null;
-  /** Pointed out from elsewhere: ringed as the light under the pointer is. */
+  /** Pointed out from a panel: hovered too. */
   hinted: ReadonlySet<number>;
-  /** Drawn faded, glow, light and ring. */
-  faded: ReadonlySet<number>;
-  /** Your own ring's color. */
+  /** Selected lights what's pointed out from a panel would let go of. */
+  leaving: ReadonlySet<number>;
+  /** What the gesture under way on the map would do: its rings go by it alone. */
+  preview: Preview | null;
+  /** Your own rings' color. */
   mine: Rgb;
-  ringAlpha: number;
   box: { x0: number; y0: number; x1: number; y1: number } | null;
   rails: Rail[];
   railSel: string | null;
@@ -1551,9 +1630,6 @@ interface Scene {
   /** A rail to label with its length. */
   measure: Rail | null;
 }
-
-// How strongly a faded light shows (Scene.faded).
-const FADED = 0.3;
 
 function draw(c: HTMLCanvasElement, s: Scene) {
   const { size, view } = s;
@@ -1594,7 +1670,6 @@ function draw(c: HTMLCanvasElement, s: Scene) {
   ctx.globalCompositeOperation = "lighter";
   for (const it of items) {
     if (!it.rgb || !s.glow) continue;
-    ctx.globalAlpha = s.faded.has(it.id) ? FADED : 1;
     const halo = Math.max(it.r * 2.5, reach * (0.36 + 0.26 * it.level));
     // Panels glow in an ellipse around their footprint.
     const rx = it.w ? it.w / 2 + halo * 0.6 : halo;
@@ -1613,25 +1688,27 @@ function draw(c: HTMLCanvasElement, s: Scene) {
     ctx.fill();
     ctx.restore();
   }
-  ctx.globalAlpha = 1;
   ctx.globalCompositeOperation = "source-over";
 
   // Each light: a panel as its footprint, a bulb as a disc. Lit, the light's
   // color pushed toward white as it brightens, with a small glow round it in
   // its color (brighter, the brighter it is). Off, just its outline in the
   // rail's color (a little stronger than the rail): the floor shows through,
-  // but not the rail, which is cut away under it. A quiet ring round it once
-  // selected; the same ring, dashed, under the pointer (selected or not), or
-  // inside a box being dragged out. Selected by anyone else too, it's still the one ring, in everyone's
-  // colors added together, yours (a warm white) among them while you have it
-  // selected or under the pointer (shared/presence.ts: ringOf).
-  const box = s.box && { x0: Math.min(s.box.x0, s.box.x1), x1: Math.max(s.box.x0, s.box.x1), y0: Math.min(s.box.y0, s.box.y1), y1: Math.max(s.box.y0, s.box.y1) };
+  // but not the rail, which is cut away under it. Round it, a ring whose line
+  // says what it is to your selection (selection.ts: solid selected, dashed
+  // hovered, dotted about to be let go of, none otherwise), never faded.
+  // Selected by anyone else too, it's still the one ring, in everyone's
+  // colors added together, yours among them while it's anything to you
+  // (shared/presence.ts: ringOf); just theirs, a solid ring in their color.
+  // With a gesture under way, straight from the change it would make: what it
+  // takes in that ends up selected is hovered, what's selected and won't be
+  // is leaving. Else the light under a finger, and what the panels point out.
+  const p = s.preview;
   for (const it of items) {
     const selected = s.selected.has(it.id);
-    // As the box takes them (its middle inside: boxed, in RoomMap).
-    const boxed = box !== null && it.x >= box.x0 && it.x <= box.x1 && it.y >= box.y0 && it.y <= box.y1;
-    const hovered = s.hovered === it.id || boxed || s.hinted.has(it.id);
-    ctx.globalAlpha = s.faded.has(it.id) ? FADED : 1;
+    const hovered = p ? p.targets.has(it.id) && p.next.has(it.id) : s.hovered === it.id;
+    const leaving = p ? selected && !p.next.has(it.id) : s.leaving.has(it.id);
+    const style = ringStyle(selected, hovered || s.hinted.has(it.id), leaving);
     ctx.beginPath();
     if (it.w) ctx.roundRect(it.x - it.w / 2, it.y - it.h / 2, it.w, it.h, Math.min(3, it.w / 4, it.h / 4));
     else ctx.arc(it.x, it.y, it.r, 0, Math.PI * 2);
@@ -1658,20 +1735,21 @@ function draw(c: HTMLCanvasElement, s: Scene) {
       ctx.fill();
       ctx.restore();
     }
-    const theirs = s.others.get(it.id);
-    const ring = ringOf(selected || hovered ? [s.mine, ...(theirs ?? [])] : (theirs ?? []), s.ringAlpha);
+    const theirs = s.others.get(it.id) ?? [];
+    const ring = ringOf(style === "none" ? theirs : [s.mine, ...theirs]);
     if (ring) {
       ctx.beginPath();
       if (it.w) ctx.roundRect(it.x - it.w / 2 - 4, it.y - it.h / 2 - 4, it.w + 8, it.h + 8, 5);
       else ctx.arc(it.x, it.y, it.r + 5, 0, Math.PI * 2);
-      ctx.strokeStyle = cssRgb(ring.rgb, ring.alpha);
+      ctx.strokeStyle = cssRgb(ring);
       ctx.lineWidth = 1.5;
-      if (hovered) ctx.setLineDash([3, 3]);
+      ctx.lineCap = style === "dotted" ? "round" : "butt";
+      ctx.setLineDash(RING_DASH[style === "none" ? "solid" : style]);
       ctx.stroke();
       ctx.setLineDash([]);
+      ctx.lineCap = "butt";
     }
   }
-  ctx.globalAlpha = 1;
 
   if (s.measure) drawLength(ctx, view, s.measure);
 

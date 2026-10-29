@@ -2,22 +2,18 @@
 // where the screen shows it, most Macs and iPhones and many recent phones,
 // so saturated lemtones aren't cut down to sRGB; sRGB elsewhere), and
 // whether the light on the map may go past white (HDR, where the screen and
-// the browser both show it). Both follow the window from screen to screen,
-// unless this browser's chosen otherwise (in the user menu).
+// the browser both show it). Both follow the window from screen to screen;
+// HDR can be turned off in the user menu.
 
 import { useSyncExternalStore } from "react";
 import type { Gamut } from "../shared/lemtone.ts";
-
-/** A gamut, or whatever the screen shows. */
-export type GamutChoice = "auto" | Gamut;
 
 export interface Display {
   /** What to paint in. */
   gamut: Gamut;
   /** Whether the map's light goes past white. */
   hdr: boolean;
-  /** What's chosen: a gamut, and HDR where it can be (or never). */
-  gamutChoice: GamutChoice;
+  /** What's chosen: HDR where it can be (or never). */
   hdrChoice: boolean;
   /** What the screen shows. */
   screen: { p3: boolean; hdr: boolean };
@@ -25,7 +21,6 @@ export interface Display {
   hdrCanvas: boolean | null;
 }
 
-const GAMUT_KEY = "vibes.gamut";
 const HDR_KEY = "vibes.hdr";
 
 const media = (query: string) => (typeof matchMedia === "function" ? matchMedia(query) : null);
@@ -49,8 +44,6 @@ function store(key: string, value: string | null) {
   }
 }
 
-const saved = load(GAMUT_KEY);
-let gamutChoice: GamutChoice = saved === "srgb" || saved === "display-p3" ? saved : "auto";
 let hdrChoice = load(HDR_KEY) !== "off";
 // Browsers draw past white only with WebGPU; without it, there's no trying.
 let hdrCanvas: boolean | null = typeof navigator !== "undefined" && "gpu" in navigator ? null : false;
@@ -58,9 +51,8 @@ let hdrCanvas: boolean | null = typeof navigator !== "undefined" && "gpu" in nav
 function compute(): Display {
   const screen = { p3: !!p3?.matches, hdr: !!high?.matches };
   return {
-    gamut: gamutChoice === "auto" ? (screen.p3 ? "display-p3" : "srgb") : gamutChoice,
+    gamut: screen.p3 ? "display-p3" : "srgb",
     hdr: hdrChoice && screen.hdr && hdrCanvas !== false,
-    gamutChoice,
     hdrChoice,
     screen,
     hdrCanvas,
@@ -92,12 +84,6 @@ export const screenGamut = (): Gamut => current.gamut;
 export const useDisplay = (): Display => useSyncExternalStore(subscribe, display);
 /** Just the gamut: what most painting needs, without re-rendering for the rest. */
 export const useGamut = (): Gamut => useSyncExternalStore(subscribe, screenGamut);
-
-export function setGamutChoice(choice: GamutChoice) {
-  gamutChoice = choice;
-  store(GAMUT_KEY, choice === "auto" ? null : choice);
-  update();
-}
 
 export function setHdrChoice(on: boolean) {
   hdrChoice = on;

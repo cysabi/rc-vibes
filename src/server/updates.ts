@@ -479,13 +479,10 @@ export function createUpdates({ shaders, instances, pools, layout, setRoomtone, 
           for (const pool of batch.declared.keys()) {
             if (!taking.has(pool) && !pools.mayDeclare(pool, owner)) return refuse("what a pool declares is for the code running with it to say");
           }
-          // Base Color is always in, on every light: taking it out, or moving its home, refuses all of it.
+          // The base Tone is on every light: moving its home refuses all of it.
           const base = (key: string) => isBaseColor(shaders.keyOf(key, user));
-          for (const key of batch.removes) {
-            if (base(key)) return say({ type: "refused", id, error: "Base Color is always in the room: mute it instead", code: "base_color", made: {} });
-          }
           for (const [key, s] of batch.shaders) {
-            if (s.home && base(key)) return say({ type: "refused", id, error: "Base Color's home is every light", code: "base_color", made: {} });
+            if (s.home && base(key)) return say({ type: "refused", id, error: "Base Tone's home is every light", code: "base_color", made: {} });
           }
           waiting.push({ id, batch });
           void makeWaiting();

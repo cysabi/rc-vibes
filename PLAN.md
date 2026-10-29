@@ -14,7 +14,7 @@ lighting system at the Recurse Center, served at `vibes.recurse.com`.
   "Edit lights" sits behind an "admin mode" switch in the user menu, which
   anyone can turn on; it is a guard against slips, not a permission. The
   room's color is open to everyone: it's the control people will want most.
-  It's Base Color (below), vibes' own shader at the bottom; arclamp's room
+  It's Base Tone (below), vibes' own shader at the bottom; arclamp's room
   tone, under it, is shown and changed in admin mode only.
 - **Degraded states are banners** across the top of the whole site: arclamp
   unreachable or refusing vibes' key, a radio disconnected, a dry run, or no
@@ -199,18 +199,36 @@ lights where they are, as free lights. vibes keeps its rail changes in the
    place in the stack.
 3. **Room tone.** ✅ Left panel: the whole room, a type, or lights selected on
    the map (click, shift-click, drag a box), set with the lemtone picker.
-   Old bulbs get on/off. Now Base Color's, over the room tone (below).
-   - **Base Color and the room tone** (`src/shared/base-color.ts`). arclamp's
-     room tone is the room's "normal", and only admin mode shows it (and its
-     color editor). Over it, the room's color is Base Color: a sketch baked
-     into vibes (`src/base-color`, built beside the web app), a Color param
-     for each color light and a switch for the old bulbs, seeded from the
-     room tone the first time. vibes keeps it in the room at the bottom: put
-     back as soon as it's gone, held muted until its params link, and moved
-     back down when anything goes under it. Nobody can remove it, move its
-     home or edit its code; muting it and per-light masks work as for any
-     shader. In the layers panel it can't be dragged, cloned or deleted, and
-     its params are open under its row in the selection to start with.
+   Old bulbs get on/off. Now Tone's, over the room tone (below).
+   - **Tone, the base Tone, and the room tone** (`src/shared/base-color.ts`).
+     arclamp's room tone is the room's "normal", and only admin mode shows it
+     (and its color editor). Tone is a sketch baked into vibes
+     (`src/default-sketches/tone.ts`, built beside the web app): a Color param for each
+     color light and a switch for the old bulbs (2800K at 703 lm, old bulbs
+     off, by default). It's in the library like any sketch, and any number
+     can be added, cloned and taken out, but its code is vibes' own: there's
+     none to open, fork, update or delete, and its build is vibes' (asked to
+     build it, the sketches API answers with it).
+     One Tone is the room's base, shown as "Base Tone": vibes puts it in at
+     the bottom, on every light, at its defaults (nothing's copied in from
+     the room tone, so it has no hidden state), holds it muted until its
+     params link, moves it back down when anything goes under it, and when
+     it's gone puts it back as it was (its shader lost) or anew (taken out).
+     Its home can't be moved; the layers panel won't drag or delete it
+     (the server would let it be taken out); muting and masks work as for
+     any shader, and its params are open under its row in the selection to
+     start with.
+   - **Default sketches** (`src/shared/default-sketches.ts`). vibes' own
+     sketches, in a section of their own at the top of the library: Tone,
+     and Transition (each color light from the light below it to an End tone,
+     with Easing, Speed in transitions a second, and Reverse: back and forth,
+     or over again from the start), and Rainbow (every hue in turn, a wave
+     across the room, with Speed in times round a minute, Brightness in
+     lumens, and Saturation against what the bulbs make of each hue). Each is built with vibes
+     (`src/default-sketches/<entry>.ts`, to `dist/default-sketches/`) and
+     made as vibes starts (`server/default-sketches.ts`), one build each; the
+     sketches API answers a build of one with it, and there's no code of one
+     to open, fork, publish, update or delete.
 4. **Simulated mode.** ✅ Any edit (room tone, or a shader's mute, mask or
    place in the stack) is pending, kept per browser, until
    Apply sends it all to arclamp or Discard drops it. Meanwhile the map shows

@@ -8,18 +8,14 @@
 // until it's made into something); so does a search that finds nothing, by
 // that name. Deleted sketches are another view of the dialog, swapped in
 // (and back) by the button beside its close: each to restore.
-//
-// What goes in is built from main, so adding first asks vibes whether your
-// editor has changes to the sketch that main hasn't (files not committed,
-// commits not pushed). If it has, it asks whether to include them: pushed to
-// main, then added; or added as main has it.
 
 import { useEffect, useRef, useState, type FormEvent } from "react";
-import type { Sketch, SketchChanges } from "../../shared/vibes.ts";
-import { request, RequestError, useCreateSketch, useDeletedSketches, useDeleteSketch, useForkSketch, useRenameSketch, useRestoreSketch, useSketches } from "../api.ts";
+import { DEFAULT_SKETCHES, defaultSketch } from "../../shared/default-sketches.ts";
+import type { Sketch } from "../../shared/vibes.ts";
+import { useCreateSketch, useDeletedSketches, useDeleteSketch, useForkSketch, useRenameSketch, useRestoreSketch, useSketches } from "../api.ts";
 import { CloseIcon, ForkIcon, PencilIcon, PlusIcon, TrashIcon } from "../icons.tsx";
 import { navigate } from "../route.ts";
-import { ago, count, listOf } from "../words.ts";
+import { ago } from "../words.ts";
 import { CardMenu } from "./CardMenu.tsx";
 
 interface Props {
@@ -37,8 +33,6 @@ export function AddSketch({ open, onPick, onClose }: Props) {
   const sketches = useSketches();
   const deleted = useDeletedSketches();
   const create = useCreateSketch();
-  // A sketch picked whose changes in your editor main hasn't got: asking about them, and how pushing them goes.
-  const [asking, setAsking] = useState<Asking | null>(null);
   // Which view: every sketch, or the ones deleted, to restore.
   const [view, setView] = useState<"library" | "deleted">("library");
 
@@ -47,7 +41,6 @@ export function AddSketch({ open, onPick, onClose }: Props) {
     if (open && !d.open) {
       setQuery("");
       setNaming(null);
-      setAsking(null);
       setView("library");
       create.reset();
       d.showModal();
@@ -63,39 +56,20 @@ export function AddSketch({ open, onPick, onClose }: Props) {
   }, [open]);
 
   const wanted = query.trim().toLowerCase();
-  const list = [...(sketches.data ?? [])].sort((a, b) => b.updatedAt - a.updatedAt).filter((s) => s.name.toLowerCase().includes(wanted));
+  const matching = [...(sketches.data ?? [])].filter((s) => s.name.toLowerCase().includes(wanted));
+  // vibes' own (shared/default-sketches.ts), in their own section first, in their order; then everyone's, the latest changed first.
+  const defaults = DEFAULT_SKETCHES.flatMap((d) => matching.filter((s) => s.id === d.id));
+  const list = matching.filter((s) => !s.builtIn).sort((a, b) => b.updatedAt - a.updatedAt);
   const gone = (deleted.data ?? []).filter((s) => s.name.toLowerCase().includes(wanted));
   const anyGone = (deleted.data?.length ?? 0) > 0;
   const swap = (to: "library" | "deleted") => {
     setView(to);
     setNaming(null);
-    setAsking(null);
   };
   const make = (name: string) => create.mutate(name, { onSuccess: (s) => navigate(`/sketches/${s.id}`) });
   const submit = (e: FormEvent) => {
     e.preventDefault();
     if (naming?.trim()) make(naming.trim());
-  };
-
-  // Picked: straight in, unless your editor has changes main hasn't.
-  const pick = async (sketch: Picked) => {
-    setAsking({ sketch, step: "checking" });
-    const changes = await request<SketchChanges>("GET", `/api/sketches/${encodeURIComponent(sketch.id)}/changes`).catch((): SketchChanges => ({ unknown: true }));
-    if (!("unknown" in changes) && changes.files === 0 && changes.commits === 0) {
-      setAsking(null);
-      onPick(sketch);
-    } else setAsking({ sketch, step: "asking", changes });
-  };
-  // Your changes, pushed to main, then it added with them.
-  const push = async (a: Asking) => {
-    setAsking({ ...a, step: "pushing" });
-    try {
-      await request("POST", `/api/sketches/${encodeURIComponent(a.sketch.id)}/publish`, {});
-      setAsking(null);
-      onPick(a.sketch);
-    } catch (err) {
-      setAsking({ ...a, step: "refused", code: err instanceof RequestError ? err.code : "failed", error: (err as Error).message });
-    }
   };
 
   return (
@@ -123,8 +97,8 @@ export function AddSketch({ open, onPick, onClose }: Props) {
               </button>
             ) : (
               anyGone && (
-                <button className="add-sketch-swap" onClick={() => swap("deleted")}>
-                  Recently deleted
+                <button className="icon-button" onClick={() => swap("deleted")} aria-label="Recently deleted">
+                  <TrashIcon />
                 </button>
               )
             )}
@@ -149,11 +123,9 @@ export function AddSketch({ open, onPick, onClose }: Props) {
             ) : (
               <p className="add-sketch-quiet muted">{wanted ? `No deleted sketch called “${query.trim()}”.` : "Nothing's been deleted."}</p>
             )
-          ) : asking ? (
-            <Ask asking={asking} onPush={() => void push(asking)} onWithout={() => onPick(asking.sketch)} onBack={() => setAsking(null)} />
           ) : sketches.isPending ? (
             <p className="add-sketch-quiet muted">Getting the sketches…</p>
-          ) : list.length === 0 && wanted ? (
+          ) : list.length === 0 && defaults.length === 0 && wanted ? (
             // Nothing by that name: make it (or, if one by it was deleted, restore that).
             <div className="add-sketch-none">
               <p>
@@ -171,10 +143,23 @@ export function AddSketch({ open, onPick, onClose }: Props) {
             </div>
           ) : (
             <>
+              {defaults.length > 0 && (
+                <section className="add-sketch-section">
+                  <h3 className="label">Default Sketches</h3>
+                  <ul className="add-sketch-grid">
+                    {defaults.map((s) => (
+                      <li key={s.id}>
+                        <Card sketch={s} onAdd={() => onPick({ id: s.id, name: s.name })} />
+                      </li>
+                    ))}
+                  </ul>
+                </section>
+              )}
+              {defaults.length > 0 && <h3 className="label add-sketch-section-head">Sketches</h3>}
               <ul className="add-sketch-grid">
                 {list.map((s) => (
                   <li key={s.id}>
-                    <Card sketch={s} onAdd={() => void pick({ id: s.id, name: s.name })} />
+                    <Card sketch={s} onAdd={() => onPick({ id: s.id, name: s.name })} />
                   </li>
                 ))}
                 {/* A new one, last: a skeleton of a card, named here. */}
@@ -257,10 +242,17 @@ function Card({ sketch, onAdd }: { sketch: Sketch; onAdd: () => void }) {
       ) : (
         <>
           <span className="add-sketch-name">{sketch.name}</span>
-          <span className="add-sketch-meta">by {sketch.createdBy.name}</span>
-          <span className="add-sketch-meta">
-            changed {ago(sketch.updatedAt)} by {sketch.updatedBy}
-          </span>
+          {sketch.builtIn ? (
+            // vibes' own: no one made it, and it changes with vibes.
+            <span className="add-sketch-meta">{defaultSketch(sketch.id)?.about ?? "Part of vibes"}</span>
+          ) : (
+            <>
+              <span className="add-sketch-meta">by {sketch.createdBy.name}</span>
+              <span className="add-sketch-meta">
+                changed {ago(sketch.updatedAt)} by {sketch.updatedBy}
+              </span>
+            </>
+          )}
         </>
       )}
       {deleting ? (
@@ -278,17 +270,22 @@ function Card({ sketch, onAdd }: { sketch: Sketch; onAdd: () => void }) {
           <button className="primary" onClick={onAdd}>
             Add
           </button>
-          <button className="quiet" onClick={() => navigate(`/sketches/${sketch.id}`)}>
-            View Code
-          </button>
-          <CardMenu
-            name={`More for ${sketch.name}`}
-            items={[
-              { label: "Rename", icon: <PencilIcon />, onSelect: () => setNaming({ what: "rename", name: sketch.name }) },
-              { label: "Fork", icon: <ForkIcon />, onSelect: () => setNaming({ what: "fork", name: `${sketch.name} fork` }) },
-              { label: "Delete", icon: <TrashIcon />, danger: true, onSelect: () => setDeleting(true) },
-            ]}
-          />
+          {/* vibes' own has no code to view, rename, fork or delete. */}
+          {!sketch.builtIn && (
+            <>
+              <button className="quiet" onClick={() => navigate(`/sketches/${sketch.id}`)}>
+                View Code
+              </button>
+              <CardMenu
+                name={`More for ${sketch.name}`}
+                items={[
+                  { label: "Rename", icon: <PencilIcon />, onSelect: () => setNaming({ what: "rename", name: sketch.name }) },
+                  { label: "Fork", icon: <ForkIcon />, onSelect: () => setNaming({ what: "fork", name: `${sketch.name} fork` }) },
+                  { label: "Delete", icon: <TrashIcon />, danger: true, onSelect: () => setDeleting(true) },
+                ]}
+              />
+            </>
+          )}
         </div>
       )}
       {error && <span className="error-text">{error.message}</span>}
@@ -320,88 +317,3 @@ function Deleted({ sketches }: { sketches: Sketch[] }) {
     </section>
   );
 }
-
-interface Picked {
-  id: string;
-  name: string;
-}
-
-/** A sketch picked, and where asking about your changes to it has got to. */
-type Asking =
-  | { sketch: Picked; step: "checking" }
-  | { sketch: Picked; step: "pushing" }
-  | { sketch: Picked; step: "asking"; changes: SketchChanges }
-  | { sketch: Picked; step: "refused"; code: string; error: string };
-
-/** Whether to include your changes to the sketch picked: asked, being pushed, or why they couldn't be. */
-function Ask({ asking, onPush, onWithout, onBack }: { asking: Asking; onPush: () => void; onWithout: () => void; onBack: () => void }) {
-  const { name } = asking.sketch;
-  if (asking.step === "checking" || asking.step === "pushing") {
-    return <p className="add-sketch-quiet muted">{asking.step === "checking" ? `Looking for your changes to ${name}…` : "Pushing your changes to main…"}</p>;
-  }
-  const without = (
-    <button className="quiet" onClick={onWithout}>
-      Add without them
-    </button>
-  );
-  const back = (
-    <button className="quiet" onClick={onBack}>
-      Back
-    </button>
-  );
-  if (asking.step === "refused") {
-    const why =
-      asking.code === "clash"
-        ? "They clash with what's been pushed to main since, so nothing was pushed. Open it, sync, and sort them out there, then add it."
-        : asking.code === "busy"
-          ? `${capitalized(asking.error)}: finish that in its editor first.`
-          : `They couldn't be pushed: ${asking.error}`;
-    return (
-      <div className="add-sketch-none add-sketch-ask">
-        <p>
-          Your changes to <b>{name}</b> aren't on main.
-        </p>
-        <p className="muted">{why}</p>
-        <div className="add-sketch-ask-actions">
-          {back}
-          {without}
-          {asking.code === "failed" ? (
-            <button className="primary" onClick={onPush}>
-              Try again
-            </button>
-          ) : (
-            <button className="primary" onClick={() => navigate(`/sketches/${asking.sketch.id}`)}>
-              Open {name}
-            </button>
-          )}
-        </div>
-      </div>
-    );
-  }
-  const { changes } = asking;
-  const what =
-    "unknown" in changes
-      ? null
-      : listOf([...(changes.files > 0 ? [count(changes.files, "changed file")] : []), ...(changes.commits > 0 ? [count(changes.commits, "commit")] : [])]);
-  return (
-    <div className="add-sketch-none add-sketch-ask">
-      <p>
-        Include your changes to <b>{name}</b>?
-      </p>
-      <p className="muted">
-        {what
-          ? `Your editor has ${what} that main hasn't, and main is what goes in the room. Pushing them puts them on main, for everyone.`
-          : `vibes couldn't look at your editor's copy of ${name}. If you've changed it, pushing your changes puts them on main, for everyone, and in the room.`}
-      </p>
-      <div className="add-sketch-ask-actions">
-        {back}
-        {without}
-        <button className="primary" onClick={onPush}>
-          Push and add
-        </button>
-      </div>
-    </div>
-  );
-}
-
-const capitalized = (s: string) => s.charAt(0).toUpperCase() + s.slice(1);

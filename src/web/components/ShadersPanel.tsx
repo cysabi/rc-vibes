@@ -38,6 +38,7 @@ import { changeable, changesByLayer, domainOf, drafts, layerOf, layersOf, remove
 import { ChevronUpIcon, CodeIcon, DomainIcon, FocusIcon, PlusIcon } from "../icons.tsx";
 import { useLights, useScene, type Scene } from "../scene.ts";
 import { isBaseColor } from "../../shared/base-color.ts";
+import { defaultSketch } from "../../shared/default-sketches.ts";
 import { baseType, isBinary } from "../../shared/fixtures.ts";
 import { count } from "../words.ts";
 import { AddSketch } from "./AddSketch.tsx";
@@ -45,11 +46,13 @@ import { Sidebar, SidebarDetails, SidebarSection } from "./Sidebar.tsx";
 import { LightsSummary } from "./LightsSummary.tsx";
 import { AddingActions, CloneShader, ComingActions, OpenCode, RemoveShader } from "./ShaderPanel.tsx";
 import { Reveal } from "./Reveal.tsx";
-import { keyedMode, type SelectMode } from "./RoomMap.tsx";
+import { keyedMode, type SelectMode } from "../selection.ts";
 import { ChangesMark, inPreview, ShaderNode, withGoing } from "./SelectionPanel.tsx";
+import { useShowUnsaved } from "../unsaved.ts";
 import { usePointsOut } from "../hint.ts";
 
 const NO_SCENE: Scene = { shaders: [], roomtone: null, pools: {} };
+const NO_CHANGES: ReadonlyMap<string, number[]> = new Map();
 
 interface Props {
   /** The lights on this floor. */
@@ -76,7 +79,9 @@ export function ShadersPanel({ here, selected, onSelect }: Props) {
   ).reverse();
   const all = lights.data?.lights ?? [];
   // What each layer has that isn't saved yet: the lights it changes.
-  const changes = changesByLayer(live, draft);
+  // Not in live mode, where they're sent as they're made (unsaved.ts).
+  const showUnsaved = useShowUnsaved();
+  const changes = showUnsaved ? changesByLayer(live, draft) : NO_CHANGES;
   const opened = useOpened();
   // The layer the map's about (in focus, or its domain being edited): its row says so.
   const mode = useLayerMode();
@@ -106,7 +111,7 @@ export function ShadersPanel({ here, selected, onSelect }: Props) {
       coordinateGetter: sortableKeyboardCoordinates,
     }),
   );
-  // Base Color stays at the bottom (shared/base-color.ts): it's no place among them to move to.
+  // The base Tone stays at the bottom (shared/base-color.ts): it's no place among them to move to.
   const listed = shown.filter((l) => changeable(l) && !going.has(l.key) && !isBaseColor(l.key)).map((l) => l.key);
   const onDragEnd = ({ active, over }: DragEndEvent) => {
     if (!over || active.id === over.id) return;
@@ -156,7 +161,7 @@ export function ShadersPanel({ here, selected, onSelect }: Props) {
                   focusLayer(layer.key);
                   const onFloor = new Set(here.map((l) => l.id));
                   const mine = domainOf(layer).filter((id) => onFloor.has(id));
-                  // Shift adds them (or, all selected already, lets go of them); alt lets go of them (or, none selected, adds them): keyedMode.
+                  // Shift adds them (or, all selected already, lets go of them); alt always lets go of them: keyedMode.
                   if (mine.length > 0) onSelect(mine, mode === "add" || mode === "remove" ? keyedMode(mode, mine, selected) : mode);
                   else if (mode === "replace") onSelect([], "replace");
                 },
@@ -226,7 +231,8 @@ function SortableShaderRow(props: RowProps) {
       ...listeners,
     } as ButtonHTMLAttributes<HTMLButtonElement>,
     ref: setNodeRef,
-    style: { transform: CSS.Transform.toString(transform), transition },
+    // Up and down only (the stack's one way), and never stretched to the size of the row it's over.
+    style: { transform: CSS.Translate.toString(transform && { ...transform, x: 0 }), transition },
     dragging: isDragging,
   };
   return <ShaderRow {...props} drag={drag} />;
@@ -402,7 +408,7 @@ function EditDomain({ layer, editing }: { layer: Layer; editing: boolean }) {
 /**
  * What a layer opens to: its Domain (the lights it's on, editing them on
  * the map on the right of its title), then, if it's a sketch's, its Sketch (opening it, cloning
- * it, updating it, and deleting it). Base Color is vibes' own: it has no Sketch
+ * it, updating it, and deleting it). The base Tone is vibes' own: it has no Sketch
  * section (just a note that it's always there), and can't be deleted or
  * moved; a shader made outside vibes has none either,
  * its Delete under its domain. One
@@ -436,12 +442,14 @@ function Sections({
     );
   }
   const coming = (layer.stage === "building" || layer.stage === "failed") && layer.instance;
-  // Base Color (shared/base-color.ts): always in, its code vibes' own, so nothing to open, clone, update or delete.
+  // One of vibes' own (shared/default-sketches.ts: a Tone, a Transition): its code's vibes', so nothing to open or update, just clone or take out.
+  // The base Tone's always in and at the bottom: the layers panel won't take it out (or move it).
   const base = isBaseColor(layer.key);
-  // A sketch's (in the room, on its way, or being added): it has a Sketch section. Base Color, or a shader made outside vibes, hasn't.
-  const isSketch = !base && (layer.sketch !== null || layer.adding !== null || coming);
+  const builtIn = defaultSketch(layer.adding?.sketchId ?? layer.instance?.sketchId ?? layer.sketch?.id);
+  // A sketch's (in the room, on its way, or being added): it has a Sketch section. One of vibes' own, or a shader made outside vibes, hasn't.
+  const isSketch = !builtIn && (layer.sketch !== null || layer.adding !== null || coming);
   // One made outside vibes can still be deleted: with no Sketch section, under its domain.
-  const outside = !isSketch && !base;
+  const outside = !isSketch && !builtIn;
   return (
     <>
       {/* Above its Domain, the map about it: Focus and Edit, side by side, the whole width between them. */}
@@ -450,14 +458,22 @@ function Sections({
         {changeable(layer) && <EditDomain layer={layer} editing={editing} />}
       </div>
       <SidebarSection title="Domain">
-        {on.length > 0 && <LightsSummary lights={lightsOf(on, all)} />}
+        {on.length > 0 ? <LightsSummary lights={lightsOf(on, all)} /> : <span className="domain-empty">No domain</span>}
         {outside && (
           <div className="shader-actions">
             <RemoveShader layer={layer} />
           </div>
         )}
       </SidebarSection>
-      {base && <p className="hint">Base Color is part of vibes, so it's always here: switch it off to show the room tone.</p>}
+      {/* One of vibes' own sketches: its own section, by its name (cloning it, taking it out). Not the base Tone's, which is just its Domain. */}
+      {builtIn && !base && (
+        <SidebarSection title={builtIn.name}>
+          <div className="shader-actions">
+            <CloneShader layer={layer} scene={scene} all={ids} onCloned={onCloned} />
+            {layer.adding ? <AddingActions adding={layer.adding} /> : coming ? <ComingActions instance={layer.instance!} /> : <RemoveShader layer={layer} />}
+          </div>
+        </SidebarSection>
+      )}
       {isSketch && (
         <SidebarSection title="Sketch" actions={<SketchCommit layer={layer} />}>
           {/* One field: whether it's behind, then what's done to the sketch, together. */}

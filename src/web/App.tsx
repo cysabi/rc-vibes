@@ -6,20 +6,22 @@ import { useAddingBuilds } from "./adding.ts";
 import { useMe, useStreetViews } from "./api.ts";
 import { useLights, useScene, type Scene } from "./scene.ts";
 import { applyDraft, changeable, currentDraft, domainOf, domainPatch, drafts, layersOf, pendingCount, templateOf, useDraft, type Draft } from "./draft.ts";
+import { setLiveStuck } from "./unsaved.ts";
 import { useHint } from "./hint.ts";
 import { layerMode, useLayerMode } from "./layer-mode.ts";
 import { DomainBanner, FocusBanner } from "./components/DomainBanner.tsx";
 import { Banners } from "./components/Banners.tsx";
 import { ColorPreview } from "./components/ColorPreview.tsx";
 import { Login } from "./components/Login.tsx";
-import { RoomMap, selectionWith, type SelectMode } from "./components/RoomMap.tsx";
+import { RoomMap } from "./components/RoomMap.tsx";
+import { leavingFor, selectionWith, type SelectMode } from "./selection.ts";
 import { IdlePanel, SelectionPanel, type Saving } from "./components/SelectionPanel.tsx";
 import { ShadersPanel } from "./components/ShadersPanel.tsx";
 import { UserMenu } from "./components/UserMenu.tsx";
 import { FLOORS } from "./floors.ts";
-import { useLiveStream } from "./live.ts";
+import { setShowingRoom, useLiveStream } from "./live.ts";
 import { useNarrow } from "./narrow.ts";
-import { BASE_TONE, usePeek } from "./peek.ts";
+import { ROOM_TONE, SAVED, usePeek } from "./peek.ts";
 import { othersByLight, useOthers, useSharePresence } from "./presence.ts";
 import type { Rgb } from "../shared/presence.ts";
 import { savedFloor, saveFloor, useLiveMode } from "./settings.ts";
@@ -126,16 +128,21 @@ function Shell() {
     setSaveError(null);
     lastSent.current = null;
   }, [liveMode]);
+  // Live mode's sending failed: the panels show what's pending again (unsaved.ts), to save by hand.
+  useEffect(() => setLiveStuck(liveMode && saveError !== null), [liveMode, saveError]);
   const previewing = pending > 0 && (!liveMode || saveError !== null);
-  const simulated = previewing || peeking !== null;
+  // Peeking at the saved pipeline (the discard button): the room's own frames, the preview kept running behind them.
+  const peekingSaved = peeking === SAVED;
+  useEffect(() => setShowingRoom(peekingSaved), [peekingSaved]);
+  const simulated = previewing || (peeking !== null && !peekingSaved);
   const simInputs = useMemo(() => {
     // Each is previewed once its script's here: a sketch being added, once it's built.
     const layers = layersOf(live, draft).filter((l) => l.script !== "");
     // Peeking at a stop: the light as it leaves there, so everything above it (the stack is top first) is set aside.
     const above =
-      peeking === null
+      peeking === null || peeking === SAVED
         ? 0
-        : peeking === BASE_TONE
+        : peeking === ROOM_TONE
           ? layers.length
           : Math.max(
               0,
@@ -237,21 +244,25 @@ function Shell() {
   // Nothing moves the map but you: selecting (from either panel), focus,
   // streetview opening and closing all leave it where it is.
   // Lights pointed out from either panel (a layer's row, an unsaved changes
-  // asterisk: hint.ts; null with none): ringed, dashed, on the map, as if
-  // under the pointer there, and the selected lights a click on it would let
-  // go of (all but those) fade meanwhile. Unless they're just what's selected
-  // here already (what a click would select): then there's nothing to show.
-  const pointedOut = useHint();
+  // asterisk, a group's chip: hint.ts; null with none): hovered on the map,
+  // as if under the pointer there, and the selected lights a click on it
+  // would let go of about to be let go of (selection.ts' rings). Those are
+  // what it says, if it says (a chip's click adds its lights, or takes them
+  // out); else all but its own, as a click selecting just them would. Such a
+  // click on just what's selected here already changes nothing: then there's
+  // nothing to show.
+  const hint = useHint();
   const hinted = useMemo(() => {
-    if (!pointedOut) return null;
-    const mine = here.filter((l) => pointedOut.has(l.id));
+    if (!hint) return null;
+    if (hint.leaving) return hint.ids;
+    const mine = here.filter((l) => hint.ids.has(l.id));
     const picked = mine.length > 0 && mine.length === selectedHere.size && mine.every((l) => selectedHere.has(l.id));
-    return picked ? null : pointedOut;
-  }, [pointedOut, here, selectedHere]);
-  const faded = useMemo(
-    () => (hinted && !editing ? new Set([...selectedHere].filter((id) => !hinted.has(id))) : NO_LIGHTS),
-    [hinted, editing, selectedHere],
-  );
+    return picked ? null : hint.ids;
+  }, [hint, here, selectedHere]);
+  const leaving = useMemo(() => {
+    if (!hinted || editing) return NO_LIGHTS;
+    return hint?.leaving ? new Set([...hint.leaving].filter((id) => selectedHere.has(id))) : leavingFor(selectedHere, hinted);
+  }, [hint, hinted, editing, selectedHere]);
 
   // A camera on another floor shows that floor.
   const cameraFloor = cameras?.find((c) => c.id === streetView)?.floor;
@@ -327,8 +338,7 @@ function Shell() {
                   others={othersHere}
                   hinted={editing || !hinted ? NO_LIGHTS : hinted}
                   mine={mode ? FOCUS_BLUE : undefined}
-                  ringAlpha={mode ? 1 : undefined}
-                  faded={faded}
+                  leaving={leaving}
                   look={hasSelection && !narrow && colorLights.length > 0 && <ColorPreview lights={colorLights} />}
                   onStreetView={openStreetView}
                   streetView={streetView}

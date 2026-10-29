@@ -337,7 +337,11 @@ export function Goo({ marks, width, height, gamut, lookOf, outline, halo }: Prop
       const spots: { el: HTMLSpanElement; x: number; y: number; half: number }[] = [];
       for (const [key, el] of labels.current) {
         const b = balls.current.get(key);
-        if (!b) continue;
+        // No number without its ball: none yet (growing in), or going.
+        if (!b || b.to.r === 0 || b.r < b.to.r * 0.5) {
+          el.style.visibility = "hidden";
+          continue;
+        }
         let [x, y] = [b.x, b.y];
         const members = b.to.n > 1 && key === b.to.cluster ? byCluster.get(key) : undefined;
         if (members && members.length > 1) {

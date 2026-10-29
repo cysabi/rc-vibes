@@ -1,9 +1,10 @@
-import { statSync, writeFileSync } from "node:fs";
+import { mkdirSync, statSync, writeFileSync } from "node:fs";
 import path from "node:path";
 import { gzipSync } from "node:zlib";
 import react from "@vitejs/plugin-react";
 import { defineConfig, type Plugin } from "vite";
-import { BASE_COLOR_ENTRY, BASE_COLOR_SCRIPT } from "./src/server/base-color-script.ts";
+import { defaultSketchEntry, defaultSketchScript } from "./src/server/base-color-script.ts";
+import { DEFAULT_SKETCHES } from "./src/shared/default-sketches.ts";
 import { buildSketchScript } from "./src/server/sketch-script.ts";
 import { makeCutoffs, pack } from "./src/web/cutoffs.ts";
 
@@ -84,23 +85,28 @@ function previewPage(): Plugin {
 }
 
 /**
- * Base Color's script (src/shared/base-color.ts), built with vibes as the
- * builder builds a sketch, beside the web app (not in it: it's for arclamp,
- * not browsers). The server puts it in from there (base-color-script.ts).
+ * vibes' own sketches' scripts (src/shared/default-sketches.ts: Tone, the
+ * Base Tone's, and the rest), each built with vibes as the builder builds a
+ * sketch, beside the web app (not in it: they're for arclamp, not browsers).
+ * The server puts them in from there (base-color-script.ts).
  */
-function baseColorScript(): Plugin {
+function defaultSketchScripts(): Plugin {
   return {
-    name: "vibes:base-color",
+    name: "vibes:default-sketches",
     apply: "build",
     async closeBundle() {
-      writeFileSync(BASE_COLOR_SCRIPT, await buildSketchScript(BASE_COLOR_ENTRY));
+      for (const s of DEFAULT_SKETCHES) {
+        const out = defaultSketchScript(s);
+        mkdirSync(path.dirname(out), { recursive: true });
+        writeFileSync(out, await buildSketchScript(defaultSketchEntry(s)));
+      }
     },
   };
 }
 
 export default defineConfig({
   root: "src/web",
-  plugins: [react(), cutoffs(), previewPage(), baseColorScript()],
+  plugins: [react(), cutoffs(), previewPage(), defaultSketchScripts()],
   build: { outDir: "../../dist/web", emptyOutDir: true },
   server: {
     port: 5173,

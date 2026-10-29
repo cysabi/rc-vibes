@@ -9,7 +9,8 @@ import { apiRoutes, createLights, handleError } from "./api.ts";
 import { createArclamp } from "./arclamp.ts";
 import { authRoutes } from "./auth.ts";
 import { createBaseColor, type BaseColor } from "./base-color.ts";
-import { loadBaseColorScript } from "./base-color-script.ts";
+import { loadDefaultSketchScript } from "./base-color-script.ts";
+import { createDefaultSketches, type DefaultSketches } from "./default-sketches.ts";
 import { dockerRunner } from "./box-docker.ts";
 import { localRunner } from "./box-local.ts";
 import { createBoxProxy } from "./box-proxy.ts";
@@ -73,9 +74,11 @@ const layout = createLayout({ db, arclampLights: lights.arclampLights, currentLi
 
 // The scene, followed as it changes, its footprints from the light stream;
 // arclamp's health, likewise; and sketches put in the room (instances),
-// Base Color always among them, at the bottom (base-color.ts).
+// The base Tone always among them, at the bottom (base-color.ts).
 let instances: Instances | null = null;
 let baseColor: BaseColor | null = null;
+// vibes' own sketches in the library (default-sketches.ts): their builds, made as vibes starts.
+let defaults: DefaultSketches | null = null;
 // Pools' streams: each shader linked once (an eval), then a stream from it, taking each change.
 // Only where shaders can reach vibes (VIBES_SHADER_URL; env.ts).
 const params = builds && config.shaderUrl ? createParamLinks({ pools, arclamp, secret: config.sessionSecret, url: `${config.shaderUrl}/shader-api/params` }) : null;
@@ -108,16 +111,17 @@ if (builds) {
     wentIn: (id, d) => baseColor?.wentIn(id, d),
   });
   if (config.signingKey) {
+    defaults = createDefaultSketches({ signingKey: config.signingKey, db, script: (s) => loadDefaultSketchScript(s, config.production) });
     baseColor = createBaseColor({
-      signingKey: config.signingKey,
       db,
+      defaults,
       instances,
       pools,
       arclamp: noted,
-      script: () => loadBaseColorScript(config.production),
       linked: params ? (pool) => params.linked(pool) : null,
     });
-    void baseColor.start();
+    const made = defaults;
+    void made.start().then(() => baseColor?.start());
   }
 }
 
@@ -128,7 +132,7 @@ app.route("/auth", authRoutes(config));
 if (sketches) app.route("/", boxApiRoutes(config, sketches, db, lights, pools, params));
 if (builds) app.route("/", buildApiRoutes(config, builds));
 if (params) app.route("/", params.routes());
-const sketchApi = sketches && boxes && builds ? sketchRoutes(sketches, db, boxes, builds) : null;
+const sketchApi = sketches && boxes && builds ? sketchRoutes(sketches, db, boxes, builds, defaults) : null;
 app.route("/api", apiRoutes({ config, arclamp: noted, db, relay, origins, lights, feed, live, pools, layout, sketches: sketchApi, instances, health }));
 if (config.production) {
   // The built files' dates are Nix's (1970), which browsers take to mean the

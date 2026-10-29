@@ -68,7 +68,7 @@ export interface FeedDeps {
   instances?: () => Instances | null;
   /** Told the shaders in the scene that are instances' (by their stamps), each time it's made: for linking them for params (params.ts). */
   onShaders?: (shaders: SeenShader[]) => void;
-  /** Told every shader in the scene (not the room tone), each time it's made: for keeping Base Color (base-color.ts). */
+  /** Told every shader in the scene (not the room tone), each time it's made: for keeping the base Tone (base-color.ts). */
   onScene?: (shaders: SceneShader[]) => void;
   confirmMs?: number;
 }
