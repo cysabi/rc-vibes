@@ -14,6 +14,7 @@
 import { useCallback, useState, useSyncExternalStore } from "react";
 import type { RoomTemplate } from "../shared/arclamp.ts";
 import { fanOps, pathOf, unfanOps, withOps, type LiveTree, type Op, type Pool, type RoomMessage, type RoomRequest } from "../shared/live.ts";
+import { NO_SCENES, type Scenes } from "../shared/scenes.ts";
 import { RESTING, type ShowClock, type TransportAction } from "../shared/show.ts";
 import type { Lights, Placement, RailChange, Shader, ShaderKey, TagChange, TypeChange } from "../shared/vibes.ts";
 import { apiSocket, request } from "./api.ts";
@@ -39,9 +40,11 @@ interface State {
   /** Whether a show's on, and its clock (shared/show.ts). */
   showOn: boolean;
   clock: ShowClock;
+  /** The room's scenes (shared/scenes.ts). */
+  scenes: Scenes;
 }
 
-let state: State = { scene: undefined, layout: undefined, error: null, showOn: RESTING.on, clock: RESTING.clock };
+let state: State = { scene: undefined, layout: undefined, error: null, showOn: RESTING.on, clock: RESTING.clock, scenes: NO_SCENES };
 let tree: LiveTree | null = null;
 // The last change the copy here has, of which run of vibes.
 let rev: number | null = null;
@@ -84,7 +87,7 @@ function publish() {
         }
       : undefined;
   }
-  state = { scene, layout, error: null, showOn: tree.show?.on ?? RESTING.on, clock: tree.show?.clock ?? RESTING.clock };
+  state = { scene, layout, error: null, showOn: tree.show?.on ?? RESTING.on, clock: tree.show?.clock ?? RESTING.clock, scenes: tree.scenes ?? NO_SCENES };
   for (const l of listeners) l();
 }
 
@@ -326,6 +329,14 @@ export const showClockNow = () => state.clock;
 
 /** Something done to the show (starting or ending one, too), at once whatever the mode (it's the room's: never a pending edit). */
 export const sendTransport = (action: TransportAction) => sendUpdate([[pathOf("show", "transport"), action]]);
+
+/** The room's scenes (shared/scenes.ts), as vibes last said them. */
+export function useScenes(): Scenes {
+  return useSyncExternalStore(subscribe, () => state.scenes);
+}
+
+/** Changes to the scenes (scenes/…: shared/live.ts), at once whatever the mode: they're the room's, never a pending edit. */
+export const sendScenes = (ops: Op[]) => sendUpdate(ops);
 
 /** A change to the map: rails drawn or moved, lights moved, turned to another orientation, and/or tagged. */
 export interface LayoutChange {

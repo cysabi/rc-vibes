@@ -2073,7 +2073,7 @@ button.layer-chevron:hover {
     --inset-bottom: calc(var(--sheet-h, 0px) + 52px);
   }
 
-  /* The show clock's dock makes way for the sheet. */
+  /* The scenes drawer makes way for the sheet. */
   .app.has-selection .show-dock {
     display: none;
   }
@@ -2618,6 +2618,115 @@ input.tempo-bpm {
   width: 44px;
   border-radius: 9px;
   background: var(--fill-2);
+}
+
+/* The scenes (ScenesDrawer.tsx): a pill each, its number and name, lit while
+   the room looks like it, and its menu; wrapping onto another row past what
+   fits (a scrolling row would cut their menus off). Under the show's row,
+   when there is one, with a line between. */
+.show-dock > .dock-bar + .dock-bar {
+  border-top: 1px solid var(--edge);
+}
+
+.scenes-bar {
+  flex-wrap: nowrap;
+  align-items: flex-start;
+}
+
+.scenes {
+  display: flex;
+  flex: 1;
+  flex-wrap: wrap;
+  gap: 6px;
+  min-width: 0;
+}
+
+.scene-chip {
+  display: flex;
+  align-items: center;
+  height: var(--dock-pill);
+  padding: var(--dock-inset);
+  border-radius: 999px;
+  background: var(--well);
+}
+
+.scene-chip.lit {
+  background: var(--fill-3);
+  box-shadow: inset 0 0 0 1px var(--edge);
+}
+
+.scene-apply,
+.scene-add {
+  display: inline-flex;
+  align-items: center;
+  gap: 7px;
+  height: var(--dock-control);
+  padding: 0 10px;
+  border: 0;
+  border-radius: 999px;
+  background: transparent;
+  color: var(--ink-2);
+  font: inherit;
+  font-size: 12.5px;
+  white-space: nowrap;
+  cursor: pointer;
+}
+
+.scene-chip.lit .scene-apply {
+  color: var(--ink);
+}
+
+.scene-apply small {
+  color: var(--mute);
+  font-size: 10px;
+}
+
+.scene-apply:hover:not(:disabled),
+.scene-add:hover:not(:disabled) {
+  background: rgb(255 255 255 / 0.1);
+}
+
+.scene-apply:disabled,
+.scene-add:disabled {
+  opacity: 0.5;
+  cursor: default;
+}
+
+/* + Scene, as a pill of its own. */
+.scene-add {
+  flex: none;
+  height: var(--dock-pill);
+  padding: 0 14px;
+  background: var(--well);
+}
+
+.scenes-empty {
+  align-self: center;
+  overflow: hidden;
+  padding: 0 8px;
+  color: var(--mute);
+  font-size: 12.5px;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scene-name {
+  width: 100%;
+  padding: 6px 8px;
+  border: 1px solid var(--edge);
+  border-radius: 8px;
+  background: var(--fill);
+  color: inherit;
+  font: inherit;
+  outline: none;
+}
+
+.menu-item.chosen {
+  color: var(--ink);
+}
+
+.menu-item.bad {
+  color: var(--bad);
 }
 
 /* Admin mode's clock readout (ClockSync.tsx), beside the map's delay: how

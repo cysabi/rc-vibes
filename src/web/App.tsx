@@ -20,7 +20,7 @@ import { savedFloor, saveFloor, useLiveMode } from "./settings.ts";
 import { useSimulation } from "./sim.ts";
 import { navigate, usePath, useQueryParam } from "./route.ts";
 import { SplitHandle, StreetView } from "./components/StreetView.tsx";
-import { ShowDock } from "./components/Transport.tsx";
+import { ScenesDrawer } from "./components/ScenesDrawer.tsx";
 import { SketchesLink, SketchPages } from "./sketches/SketchPages.tsx";
 
 const NO_RAILS: Rail[] = [];
@@ -205,7 +205,7 @@ function Shell() {
     observer.observe(bar.current!);
     return () => observer.disconnect();
   }, []);
-  // The show clock's dock along the bottom, likewise (--dock-h): the map's own along the bottom go above it.
+  // The scenes drawer along the bottom, likewise (--dock-h): the map's own along the bottom go above it.
   const dockHeight = useCallback((px: number) => {
     app.current?.style.setProperty("--dock-h", px > 0 ? `calc(${px}px + var(--gap))` : "0px");
   }, []);
@@ -217,8 +217,8 @@ function Shell() {
   // map's own. While anything's selected, a panel about it comes in along the
   // left edge (or up from the bottom, on a phone), and the tags move over;
   // what it looks like floats in the map's bottom left (not on a phone).
-  // Along the bottom, while a show's on, the show clock's dock (Transport.tsx;
-  // a show starts from the account menu).
+  // Along the bottom, the scenes drawer (ScenesDrawer.tsx), with the show's
+  // clock above them while a show's on (a show starts from the account menu).
   const hasSelection = selectedHere.size > 0;
   const narrow = useNarrow();
   // With streetview open, the room from its camera takes one side and the map
@@ -262,7 +262,7 @@ function Shell() {
           }}
         />
       )}
-      <ShowDock onHeight={dockHeight} />
+      <ScenesDrawer onHeight={dockHeight} />
       <div className="hud" ref={hud}>
         <Banners />
         <div className="hud-bar" ref={bar}>
