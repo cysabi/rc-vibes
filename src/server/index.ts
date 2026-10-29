@@ -24,11 +24,7 @@ import { createLayout } from "./layout.ts";
 import { createLiveState } from "./live.ts";
 import { createParamLinks } from "./params.ts";
 import { createPools } from "./pools.ts";
-import { createRclampTime } from "./rclamp-time.ts";
-import { createTimeline } from "./timeline.ts";
 import { createSceneFeed } from "./scene-feed.ts";
-import { createScenes } from "./scenes.ts";
-import { createShow } from "./show.ts";
 import { boxApiRoutes, sketchRoutes } from "./sketches.ts";
 import { createStreamRelay } from "./stream.ts";
 
@@ -75,30 +71,14 @@ const layoutTimer = setInterval(() => void showLayout(), LAYOUT_REFRESH_MS);
 layoutTimer.unref();
 const layout = createLayout({ db, arclampLights: lights.arclampLights, currentLights: lights.currentLights, changed: showLayout });
 
-// arclamp's time, kept up with (rclamp-time.ts), and the show clock in it
-// (show.ts): told to every page (the tree) and every sketch (its stream).
-const rtime = createRclampTime({ arclamp });
-rtime.start();
-const show = createShow({ db, publish: live.publish, rNow: rtime.rNow, onClock: (clock) => params?.tellClock(clock) });
-live.replace([["show", show.tree()]]);
-// The room's scenes (scenes.ts): told to every page (the tree).
-const scenes = createScenes({ db, publish: live.publish, room: () => live.tree() });
-live.replace([["scenes", scenes.tree()]]);
-
 // The scene, followed as it changes, its footprints from the light stream;
 // arclamp's health, likewise; and sketches put in the room (instances),
 // Base Color always among them, at the bottom (base-color.ts).
 let instances: Instances | null = null;
 let baseColor: BaseColor | null = null;
-// Pools' streams: each shader linked once (an eval), then a stream from it,
-// taking every value; each change to a shader running in the room goes in
-// its frame (timeline.ts). Only where shaders can reach vibes
-// (VIBES_SHADER_URL; env.ts).
-const timeline = createTimeline({ arclamp, rNow: rtime.rNow });
-const params =
-  builds && config.shaderUrl
-    ? createParamLinks({ pools, arclamp, secret: config.sessionSecret, url: `${config.shaderUrl}/shader-api/params`, showClock: show.clock, timeline })
-    : null;
+// Pools' streams: each shader linked once (an eval), then a stream from it, taking each change.
+// Only where shaders can reach vibes (VIBES_SHADER_URL; env.ts).
+const params = builds && config.shaderUrl ? createParamLinks({ pools, arclamp, secret: config.sessionSecret, url: `${config.shaderUrl}/shader-api/params` }) : null;
 const feed = createSceneFeed({
   config,
   db,
@@ -108,7 +88,6 @@ const feed = createSceneFeed({
   instances: () => instances,
   onShaders: (shaders) => params?.scene(shaders),
   onScene: (shaders) => baseColor?.scene(shaders),
-  rNow: rtime.rNow,
 });
 feed.subscribe((scene) => live.scene(scene));
 relay.subscribe((frame) => feed.touched(frame));
@@ -150,7 +129,7 @@ if (sketches) app.route("/", boxApiRoutes(config, sketches, db, lights, pools, p
 if (builds) app.route("/", buildApiRoutes(config, builds));
 if (params) app.route("/", params.routes());
 const sketchApi = sketches && boxes && builds ? sketchRoutes(sketches, db, boxes, builds) : null;
-app.route("/api", apiRoutes({ config, arclamp: noted, db, relay, origins, lights, feed, live, pools, layout, sketches: sketchApi, instances, health, rtime, show, scenes }));
+app.route("/api", apiRoutes({ config, arclamp: noted, db, relay, origins, lights, feed, live, pools, layout, sketches: sketchApi, instances, health }));
 if (config.production) {
   // The built files' dates are Nix's (1970), which browsers take to mean the
   // page is fresh for years: a cached page then loads without the network
@@ -198,7 +177,6 @@ server.on("upgrade", (req: http.IncomingMessage, socket: Duplex, head: Buffer) =
 // indefinitely, so close them rather than waiting for them to finish.
 function shutdown() {
   relay.stop();
-  rtime.stop();
   feed.stop();
   params?.stop();
   pools.stop();

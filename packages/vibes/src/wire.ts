@@ -19,11 +19,8 @@
 //
 //   event: state    data: { "v": 1, "values": { name: Groups } }   first, on every connect
 //   event: change   data: { "name": …, "set": Changes }            each edit, in order
-//   event: clock    data: { "v": 1, "clock": ShowClock }           the show clock: on connect, once set, and as it changes
 //   event: end      data: { "reason": "replaced" | "revoked" | "gone" }
 //   : keep-alive                                                    every 15 s
-//
-// A library that doesn't know an event (clock, before 0.5.0) passes it over.
 
 export const PROTOCOL = 1;
 
@@ -100,56 +97,6 @@ export interface ChangeEvent {
 }
 export interface EndEvent {
   reason: "replaced" | "revoked" | "gone";
-}
-
-/**
- * The show clock, one for the room (vibes' show/clock), in arclamp's time:
- * the time a frame has (ms since 1970, by arclamp's clock), the same for every
- * sketch of it. From `at`, the piece is `t` seconds in, running on if
- * `playing`; and, once there's a tempo, `beat` beats have gone by at `at`, a
- * `bpm` a minute from then, playing or not. `nudge` moves it all later (ms;
- * earlier, below 0), for a room that hears the sound late.
- */
-export interface ShowClock {
-  playing: boolean;
-  at: number;
-  t: number;
-  bpm: number | null;
-  beat: number | null;
-  nudge: number;
-}
-export interface ClockEvent {
-  v: 1;
-  clock: ShowClock;
-}
-
-/** Beats to a bar: a downbeat is a whole multiple of it. */
-export const BEATS_PER_BAR = 4;
-
-/** The tempo the room rests at, with no show on: so a sketch that moves on the beat moves well anyway. */
-export const RESTING_BPM = 120;
-
-/**
- * The clock with no show on, anchored at `at` (the show's own time: arclamp's,
- * less the nudge): playing, the piece starting then, and beating at
- * RESTING_BPM on one grid for every sketch, counted from 1970, so any two
- * sketches resting are on the same beat, whenever either started.
- */
-export const restingClock = (at: number, nudge = 0): ShowClock => ({ playing: true, at, t: 0, bpm: RESTING_BPM, beat: (at * RESTING_BPM) / 60_000, nudge });
-
-/** Where the piece is (seconds) at `ms`, in arclamp's time. */
-export const timeAt = (c: ShowClock, ms: number): number => c.t + (c.playing ? (ms - c.nudge - c.at) / 1000 : 0);
-
-/** Beats gone by at `ms`, in arclamp's time: 0 with no tempo. */
-export const beatAt = (c: ShowClock, ms: number): number => (c.bpm === null || c.beat === null ? 0 : c.beat + ((ms - c.nudge - c.at) * c.bpm) / 60_000);
-
-/** A show clock, if this is one as the wire has it. */
-export function showClock(v: unknown): ShowClock | null {
-  if (!v || typeof v !== "object") return null;
-  const { playing, at, t, bpm, beat, nudge = 0 } = v as Record<string, unknown>;
-  if (typeof playing !== "boolean" || !finite(at) || !finite(t) || !finite(nudge)) return null;
-  const tempo = finite(bpm) && bpm > 0 && finite(beat);
-  return { playing, at, t, bpm: tempo ? bpm : null, beat: tempo ? beat : null, nudge };
 }
 
 /** What a filter looks at, of a light. */

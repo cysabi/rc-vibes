@@ -7,19 +7,14 @@
 // stack of shaders, top first, the room tone, and the pools) and the lights'
 // layout (useLayout). The tree leaves scripts out (scriptHash says which
 // each shader's is); the preview needs them to run pending edits, so they're
-// fetched once each, by hash, and put back. And the show (useShowOn,
-// useShowClock, sendTransport), with arclamp's time to read its clock by,
-// asked of vibes on the same socket (rtime.ts).
+// fetched once each, by hash, and put back.
 
 import { useCallback, useState, useSyncExternalStore } from "react";
 import type { RoomTemplate } from "../shared/arclamp.ts";
 import { fanOps, pathOf, unfanOps, withOps, type LiveTree, type Op, type Pool, type RoomMessage, type RoomRequest } from "../shared/live.ts";
 import type { Presence } from "../shared/presence.ts";
-import { NO_SCENES, type Scenes } from "../shared/scenes.ts";
-import { RESTING, type CueMode, type ShowClock, type ShowState, type TransportAction } from "../shared/show.ts";
 import type { Lights, Placement, RailChange, Shader, ShaderKey, TagChange, TypeChange } from "../shared/vibes.ts";
 import { apiSocket, request } from "./api.ts";
-import { heard as heardTime, pageNow } from "./rtime.ts";
 
 /** A shader as vibes has it, with its script once that's here. */
 export interface SceneShader extends Shader {
@@ -38,16 +33,9 @@ interface State {
   scene: Scene | undefined;
   layout: Lights | undefined;
   error: Error | null;
-  /** Whether a show's on, its clock, how its scenes come in, and the one waiting for its frame (shared/show.ts). */
-  showOn: boolean;
-  clock: ShowClock;
-  cue: CueMode;
-  queued: ShowState["queued"];
-  /** The room's scenes (shared/scenes.ts). */
-  scenes: Scenes;
 }
 
-let state: State = { scene: undefined, layout: undefined, error: null, showOn: RESTING.on, clock: RESTING.clock, cue: RESTING.cue, queued: null, scenes: NO_SCENES };
+let state: State = { scene: undefined, layout: undefined, error: null };
 let tree: LiveTree | null = null;
 // The last change the copy here has, of which run of vibes.
 let rev: number | null = null;
@@ -90,8 +78,7 @@ function publish() {
         }
       : undefined;
   }
-  const show = tree.show ?? RESTING;
-  state = { scene, layout, error: null, showOn: show.on, clock: show.clock ?? RESTING.clock, cue: show.cue ?? RESTING.cue, queued: show.queued ?? null, scenes: tree.scenes ?? NO_SCENES };
+  state = { scene, layout, error: null };
   for (const l of listeners) l();
 }
 
@@ -169,35 +156,6 @@ function open() {
   );
 }
 
-// arclamp's time (rtime.ts), asked of vibes on this socket: a few at once as
-// it opens (and as the page comes back into view), then one every few
-// seconds, each answer timed by this page's clock.
-const ASK_EVERY_MS = 5_000;
-const BURST = 8;
-const BURST_GAP_MS = 100;
-const askedAt = new Map<number, number>();
-let asks = 0;
-let asking: number | undefined;
-
-function askOnce(ws: WebSocket) {
-  if (socket !== ws || ws.readyState !== WebSocket.OPEN) return;
-  const id = ++asks;
-  askedAt.set(id, pageNow());
-  ws.send(JSON.stringify({ type: "time", id } satisfies RoomRequest));
-}
-
-function askTime(ws: WebSocket) {
-  for (let i = 0; i < BURST; i++) window.setTimeout(() => askOnce(ws), i * BURST_GAP_MS);
-  window.clearInterval(asking);
-  asking = window.setInterval(() => askOnce(ws), ASK_EVERY_MS);
-}
-
-if (typeof document !== "undefined") {
-  document.addEventListener("visibilitychange", () => {
-    if (document.visibilityState === "visible" && socket) askTime(socket);
-  });
-}
-
 function connect(url: string, hello: string | null, greet: (ws: WebSocket) => void) {
   const ws = new WebSocket(url);
   socket = ws;
@@ -214,17 +172,11 @@ function connect(url: string, hello: string | null, greet: (ws: WebSocket) => vo
     // Where this page is, said again on every socket: vibes forgot it with the last.
     if (presenceOut) ws.send(presenceOut);
     greet(ws);
-    askTime(ws);
   };
   ws.onmessage = (e: MessageEvent<string>) => {
-    const answered = pageNow();
     heard = Date.now();
     const m = JSON.parse(e.data) as RoomMessage;
-    if (m.type === "time") {
-      const asked = askedAt.get(m.id);
-      askedAt.delete(m.id);
-      if (asked !== undefined) heardTime(asked, answered, m.r, m.e);
-    } else if (m.type === "state") {
+    if (m.type === "state") {
       tree = m.tree;
       rev = m.rev;
       epoch = m.epoch;
@@ -255,8 +207,6 @@ function connect(url: string, hello: string | null, greet: (ws: WebSocket) => vo
     if (socket !== ws) return;
     socket = null;
     window.clearInterval(watchdog);
-    window.clearInterval(asking);
-    askedAt.clear();
     // Updates with no answer now: made, or not, or some of them. Sending
     // them again is safe (a sketch is added once, however often it's sent).
     for (const [id, asked] of waiting) {
@@ -340,43 +290,6 @@ export function useLights(): { data: Lights | undefined; error: Error | null } {
   const s = useState_();
   return { data: s.layout, error: s.scene ? null : s.error };
 }
-
-/** Whether a show's on (shared/show.ts), as vibes last said. */
-export function useShowOn(): boolean {
-  return useSyncExternalStore(subscribe, () => state.showOn);
-}
-
-/** The show clock (shared/show.ts), as vibes last said it: resting, with no show on. */
-export function useShowClock(): ShowClock {
-  return useSyncExternalStore(subscribe, () => state.clock);
-}
-
-/** The show clock as vibes last said it, outside React (the map's simulation). */
-export const showClockNow = () => state.clock;
-
-/** Something done to the show (starting or ending one, too), at once whatever the mode (it's the room's: never a pending edit). */
-export const sendTransport = (action: TransportAction) => sendUpdate([[pathOf("show", "transport"), action]]);
-
-/** The room's scenes (shared/scenes.ts), as vibes last said them. */
-export function useScenes(): Scenes {
-  return useSyncExternalStore(subscribe, () => state.scenes);
-}
-
-/** Changes to the scenes (scenes/…: shared/live.ts), at once whatever the mode: they're the room's, never a pending edit. */
-export const sendScenes = (ops: Op[]) => sendUpdate(ops);
-
-/** How a show's scenes come in (shared/show.ts). */
-export function useShowCue(): CueMode {
-  return useSyncExternalStore(subscribe, () => state.cue);
-}
-
-/** The scene applied in a show that's waiting for its frame, if any. */
-export function useShowQueued(): ShowState["queued"] {
-  return useSyncExternalStore(subscribe, () => state.queued);
-}
-
-/** A scene applied on the show's clock, pressed at `at` (arclamp's time: rtime.ts), whatever the mode: the show's. */
-export const sendApply = (scene: string, at: number) => sendUpdate([[pathOf("show", "apply"), { scene, at }]]);
 
 /** A change to the map: rails drawn or moved, lights moved, turned to another orientation, and/or tagged. */
 export interface LayoutChange {

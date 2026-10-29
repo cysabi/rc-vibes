@@ -101,7 +101,6 @@ beforeEach(() => {
       calls.push(`muted ${id} ${muted}`);
       scene.set(id, { ...scene.get(id)!, muted });
     },
-    setMutedAt: async () => null,
     moveShader: async (id: number, position: number) => {
       calls.push(`move ${id} ${position}`);
       place(id, position);

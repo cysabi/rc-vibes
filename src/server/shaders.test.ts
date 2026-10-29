@@ -58,10 +58,6 @@ beforeEach(() => {
       calls.push(`muted ${id} ${muted}`);
       shaders.set(id, { ...shaders.get(id)!, muted });
     },
-    setMutedAt: async (id: number, muted: boolean, s: { at: number }) => {
-      calls.push(`muted ${id} ${muted} at ${s.at}`);
-      return s.at;
-    },
     setMask: async (id: number, mask: number[]) => {
       calls.push(`mask ${id} ${mask.join(",")}`);
       shaders.set(id, { ...shaders.get(id)!, mask });

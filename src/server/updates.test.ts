@@ -2,7 +2,6 @@ import { beforeEach, describe, expect, it } from "vitest";
 import type { Channels, LightInfo } from "../shared/arclamp.ts";
 import type { Op, RoomMessage } from "../shared/live.ts";
 import type { ParamSpec } from "../shared/params.ts";
-import { RESTING } from "../shared/show.ts";
 import type { Me } from "../shared/vibes.ts";
 import { openDb } from "./db.ts";
 import type { Instances } from "./instances.ts";
@@ -107,10 +106,6 @@ describe("checking an update", () => {
       [[`pools/${P}/values/tint/1/hue`, 3]],
       [[`pools/${P}/values/tint/1/lm`, "bright"]],
       [[`pools/${P}/values/tint/1/lm/x`, 3]],
-      [["show/transport", { do: "dance", at: 1 }]],
-      [["show/transport", { do: "play" }]],
-      [["show/transport"]],
-      [["show/clock", { playing: true, at: 1, t: 0 }]],
       [["layout/lights/5/spot", { coords: { mm_x: 1 } }]],
       [["layout/lights/5/colour", "red"]],
       [["layout/lights/5/tags", ["Not A Tag"]]],
@@ -164,54 +159,6 @@ describe("updates made together", () => {
     expect(mergeBatches(parseOps([]), parseOps([])).sync).toBe(true);
     // The earlier's aren't changed.
     expect(a.roomtone).toEqual({ "1": { a: 0.1, b: 0.2 } });
-  });
-
-  it("keep every action on the show clock, in order: two taps aren't one", () => {
-    const a = parseOps([
-      ["show/transport", { do: "play", at: 1 }],
-      ["show/transport", { do: "tempo", at: 2, bpm: 120, onBeat: true }],
-    ]);
-    expect(a.transport).toEqual([
-      { do: "play", at: 1 },
-      { do: "tempo", at: 2, bpm: 120, onBeat: true },
-    ]);
-    const m = mergeBatches(a, parseOps([["show/transport", { do: "tempo", at: 3, bpm: 121, onBeat: true }]]));
-    expect(m.transport.map((t) => ("bpm" in t ? t.bpm : t.do))).toEqual(["play", 120, 121]);
-  });
-
-  it("make each change to the scenes, in order: each counts", () => {
-    const S = "00000000-0000-4000-8000-000000000001";
-    const a = parseOps([
-      [`scenes/list/${S}`, { name: " Intro " }],
-      [`scenes/list/${S}/name`, "Opening"],
-      [`scenes/list/${S}/shaders/i-1`, { speed: { "1": 5 } }],
-      [`scenes/list/${S}/shaders/i-1/speed/2`, 7],
-      [`scenes/list/${S}/shaders/i-1/speed/1`],
-      ["scenes/order", [S]],
-      [`scenes/list/${S}/shaders/i-1`, null],
-      [`scenes/list/${S}`],
-    ]);
-    expect(a.scenes).toEqual([
-      { op: "create", id: S, name: "Intro" },
-      { op: "name", id: S, name: "Opening" },
-      { op: "sketch", id: S, key: "i-1", knobs: { speed: { "1": 5 } } },
-      { op: "knob", id: S, key: "i-1", param: "speed", light: "2", value: 7 },
-      { op: "knob", id: S, key: "i-1", param: "speed", light: "1", value: null },
-      { op: "order", ids: [S] },
-      { op: "sketch", id: S, key: "i-1", knobs: null },
-      { op: "remove", id: S },
-    ]);
-    expect(mergeBatches(a, parseOps([[`scenes/list/${S}`]])).scenes).toHaveLength(9);
-    for (const op of [
-      ["scenes/list/not-a-uuid", { name: "x" }],
-      [`scenes/list/${S}`, { name: "" }],
-      [`scenes/list/${S}/shaders/i-1/speed/0`, 1],
-      [`scenes/list/${S}/shaders/i-1/speed/1`, "fast"],
-      ["scenes/order", "x"],
-      ["scenes/elsewhere", 1],
-    ] as Op[]) {
-      expect(() => parseOps([op]), JSON.stringify(op)).toThrow(/scenes/);
-    }
   });
 
   it("have a color's numbers over the color before them, path by path, within an update and across them", () => {
@@ -299,13 +246,6 @@ describe("making updates", () => {
         return showing();
       },
       logParam: (pool, name, lights, user) => logged.push([pool, name, lights, user.name]),
-      show: {
-        act: (a) => {
-          if (a.do === "tempo" && a.bpm < 20) throw new Refused(400, "bad_tempo", "too slow");
-          calls.push(`show ${a.do}`);
-          return RESTING.clock;
-        },
-      },
     });
   }
 
@@ -552,20 +492,6 @@ describe("making updates", () => {
     p.send([["shaders/+k", add]]);
     await until(() => p.heard.length === 1);
     expect(p.heard[0]).toMatchObject({ type: "refused", code: "no_sketches" });
-  });
-
-  it("makes each action on the show clock in turn, answered at once, and refuses one the clock won't take", async () => {
-    const p = page();
-    p.send([
-      ["show/transport", { do: "play", at: 1 }],
-      ["show/transport", { do: "downbeat", at: 2 }],
-    ]);
-    await until(() => p.heard.length === 1);
-    expect(p.heard[0]).toMatchObject({ type: "done" });
-    expect(calls).toEqual(["show play", "show downbeat"]);
-    p.send([["show/transport", { do: "tempo", at: 3, bpm: 5 }]]);
-    await until(() => p.heard.length === 2);
-    expect(p.heard[1]).toMatchObject({ type: "refused", code: "bad_tempo" });
   });
 
   it("answers params at once: they're vibes' own, with nothing to wait for in the room", async () => {

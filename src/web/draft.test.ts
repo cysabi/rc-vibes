@@ -94,24 +94,6 @@ beforeEach(() => {
   during = null;
 });
 
-describe("a scene applied as pending edits", () => {
-  it("switches every shader as the scene says, its knobs to the scene's, in place of what was pending for them, and leaves Base Color and the rest", () => {
-    const pools: Record<string, Pool> = { pa: { declared: [speed], values: { speed: { "1": 3 } } } as unknown as Pool };
-    const base = shader(1, { pool: "b45e0c01-0000-4000-8000-000000000003" });
-    const here = withPools(room(shader(13, { pool: "pa", muted: true }), shader(12), shader(11), base), pools);
-    drafts.patchShader("rclamp-13", { muted: true, params: { speed: { "2": 9 } } });
-    drafts.patchShader("rclamp-11", { muted: false, params: { speed: { "1": 1 } }, mask: [5] });
-    drafts.applyScene({ name: "S", shaders: { "rclamp-13": { speed: { "1": 5 } } }, by: { id: "u", name: "U" }, at: 0 }, here);
-    expect(currentDraft().edits).toEqual({
-      // On, with the scene's knobs (light 1 to 5): what was pending for its knobs gives way.
-      "rclamp-13": { muted: false, params: { speed: { "1": 5 } } },
-      "rclamp-12": { muted: true },
-      // Off; its pending knobs and mask stay.
-      "rclamp-11": { muted: true, params: { speed: { "1": 1 } }, mask: [5] },
-    });
-  });
-});
-
 describe("the stack with pending edits", () => {
   it("shows the live stack, top first, with nothing pending", () => {
     expect(keys()).toEqual(["rclamp-12", "rclamp-11"]);

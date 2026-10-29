@@ -61,7 +61,6 @@ import {
   type Sample,
   type View,
 } from "../viewport.ts";
-import { ClockSync } from "./ClockSync.tsx";
 import { Drawer } from "./Drawer.tsx";
 import { Latency } from "./Latency.tsx";
 import { Segmented } from "./Segmented.tsx";
@@ -1292,11 +1291,10 @@ export function RoomMap({
         {view && (
           <div className="map-corner">
             <ScaleBar scale={view.scale} />
-            {/* Beside the zoom, pushing the scale left: what the selection looks like (while its button's on), and in admin mode the room's clock and the map's delay under it. */}
+            {/* Beside the zoom, pushing the scale left: what the selection looks like (while its button's on), and in admin mode the map's delay under it. */}
             {((look && showLook) || admin) && (
               <div className="corner-cards">
                 {look && showLook && <div className="look-card">{look}</div>}
-                {admin && <ClockSync />}
                 {admin && <Latency />}
               </div>
             )}

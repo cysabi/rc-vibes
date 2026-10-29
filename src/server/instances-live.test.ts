@@ -106,7 +106,6 @@ beforeEach(() => {
       calls.push(`muted ${id} ${muted}`);
       shaders.set(id, { ...shaders.get(id)!, muted });
     },
-    setMutedAt: async () => null,
     moveShader: async () => {},
   };
   asked = [];

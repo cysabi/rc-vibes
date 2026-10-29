@@ -8,13 +8,11 @@ interface Props {
   className?: string;
   /** Which edge of the button the panel lines up with. */
   align?: "start" | "end";
-  /** Which side of the button the panel opens on: beneath it, or above it (a button along the bottom). */
-  side?: "below" | "above";
   children: ReactNode;
 }
 
-/** A button that opens a small panel beneath it (or above it); closes on outside click or Escape. */
-export function Menu({ label, name, className, align = "start", side = "below", children }: Props) {
+/** A button that opens a small panel beneath it; closes on outside click or Escape. */
+export function Menu({ label, name, className, align = "start", children }: Props) {
   const [open, setOpen] = useState(false);
   const ref = useRef<HTMLSpanElement>(null);
   useEffect(() => {
@@ -32,7 +30,7 @@ export function Menu({ label, name, className, align = "start", side = "below", 
     };
   }, [open]);
   return (
-    <span className={`menu ${align} ${side}`} ref={ref}>
+    <span className={`menu ${align}`} ref={ref}>
       <button className={className} aria-expanded={open} aria-label={name} onClick={() => setOpen(!open)}>
         {label}
       </button>

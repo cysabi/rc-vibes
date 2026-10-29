@@ -26,7 +26,6 @@ import { savedFloor, saveFloor, useLiveMode } from "./settings.ts";
 import { useSimulation } from "./sim.ts";
 import { navigate, usePath, useQueryParam } from "./route.ts";
 import { SplitHandle, StreetView } from "./components/StreetView.tsx";
-import { ScenesDrawer } from "./components/ScenesDrawer.tsx";
 import { SketchPages } from "./sketches/SketchPages.tsx";
 
 const NO_RAILS: Rail[] = [];
@@ -289,10 +288,6 @@ function Shell() {
     observer.observe(hud.current!);
     return () => observer.disconnect();
   }, []);
-  // The scenes drawer along the bottom, likewise (--dock-h): the map's own along the bottom go above it.
-  const dockHeight = useCallback((px: number) => {
-    app.current?.style.setProperty("--dock-h", px > 0 ? `calc(${px}px + var(--gap))` : "0px");
-  }, []);
 
   // Banners about degraded states run across the top of the whole screen,
   // over nothing: everything else is under them. On a wide screen, two
@@ -303,9 +298,7 @@ function Shell() {
   // note saying so, and the account on the right. Floors, zoom and the rest
   // are the map's own. On a phone only the selection shows, as a sheet up
   // from the bottom while anything's selected; what it looks like is a card
-  // over the map (not on a phone). Along the map's bottom, the scenes drawer
-  // (ScenesDrawer.tsx), with the show's clock above them while a show's on (a
-  // show starts from the account menu).
+  // over the map (not on a phone).
   const hasSelection = selectedHere.size > 0;
   const narrow = useNarrow();
   // With streetview open, the room from its camera takes one side and the map
@@ -342,8 +335,6 @@ function Shell() {
                 />
               )}
             </main>
-            {/* The scenes drawer (ScenesDrawer.tsx), along the map's bottom between the sidebars. */}
-            <ScenesDrawer onHeight={dockHeight} />
             <div className="hud" ref={hud}>
               <div className="hud-bar">
                 {lights.data && onFloor.length === 0 && (

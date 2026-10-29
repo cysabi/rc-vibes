@@ -259,35 +259,6 @@ export const update = sketch(osc(4, 0.1).rotate(turn).kaleid(6).color(look).boos
 
 `every(n)` also gives `count`, `ramp` (0 to 1 between marks) and `since`.
 
-## The show
-
-`show` is the room's one show clock, played, stopped, tapped and synced from
-vibes' transport. Every sketch reads it at its frame's own time, so all of
-them agree, to the frame, where the piece is and which beat it's on.
-
-| | |
-|---|---|
-| `show.time` | where the piece is, in seconds |
-| `show.playing` | whether it's running |
-| `show.beat` | beats gone by, counting up smoothly (playing or not); 0 with no tempo |
-| `show.bar` | bars gone by (4 beats each): a whole number is a downbeat |
-| `show.bpm` | the tempo; 0 with none |
-| `show.clock` | the tempo as a clock, for `every`, `env` and `seq` on the room's beats |
-
-```ts
-const hit = show.clock.every(1).env({ release: 0.4 });          // a flash on every beat of the room's
-const look = show.clock.every(4).seq([palettes.dusk, palettes.sea]); // a new look each bar
-
-export const update = sketch(osc(3, 0.1).color(look).boost(hit, 0.8));
-```
-
-With no show on, the clock rests: playing, at `RESTING_BPM` (120) on a beat
-every sketch shares, so a sketch that moves on the beat looks right anyway.
-Starting a show in vibes keeps that beat going and puts the piece at 0:00,
-stopped; ending one rests the clock again. Till vibes says otherwise (or run
-anywhere without it), it rests too, with `show.time` counting from the
-sketch's start.
-
 ## Params
 
 A param is something vibes can change while the sketch runs, light by light:

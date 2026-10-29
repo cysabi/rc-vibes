@@ -29,17 +29,6 @@
 //   layout/lights/<light>/type        another orientation (an arclamp type)
 //   layout/lights/<light>/tags        its whole set of tags
 //   layout/rails/<rail>               RailShape, or null: taken away
-//   show/transport                    TransportAction: something done to the show (shared/show.ts)
-//   show/apply                        { scene, at }: a scene applied on the show's clock (server/show-apply.ts)
-//   scenes/list/<id>                  { name }: a scene made (or renamed); null: taken away (shared/scenes.ts)
-//   scenes/list/<id>/name             its name
-//   scenes/list/<id>/shaders/<key>    its sketch, with its knobs (SceneKnobs); null: none
-//   scenes/list/<id>/shaders/<key>/<param>/<light>  one of its knobs; taken away, back to the default
-//   scenes/order                      every scene's id, in order
-//
-// (show/on, show/clock, show/cue and show/queued are vibes' own: what each
-// action makes. Scenes are made at once, whatever the mode: they're the
-// room's, never a pending edit.)
 //
 // Nothing is an array but a value: paths only go through objects.
 //
@@ -54,8 +43,6 @@
 import type { Channels, LightInfo, Rail } from "./arclamp.ts";
 import type { ParamSpec, ParamValue } from "./params.ts";
 import type { Presence } from "./presence.ts";
-import { NO_SCENES, type Scenes } from "./scenes.ts";
-import { RESTING, type ShowState } from "./show.ts";
 import type { Shader, ShaderKey } from "./vibes.ts";
 
 /** Where a value is in the tree: its keys, joined with "/". */
@@ -105,13 +92,9 @@ export interface LiveTree {
   pools: Record<string, Pool>;
   /** Null until vibes has had the lights from arclamp. */
   layout: Layout | null;
-  /** Whether a show's on, and its clock (shared/show.ts). */
-  show: ShowState;
-  /** The room's scenes (shared/scenes.ts). */
-  scenes: Scenes;
 }
 
-export const EMPTY_TREE: LiveTree = { roomtone: {}, shaders: {}, stack: [], pools: {}, layout: null, show: RESTING, scenes: NO_SCENES };
+export const EMPTY_TREE: LiveTree = { roomtone: {}, shaders: {}, stack: [], pools: {}, layout: null };
 
 /** A sketch put in the room, as an update says it (at shaders/<+key>, its pending edit's key). */
 export interface AddSpec {
@@ -348,8 +331,6 @@ export type RoomRequest =
   | { type: "hello"; rev: number | null; epoch?: string; fans?: boolean }
   /** Changes, all or none (fans among them); `note` says what for, for the history (a room tone choice's name). */
   | { type: "update"; id: string; ops: WireOp[]; note?: string }
-  /** What time arclamp's clock says it is (web/rtime.ts): answered at once. */
-  | { type: "time"; id: number }
   /** Where this page is, for everyone else's (shared/presence.ts): the floor it's looking at, and the lights it has selected. */
   | { type: "presence"; floor: number | null; selected: number[] };
 
@@ -364,6 +345,4 @@ export type RoomMessage =
   | { type: "refused"; id: string; error: string; code: string; made: Record<string, ShaderKey> }
   /** Every page open on the room, this one too, as of now (shared/presence.ts). */
   | { type: "presence"; people: Presence[] }
-  | { type: "ping" }
-  /** arclamp's time as vibes reckons it (`r`, ms), as it answered; and how far off vibes might be from arclamp's own (`e`, ms; null till arclamp's answered vibes). */
-  | { type: "time"; id: number; r: number; e: number | null };
+  | { type: "ping" };

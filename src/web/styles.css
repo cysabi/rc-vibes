@@ -320,8 +320,7 @@ kbd {
   /* The map's overlays, and what it fits, keep clear of the HUD and the panels over its edges. */
   --inset-top: calc(var(--hud-h, 56px) + 8px);
   --inset-right: calc(var(--panel-w) + var(--gap));
-  /* Above the show clock's dock (--dock-h: App.tsx). */
-  --inset-bottom: calc(52px + var(--dock-h, 0px));
+  --inset-bottom: 52px;
   --inset-left: calc(var(--shaders-w) + var(--gap));
   position: relative;
   display: flex;
@@ -2431,11 +2430,6 @@ button.layer-chevron:hover {
     --inset-left: var(--gap);
   }
 
-  /* The scenes drawer makes way for the sheet. */
-  .app.has-selection .show-dock {
-    display: none;
-  }
-
   .sidebar.left {
     display: none;
   }
@@ -2801,24 +2795,10 @@ button.layer-chevron:hover {
   right: 0;
 }
 
-/* A button along the bottom: its panel opens above it. */
-.menu.above .menu-panel {
-  top: auto;
-  bottom: calc(100% + 8px);
-  animation-name: pop-up;
-}
-
 @keyframes pop-in {
   from {
     opacity: 0;
     transform: translateY(-4px) scale(0.98);
-  }
-}
-
-@keyframes pop-up {
-  from {
-    opacity: 0;
-    transform: translateY(4px) scale(0.98);
   }
 }
 
@@ -2865,326 +2845,8 @@ button.layer-chevron:hover {
   color: var(--ink-2);
 }
 
-.menu-panel .error-text {
-  margin: 0;
-  padding: 2px 10px 6px;
-}
-
 .menu-item:hover {
   background: var(--fill-2);
-  color: var(--ink);
-}
-
-/* The show clock's dock, along the bottom of the map (Transport.tsx): one
-   bar, the transport, the tempo and its menu each a pill in it, each pill's
-   controls round in it. Every curve is the one inside it plus the space
-   between them, so they all run alongside: a control is round
-   (--dock-control tall), its pill round, --dock-inset bigger all round, and
-   the dock's corners --dock-pad more again. */
-.show-dock {
-  --dock-control: 28px;
-  --dock-inset: 3px;
-  --dock-pill: calc(var(--dock-control) + 2 * var(--dock-inset));
-  --dock-pad: 6px;
-  position: absolute;
-  right: var(--inset-right);
-  bottom: var(--gap);
-  left: var(--inset-left);
-  z-index: 9;
-  display: flex;
-  flex-direction: column;
-  border-radius: calc(var(--dock-pill) / 2 + var(--dock-pad));
-  background: var(--glass-strong);
-  -webkit-backdrop-filter: var(--blur);
-  backdrop-filter: var(--blur);
-  box-shadow:
-    inset 0 0 0 1px var(--edge),
-    var(--float);
-}
-
-.dock-bar {
-  display: flex;
-  flex-wrap: wrap;
-  align-items: center;
-  gap: 8px;
-  min-width: 0;
-  padding: var(--dock-pad);
-}
-
-.dock-spacer {
-  flex: 1;
-}
-
-/* A pill in the dock: the transport (play or stop, the time, back to the
-   start), the tempo (its light, the BPM, Tap, Sync), and the menu. */
-.transport,
-.tempo,
-.dock-more {
-  display: flex;
-  align-items: center;
-  gap: 2px;
-  height: var(--dock-pill);
-  padding: var(--dock-inset);
-  border-radius: 999px;
-  background: var(--well);
-}
-
-.transport-button,
-.transport-time,
-.tempo-bpm,
-.tempo-tap,
-.tempo-sync {
-  display: inline-grid;
-  place-items: center;
-  min-width: var(--dock-control);
-  height: var(--dock-control);
-  padding: 0 8px;
-  border: 0;
-  border-radius: 999px;
-  background: transparent;
-  color: inherit;
-  font: inherit;
-  font-size: 12.5px;
-  line-height: 1;
-  cursor: pointer;
-}
-
-.transport-button {
-  padding: 0;
-}
-
-/* ⟲ is drawn small in the face: as big as ▶ looks. */
-.transport-button.restart {
-  font-size: 17px;
-}
-
-.transport-button:hover,
-.transport-time:hover,
-.transport-button[aria-expanded="true"] {
-  background: rgb(255 255 255 / 0.1);
-}
-
-.transport-time {
-  width: 64px;
-  font-variant-numeric: tabular-nums;
-  text-align: center;
-}
-
-input.transport-time {
-  background: rgb(255 255 255 / 0.1);
-  outline: none;
-}
-
-/* The light on the beat (warm on the downbeat), in a control's room. */
-.tempo-light-slot {
-  display: grid;
-  place-items: center;
-  width: var(--dock-control);
-  height: var(--dock-control);
-}
-
-.tempo-light {
-  width: 9px;
-  height: 9px;
-  border-radius: 50%;
-  background: var(--ink);
-  opacity: 0.15;
-}
-
-.tempo-light.bar {
-  background: var(--warn);
-}
-
-/* The same width whatever the tempo, so the bar doesn't change size as it's tapped. */
-.tempo-bpm {
-  display: inline-block;
-  width: 82px;
-  line-height: var(--dock-control);
-  font-variant-numeric: tabular-nums;
-  text-align: center;
-}
-
-.tempo-bpm small {
-  color: var(--mute);
-  font-size: 10px;
-}
-
-input.tempo-bpm {
-  background: var(--fill-3);
-  outline: none;
-}
-
-.tempo-bpm:hover,
-.tempo-tap:hover,
-.tempo-sync:hover:not(:disabled) {
-  background: var(--fill-2);
-}
-
-.tempo-tap:active,
-.tempo-sync:active:not(:disabled) {
-  background: var(--fill-3);
-}
-
-.tempo-sync:disabled {
-  cursor: default;
-  opacity: 0.4;
-}
-
-.dock-error {
-  min-width: 0;
-  overflow: hidden;
-  color: var(--bad);
-  font-size: 11.5px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.menu-field > .dock-nudge {
-  display: flex;
-  gap: 6px;
-}
-
-/* In the menu, as its items are: rounded as they are, not pills. */
-.dock-nudge .transport-button {
-  width: 44px;
-  border-radius: 9px;
-  background: var(--fill-2);
-}
-
-/* The scenes (ScenesDrawer.tsx): a pill each, its number and name, lit while
-   the room looks like it, and its menu; wrapping onto another row past what
-   fits (a scrolling row would cut their menus off). Under the show's row,
-   when there is one, with a line between. */
-.show-dock > .dock-bar + .dock-bar {
-  border-top: 1px solid var(--edge);
-}
-
-.scenes-bar {
-  flex-wrap: nowrap;
-  align-items: flex-start;
-}
-
-.scenes {
-  display: flex;
-  flex: 1;
-  flex-wrap: wrap;
-  gap: 6px;
-  min-width: 0;
-}
-
-.scene-chip {
-  display: flex;
-  align-items: center;
-  height: var(--dock-pill);
-  padding: var(--dock-inset);
-  border-radius: 999px;
-  background: var(--well);
-}
-
-.scene-chip.lit {
-  background: var(--fill-3);
-  box-shadow: inset 0 0 0 1px var(--edge);
-}
-
-.scene-apply,
-.scene-add {
-  display: inline-flex;
-  align-items: center;
-  gap: 7px;
-  height: var(--dock-control);
-  padding: 0 10px;
-  border: 0;
-  border-radius: 999px;
-  background: transparent;
-  color: var(--ink-2);
-  font: inherit;
-  font-size: 12.5px;
-  white-space: nowrap;
-  cursor: pointer;
-}
-
-.scene-chip.lit .scene-apply {
-  color: var(--ink);
-}
-
-.scene-apply small {
-  color: var(--mute);
-  font-size: 10px;
-}
-
-.scene-apply:hover:not(:disabled),
-.scene-add:hover:not(:disabled) {
-  background: rgb(255 255 255 / 0.1);
-}
-
-.scene-apply:disabled,
-.scene-add:disabled {
-  opacity: 0.5;
-  cursor: default;
-}
-
-/* + Scene, as a pill of its own. */
-.scene-add {
-  flex: none;
-  height: var(--dock-pill);
-  padding: 0 14px;
-  background: var(--well);
-}
-
-.scenes-empty {
-  align-self: center;
-  overflow: hidden;
-  padding: 0 8px;
-  color: var(--mute);
-  font-size: 12.5px;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.scene-name {
-  width: 100%;
-  padding: 6px 8px;
-  border: 1px solid var(--edge);
-  border-radius: 8px;
-  background: var(--fill);
-  color: inherit;
-  font: inherit;
-  outline: none;
-}
-
-/* In a show: one applied, waiting for its frame (its beat, or its bar). */
-.scene-chip.queued {
-  box-shadow: inset 0 0 0 1px var(--warn);
-  animation: scene-queued 0.6s ease-in-out infinite alternate;
-}
-
-@keyframes scene-queued {
-  from {
-    background: var(--well);
-  }
-  to {
-    background: rgb(255 190 110 / 0.18);
-  }
-}
-
-@media (prefers-reduced-motion: reduce) {
-  .scene-chip.queued {
-    animation: none;
-  }
-}
-
-/* How a show's scenes come in: a pill, as the rest of the drawer's are. */
-.segmented.scene-cue,
-.scene-cue button,
-.scene-cue .segmented-thumb {
-  border-radius: 999px;
-}
-
-.scene-cue {
-  flex: none;
-}
-
-.menu-item.chosen {
   color: var(--ink);
 }
 
@@ -3192,16 +2854,54 @@ input.tempo-bpm {
   color: var(--bad);
 }
 
-/* Admin mode's clock readout (ClockSync.tsx), beside the map's delay: how
-   near this page is to the room's time, in all, then by part. */
-.clock-parts {
-  justify-self: start;
-}
-
 .menu-item.bad:hover {
   background: rgb(66 26 22 / 0.8);
   color: var(--bad);
 }
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+
 
 /* Segmented controls: a recessed track, equal-width options, and a raised
    highlight that slides to the chosen one. */
@@ -3745,11 +3445,11 @@ button.tag-name:hover {
   cursor: grabbing;
 }
 
-/* The bottom edge: the drawer spans it, with the scale and zoom just above (all above the show clock's dock). */
+/* The bottom edge: the drawer spans it, with the scale and zoom just above. */
 .map-bottom {
   position: absolute;
   right: var(--inset-right);
-  bottom: var(--dock-h, 0px);
+  bottom: 0;
   left: var(--inset-left);
   display: flex;
   flex-direction: column;

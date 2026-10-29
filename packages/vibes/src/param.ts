@@ -34,16 +34,13 @@ import {
   checkSpec,
   passes,
   PROTOCOL,
-  showClock,
   valuesOf,
   withChanges,
   type ChangeEvent,
   type Changes,
-  type ClockEvent,
   type ColorValue,
   type ParamSpec,
   type ParamTable,
-  type ShowClock,
   type StateEvent,
 } from "./wire.ts";
 
@@ -100,8 +97,6 @@ const QUIET_MS = 45_000;
  */
 interface Kept {
   values: ParamTable;
-  /** The show clock, as vibes last said it (show.ts); null till it has. */
-  clock: ShowClock | null;
   link: Link | null;
   owner: unknown;
   stream: { abort(): void } | null;
@@ -118,10 +113,9 @@ function kept(): Kept {
   const g = globalThis as Record<string, unknown>;
   let k = g[KEPT] as Kept | undefined;
   if (!k || typeof k !== "object" || typeof k.values !== "object" || k.values === null) {
-    g[KEPT] = k = { values: {}, clock: null, link: null, owner: null, stream: null, started: 0, retry: null, retryBy: null, wait: FIRST_WAIT_MS, halted: false };
+    g[KEPT] = k = { values: {}, link: null, owner: null, stream: null, started: 0, retry: null, retryBy: null, wait: FIRST_WAIT_MS, halted: false };
   }
   // Kept by an older library: what it didn't keep.
-  k.clock ??= null;
   k.started ??= 0;
   k.retry ??= null;
   k.wait ??= FIRST_WAIT_MS;
@@ -234,17 +228,8 @@ function apply(event: string, data: unknown): boolean {
     k.values = { ...k.values, [spec.name]: withChanges(spec, k.values[spec.name], d!.set as Changes) };
     return true;
   }
-  if (event === "clock") {
-    const clock = showClock((data as Partial<ClockEvent> | null)?.clock);
-    if (!clock) return false;
-    k.clock = clock;
-    return true;
-  }
   return false;
 }
-
-/** The show clock as vibes last said it, kept with the sandbox (show.ts); null till it has. */
-export const heardClock = (): ShowClock | null => kept().clock;
 
 // This script: whether its stream is open, and whether it's to open soon.
 const me = {};

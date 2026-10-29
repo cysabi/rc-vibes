@@ -5,10 +5,8 @@
 // order that keeps the room right as it goes: room tone; shaders taken out;
 // sketches put in (their pools first); each shader's home, mute and mask (its
 // mask before it's unmuted, so it never runs where it shouldn't); params; the
-// stack's order; the map's layout; the show clock, each action in turn.
-// Updates that come while one's being made are made next, together, the
-// latest of each path winning (but the show clock's actions: all of them,
-// in order). Each is answered
+// stack's order; the map's layout. Updates that come while one's being made
+// are made next, together, the latest of each path winning. Each is answered
 // (done) once the tree shows it.
 //
 // Room tone, each shader, and the stack are each changed in arclamp one call
@@ -28,10 +26,8 @@ import { z } from "zod";
 import type { Channels } from "../shared/arclamp.ts";
 import { isBaseColor } from "../shared/base-color.ts";
 import { keysOf, POOL_ID, type AddSpec, type Op, type RoomMessage } from "../shared/live.ts";
-import { COLOR_PARTS, PARAM_NAME, type ColorPart, type ParamSpec, type ParamValue } from "../shared/params.ts";
+import { COLOR_PARTS, PARAM_NAME, type ColorPart, type ParamSpec } from "../shared/params.ts";
 import { RAIL_ID, type RailShape } from "../shared/rails.ts";
-import { MAX_SCENE_NAME, MAX_SCENES, type SceneOp } from "../shared/scenes.ts";
-import { CUE_MODES, type TransportAction } from "../shared/show.ts";
 import { MAX_TAGS, TAG } from "../shared/tags.ts";
 import type { Me, Placement, ShaderKey, Spot } from "../shared/vibes.ts";
 import { ArclampError } from "./arclamp.ts";
@@ -40,10 +36,7 @@ import type { Instances } from "./instances.ts";
 import type { LayoutEdits } from "./layout.ts";
 import { declarationsOf } from "./params.ts";
 import { anyValue, ColorPatch, laterChange, type LightChange, type Pools } from "./pools.ts";
-import type { ScenesSource } from "./scenes.ts";
-import type { ShowApply } from "./show-apply.ts";
 import { Refused, type Shaders } from "./shaders.ts";
-import type { Show } from "./show.ts";
 
 /** The most changes an update can carry. */
 export const MAX_OPS = 20_000;
@@ -51,11 +44,6 @@ export const MAX_OPS = 20_000;
 const LIGHT = /^[1-9][0-9]{0,8}$/;
 const WORD = /^[A-Za-z][\w-]{0,39}$/;
 const keyText = z.string().min(1).max(100);
-// Scenes (shared/scenes.ts): a knob's value is any a param could have; whether it's its param's is scenes.ts's to say.
-const sceneId = z.string().regex(POOL_ID);
-const sceneName = z.string().trim().min(1).max(MAX_SCENE_NAME);
-const paramValue = z.custom<ParamValue>((v) => anyValue(v) !== null).transform((v) => anyValue(v)!);
-const sceneKnobs = z.record(z.string().regex(PARAM_NAME), z.record(z.string().regex(LIGHT), paramValue));
 const ids = z.array(z.number().int()).max(2000);
 const point = z.object({ mm_x: z.number().finite(), mm_y: z.number().finite() });
 const addSpec: z.ZodType<AddSpec> = z.object({
@@ -75,19 +63,6 @@ const spot: z.ZodType<Spot | null> = z
   ])
   .nullable();
 const railShape: z.ZodType<RailShape | null> = z.object({ floor: z.number().int(), from: point, to: point }).nullable();
-// What's done to the show (shared/show.ts); its ranges are show.ts's to check.
-const when = z.number().finite();
-const transportAction: z.ZodType<TransportAction> = z.discriminatedUnion("do", [
-  z.object({ do: z.literal("start"), at: when }),
-  z.object({ do: z.literal("end"), at: when }),
-  z.object({ do: z.literal("play"), at: when }),
-  z.object({ do: z.literal("stop"), at: when }),
-  z.object({ do: z.literal("seek"), at: when, t: z.number().finite() }),
-  z.object({ do: z.literal("tempo"), at: when, bpm: z.number().finite(), onBeat: z.boolean().optional() }),
-  z.object({ do: z.literal("downbeat"), at: when }),
-  z.object({ do: z.literal("nudge"), ms: z.number().finite() }),
-  z.object({ do: z.literal("cue"), mode: z.enum(CUE_MODES) }),
-]);
 
 /** An update, as made: what it changes, by area, each path's latest. */
 export interface Batch {
@@ -102,12 +77,6 @@ export interface Batch {
   types: Map<number, string>;
   tags: Map<number, string[]>;
   rails: Map<string, RailShape | null>;
-  /** Done to the show clock, in order: each one counts (two taps aren't one), so none is merged away. */
-  transport: TransportAction[];
-  /** Done to the scenes, in order, likewise (shared/scenes.ts). */
-  scenes: SceneOp[];
-  /** Scenes applied in a show, on its clock, in order (show-apply.ts): pressed at `at`, arclamp's time. */
-  applies: { scene: string; at: number }[];
   note: string | undefined;
   /** Nothing to change: just answered once the tree's up to date (a page that wants to be sure it is). */
   sync: boolean;
@@ -125,9 +94,6 @@ const emptyBatch = (): Batch => ({
   types: new Map(),
   tags: new Map(),
   rails: new Map(),
-  transport: [],
-  scenes: [],
-  applies: [],
   note: undefined,
   sync: false,
 });
@@ -231,31 +197,6 @@ export function parseOps(ops: readonly Op[], note?: string): Batch {
         } else throw bad(path);
         break;
       }
-      case "show": {
-        if (k.length === 2 && k[1] === "transport" && set) b.transport.push(check(transportAction, v, path));
-        else if (k.length === 2 && k[1] === "apply" && set) b.applies.push(check(z.object({ scene: sceneId, at: when }), v, path));
-        else throw bad(path);
-        break;
-      }
-      case "scenes": {
-        if (k.length === 2 && k[1] === "order" && set) {
-          b.scenes.push({ op: "order", ids: check(z.array(sceneId).max(MAX_SCENES), v, path) });
-          break;
-        }
-        const id = k[2];
-        if (k[1] !== "list" || !id || !sceneId.safeParse(id).success) throw bad(path);
-        if (k.length === 3) {
-          if (set && v !== null) b.scenes.push({ op: "create", id, name: check(z.object({ name: sceneName }), v, path).name });
-          else b.scenes.push({ op: "remove", id });
-        } else if (k.length === 4 && k[3] === "name" && set) {
-          b.scenes.push({ op: "name", id, name: check(sceneName, v, path) });
-        } else if (k.length === 5 && k[3] === "shaders" && keyText.safeParse(k[4]).success) {
-          b.scenes.push({ op: "sketch", id, key: k[4]!, knobs: set && v !== null ? check(sceneKnobs, v, path) : null });
-        } else if (k.length === 7 && k[3] === "shaders" && keyText.safeParse(k[4]).success && PARAM_NAME.test(k[5]!) && LIGHT.test(k[6]!)) {
-          b.scenes.push({ op: "knob", id, key: k[4]!, param: k[5]!, light: k[6]!, value: set && v !== null ? check(paramValue, v, path) : null });
-        } else throw bad(path);
-        break;
-      }
       default:
         throw bad(path);
     }
@@ -288,9 +229,6 @@ export function mergeBatches(a: Batch, b: Batch): Batch {
   out.types = new Map([...a.types, ...b.types]);
   out.tags = new Map([...a.tags, ...b.tags]);
   out.rails = new Map([...a.rails, ...b.rails]);
-  out.transport = [...a.transport, ...b.transport];
-  out.scenes = [...a.scenes, ...b.scenes];
-  out.applies = [...a.applies, ...b.applies];
   out.note = b.note ?? a.note;
   out.sync = a.sync && b.sync;
   return out;
@@ -346,15 +284,9 @@ export interface UpdateDeps {
   shown: (soon: boolean) => Promise<unknown>;
   /** A param's values changed in a pool, by someone, on this many lights: for the history. */
   logParam?: (pool: string, name: string, lights: number, user: Me) => void;
-  /** The show clock (show.ts); without it, nothing can be done to one. */
-  show?: Pick<Show, "act"> | null;
-  /** The scenes (scenes.ts); without them, nothing can be done to one. */
-  scenes?: Pick<ScenesSource, "act"> | null;
-  /** Scenes applied in a show (show-apply.ts); without it, none can be. */
-  showApply?: Pick<ShowApply, "apply"> | null;
 }
 
-export function createUpdates({ shaders, instances, pools, layout, setRoomtone, shown, logParam = () => {}, show = null, scenes = null, showApply = null }: UpdateDeps) {
+export function createUpdates({ shaders, instances, pools, layout, setRoomtone, shown, logParam = () => {} }: UpdateDeps) {
   const roomtone = latest<Record<string, Channels>>(
     async (lights, user, note) => void (await setRoomtone(lights, user, note)),
     (a, b) => {
@@ -478,18 +410,6 @@ export function createUpdates({ shaders, instances, pools, layout, setRoomtone, 
     }
     if (b.types.size > 0) await step(() => layout.turn([...b.types].map(([id, type]) => ({ id, type })), user));
     if (b.tags.size > 0) await step(() => layout.tag([...b.tags].map(([id, tags]) => ({ id, tags })), user));
-    for (const a of b.transport) {
-      if (!show) throw new Unmade("no_show", "there's no show clock here", made);
-      await step(async () => show.act(a, user));
-    }
-    for (const o of b.scenes) {
-      if (!scenes) throw new Unmade("no_scenes", "there are no scenes here", made);
-      await step(async () => scenes.act(o, user));
-    }
-    for (const a of b.applies) {
-      if (!showApply) throw new Unmade("no_show", "scenes can't go on a show's clock here", made);
-      await step(() => showApply.apply(a.scene, a.at, user));
-    }
     return { made, scene: scene || b.sync };
   }
 

@@ -1,13 +1,11 @@
 import { afterEach, beforeEach, describe, expect, it } from "vitest";
 import type { LightInfo } from "../shared/arclamp.ts";
 import type { Op } from "../shared/live.ts";
-import type { ChangeEvent, ParamSpec } from "../shared/params.ts";
-import type { ShowClock } from "../shared/show.ts";
+import type { ParamSpec } from "../shared/params.ts";
 import { ArclampError } from "./arclamp.ts";
 import { openDb, type Db } from "./db.ts";
 import { createParamLinks, declarationsOf, linkOfToken, linkToken, type ParamLinks, type SeenShader } from "./params.ts";
 import { createPools, type Pools } from "./pools.ts";
-import type { Timeline } from "./timeline.ts";
 
 const SECRET = "s".repeat(32);
 const speed: ParamSpec = { kind: "number", name: "speed", label: "Speed", lights: {}, default: 7, min: 0, max: 20, step: 0.1 };
@@ -240,27 +238,6 @@ describe("linking shaders to their pools, and the pools' streams", () => {
     expect(await next()).toEqual({ event: "change", data: { name: "speed", set: [[5, [1]]] } });
   });
 
-  it("sends the show clock after the values, and down every stream as it changes", async () => {
-    let clock: ShowClock = { playing: true, at: 1000, t: 0, bpm: 120, beat: 0, nudge: 0 };
-    const withClock = createParamLinks({ pools, arclamp: { evalShader: async () => ({ ok: true }) }, secret: SECRET, url: "https://vibes.test/shader-api/params", showClock: () => clock });
-    pools.ensure("q", "box:b");
-    const open = (pool: string) =>
-      withClock
-        .routes()
-        .request("/shader-api/params", { method: "POST", headers: { authorization: `Bearer ${linkToken(SECRET, pool, pools.relink(pool))}`, "content-type": "application/json" }, body: '{"v":1,"params":[]}' });
-    const p = events(await open("p"));
-    const q = events(await open("q"));
-    expect((await p())!.event).toBe("state");
-    expect(await p()).toEqual({ event: "clock", data: { v: 1, clock } });
-    await q();
-    await q();
-    clock = { ...clock, playing: false, at: 2000, t: 1 };
-    withClock.tellClock(clock);
-    expect(await p()).toEqual({ event: "clock", data: { v: 1, clock } });
-    expect(await q()).toEqual({ event: "clock", data: { v: 1, clock } });
-    withClock.stop();
-  });
-
   it("keeps the values as they are when what's declared changes: saying what it declares can't take any away", async () => {
     await pools.set("p", "speed", [[1, 9], [3, 9]], OWNER);
     await pools.set("p", "on", [[3, true]], OWNER);
@@ -313,82 +290,5 @@ describe("linking shaders to their pools, and the pools' streams", () => {
     links.scene([shader({ scriptHash: "h2" })]);
     await settle();
     expect(evals).toEqual([]);
-  });
-});
-
-describe("changes to a shader running in the room, each in its frame", () => {
-  const OWNER = "instance:i";
-  let db: Db;
-  let pools: Pools;
-  let links: ParamLinks;
-  let sent: { shaderId: number; event: ChangeEvent }[];
-  let failing: boolean;
-
-  beforeEach(() => {
-    db = openDb(":memory:");
-    pools = createPools({ db, publish: () => {}, lights: async () => LIGHTS });
-    pools.ensure("p", OWNER);
-    pools.ensure("box", "box:b");
-    sent = [];
-    failing = false;
-    const timeline: Timeline = {
-      soon: async (shaderId, event) => {
-        sent.push({ shaderId, event });
-        if (failing) throw new Error("arclamp unreachable");
-        return 1_800_000_000_000;
-      },
-    };
-    links = createParamLinks({
-      pools,
-      arclamp: { evalShader: async () => ({ ok: true, result: '{"v":1}' }) },
-      secret: SECRET,
-      url: "https://vibes.test/shader-api/params",
-      timeline,
-    });
-    links.scene([{ instance: "i", pool: "p", shaderId: 5, running: true, respawns: 0, scriptHash: "h" }]);
-  });
-  afterEach(() => {
-    links.stop();
-    pools.stop();
-  });
-
-  const open = async (pool: string) => {
-    const res = await links.routes().request("/shader-api/params", {
-      method: "POST",
-      headers: { authorization: `Bearer ${linkToken(SECRET, pool, pools.relink(pool))}`, "content-type": "application/json" },
-      body: JSON.stringify({ v: 1, params: [speed] }),
-    });
-    const next = events(res);
-    await next();
-    return next;
-  };
-  const settle = () => new Promise((r) => setTimeout(r, 0));
-
-  it("goes in its frame, not down its stream, which keeps every value for when it opens", async () => {
-    const next = await open("p");
-    await pools.set("p", "speed", [[1, 4]], "user:u");
-    await settle();
-    expect(sent).toEqual([{ shaderId: 5, event: { name: "speed", set: [[4, [1]]] } }]);
-    // Nothing came down the stream: the next thing on it is the stream ending.
-    links.gone("p");
-    expect(await next()).toEqual({ event: "end", data: { reason: "gone" } });
-  });
-
-  it("goes down its stream if it can't go in its frame", async () => {
-    const next = await open("p");
-    failing = true;
-    await pools.set("p", "speed", [[1, 6]], "user:u");
-    expect(await next()).toEqual({ event: "change", data: { name: "speed", set: [[6, [1]]] } });
-  });
-
-  it("goes down the stream for a preview, or a shader not running", async () => {
-    const preview = await open("box");
-    await pools.set("box", "speed", [[1, 2]], "box:b");
-    expect(await preview()).toEqual({ event: "change", data: { name: "speed", set: [[2, [1]]] } });
-    links.scene([{ instance: "i", pool: "p", shaderId: 5, running: false, respawns: 0, scriptHash: "h" }]);
-    const next = await open("p");
-    await pools.set("p", "speed", [[1, 3]], "user:u");
-    expect(await next()).toEqual({ event: "change", data: { name: "speed", set: [[3, [1]]] } });
-    expect(sent).toEqual([]);
   });
 });

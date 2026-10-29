@@ -1,6 +1,6 @@
 {
   "name": "@roobscoob/vibes",
-  "version": "0.5.0",
+  "version": "0.3.1",
   "description": "Color, light and time for sketches on the lights at the Recurse Center",
   "keywords": ["lighting", "lemtone", "oklab", "arclamp", "recurse-center"],
   "license": "MIT",
