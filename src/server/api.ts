@@ -26,6 +26,7 @@ import type { Pools } from "./pools.ts";
 import type { RclampTime } from "./rclamp-time.ts";
 import type { SceneFeedSource } from "./scene-feed.ts";
 import { createShaders, Refused, shaderRoutes } from "./shaders.ts";
+import type { ScenesSource } from "./scenes.ts";
 import type { Show } from "./show.ts";
 import type { StreamRelay } from "./stream.ts";
 import { streetviewPublicFiles, streetviewRoutes } from "./streetview.ts";
@@ -62,6 +63,8 @@ export interface ApiDeps {
   rtime?: Pick<RclampTime, "rNow" | "state"> | null;
   /** The show clock, for pages to act on (show.ts). */
   show?: Show | null;
+  /** The scenes, for pages to change (scenes.ts). */
+  scenes?: ScenesSource | null;
 }
 
 // An event stream says something at least this often (a ping, if nothing
@@ -168,7 +171,7 @@ const badBody = (result: { success: boolean; error?: unknown }, c: Context) => {
   }
 };
 
-export function apiRoutes({ config, arclamp, db, relay, origins, lights, feed, live, pools, layout, sketches, instances = null, health = null, rtime = null, show = null }: ApiDeps) {
+export function apiRoutes({ config, arclamp, db, relay, origins, lights, feed, live, pools, layout, sketches, instances = null, health = null, rtime = null, show = null, scenes = null }: ApiDeps) {
   const api = new Hono<AuthEnv>();
   api.onError(handleError);
   // Browsers already refuse cross-site JSON requests without CORS headers,
@@ -237,6 +240,7 @@ export function apiRoutes({ config, arclamp, db, relay, origins, lights, feed, l
     setRoomtone,
     shown: (soon) => (soon ? feed.soon() : feed.now()),
     show,
+    scenes,
     logParam(pool, name, lights, user) {
       // A param of a shader in the room (its instance's pool), in the history: a drag's run as one.
       const owner = pools.get(pool)?.owner ?? "";

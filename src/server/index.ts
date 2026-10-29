@@ -26,6 +26,7 @@ import { createPools } from "./pools.ts";
 import { createRclampTime } from "./rclamp-time.ts";
 import { createTimeline } from "./timeline.ts";
 import { createSceneFeed } from "./scene-feed.ts";
+import { createScenes } from "./scenes.ts";
 import { createShow } from "./show.ts";
 import { boxApiRoutes, sketchRoutes } from "./sketches.ts";
 import { createStreamRelay } from "./stream.ts";
@@ -76,6 +77,9 @@ const rtime = createRclampTime({ arclamp });
 rtime.start();
 const show = createShow({ db, publish: live.publish, rNow: rtime.rNow, onClock: (clock) => params?.tellClock(clock) });
 live.replace([["show", show.tree()]]);
+// The room's scenes (scenes.ts): told to every page (the tree).
+const scenes = createScenes({ db, publish: live.publish, room: () => live.tree() });
+live.replace([["scenes", scenes.tree()]]);
 
 // The scene, followed as it changes, its footprints from the light stream;
 // arclamp's health, likewise; and sketches put in the room (instances),
@@ -142,7 +146,7 @@ if (sketches) app.route("/", boxApiRoutes(config, sketches, db, lights, pools, p
 if (builds) app.route("/", buildApiRoutes(config, builds));
 if (params) app.route("/", params.routes());
 const sketchApi = sketches && boxes && builds ? sketchRoutes(sketches, db, boxes, builds) : null;
-app.route("/api", apiRoutes({ config, arclamp: noted, db, relay, origins, lights, feed, live, pools, layout, sketches: sketchApi, instances, health, rtime, show }));
+app.route("/api", apiRoutes({ config, arclamp: noted, db, relay, origins, lights, feed, live, pools, layout, sketches: sketchApi, instances, health, rtime, show, scenes }));
 if (config.production) {
   // The built files' dates are Nix's (1970), which browsers take to mean the
   // page is fresh for years: a cached page then loads without the network

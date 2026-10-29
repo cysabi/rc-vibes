@@ -262,7 +262,9 @@ export type ActivityAction =
   | "lights.tag"
   | "rails.change"
   | "streetview.move"
-  | "show.clock";
+  | "show.clock"
+  | "scenes.change"
+  | "scenes.apply";
 
 export interface ActivityEntry {
   id: number;

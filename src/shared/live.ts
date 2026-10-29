@@ -30,8 +30,14 @@
 //   layout/lights/<light>/tags        its whole set of tags
 //   layout/rails/<rail>               RailShape, or null: taken away
 //   show/transport                    TransportAction: something done to the show (shared/show.ts)
+//   scenes/list/<id>                  { name }: a scene made (or renamed); null: taken away (shared/scenes.ts)
+//   scenes/list/<id>/name             its name
+//   scenes/list/<id>/shaders/<key>    its sketch, with its knobs (SceneKnobs); null: none
+//   scenes/list/<id>/shaders/<key>/<param>/<light>  one of its knobs; taken away, back to the default
+//   scenes/order                      every scene's id, in order
 //
-// (show/on and show/clock are vibes' own: what each action makes.)
+// (show/on and show/clock are vibes' own: what each action makes. Scenes are
+// made at once, whatever the mode: they're the room's, never a pending edit.)
 //
 // Nothing is an array but a value: paths only go through objects.
 //
@@ -45,6 +51,7 @@
 
 import type { Channels, LightInfo, Rail } from "./arclamp.ts";
 import type { ParamSpec, ParamValue } from "./params.ts";
+import { NO_SCENES, type Scenes } from "./scenes.ts";
 import { RESTING, type ShowState } from "./show.ts";
 import type { Shader, ShaderKey } from "./vibes.ts";
 
@@ -97,9 +104,11 @@ export interface LiveTree {
   layout: Layout | null;
   /** Whether a show's on, and its clock (shared/show.ts). */
   show: ShowState;
+  /** The room's scenes (shared/scenes.ts). */
+  scenes: Scenes;
 }
 
-export const EMPTY_TREE: LiveTree = { roomtone: {}, shaders: {}, stack: [], pools: {}, layout: null, show: RESTING };
+export const EMPTY_TREE: LiveTree = { roomtone: {}, shaders: {}, stack: [], pools: {}, layout: null, show: RESTING, scenes: NO_SCENES };
 
 /** A sketch put in the room, as an update says it (at shaders/<+key>, its pending edit's key). */
 export interface AddSpec {

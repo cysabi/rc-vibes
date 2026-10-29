@@ -12,6 +12,7 @@
 import type { ParamSpec, ParamValue } from "../shared/params.ts";
 import { DatabaseSync } from "node:sqlite";
 import type { RailShape } from "../shared/rails.ts";
+import type { Scene } from "../shared/scenes.ts";
 import type { CameraView, Me, Person, Spot } from "../shared/vibes.ts";
 import { backgroundStore } from "./db-background.ts";
 import { createHistory, memoryStore } from "./history.ts";
@@ -181,6 +182,17 @@ export function openDb(path: string, { background = false }: { background?: bool
       key TEXT PRIMARY KEY,
       value TEXT NOT NULL
     );
+    -- Scenes (scenes.ts), in order (position): each one's sketches, by key,
+    -- with their knobs as it keeps them (JSON: by key, by param, by light).
+    CREATE TABLE IF NOT EXISTS scenes (
+      id TEXT PRIMARY KEY,
+      position INTEGER NOT NULL,
+      name TEXT NOT NULL,
+      shaders TEXT NOT NULL,
+      by_id TEXT NOT NULL,
+      by_name TEXT NOT NULL,
+      at INTEGER NOT NULL
+    );
   `);
 
   const placementColumns = db.prepare("PRAGMA table_info(placements)").all() as { name: string }[];
@@ -306,6 +318,14 @@ export function openDb(path: string, { background = false }: { background?: bool
   const deleteFootprintRow = db.prepare("DELETE FROM footprints WHERE shader_id = ?");
   const selectSetting = db.prepare("SELECT value FROM settings WHERE key = ?");
   const upsertSetting = db.prepare("INSERT INTO settings (key, value) VALUES (?, ?) ON CONFLICT (key) DO UPDATE SET value = excluded.value");
+  const selectScenes = db.prepare("SELECT * FROM scenes ORDER BY position, id");
+  const upsertScene = db.prepare(`
+    INSERT INTO scenes (id, position, name, shaders, by_id, by_name, at)
+    VALUES (?, (SELECT COALESCE(MAX(position), 0) + 1 FROM scenes), ?, ?, ?, ?, ?)
+    ON CONFLICT (id) DO UPDATE SET name = excluded.name, shaders = excluded.shaders, by_id = excluded.by_id, by_name = excluded.by_name, at = excluded.at
+  `);
+  const deleteScene = db.prepare("DELETE FROM scenes WHERE id = ?");
+  const setScenePosition = db.prepare("UPDATE scenes SET position = ? WHERE id = ?");
 
   // Nests: an inner transaction just joins the outer one.
   let depth = 0;
@@ -591,6 +611,26 @@ export function openDb(path: string, { background = false }: { background?: bool
 
     setSetting(key: string, value: string) {
       upsertSetting.run(key, value);
+    },
+
+    /** Every scene, in order. */
+    scenes(): ({ id: string } & Scene)[] {
+      const rows = selectScenes.all() as { id: string; name: string; shaders: string; by_id: string; by_name: string; at: number }[];
+      return rows.map((r) => ({ id: r.id, name: r.name, shaders: JSON.parse(r.shaders) as Scene["shaders"], by: { id: r.by_id, name: r.by_name }, at: r.at }));
+    },
+
+    /** A scene saved: a new one goes last; one there already keeps its place. */
+    saveScene(id: string, scene: Scene) {
+      upsertScene.run(id, scene.name, JSON.stringify(scene.shaders), scene.by.id, scene.by.name, scene.at);
+    },
+
+    removeScene(id: string) {
+      deleteScene.run(id);
+    },
+
+    /** The scenes put in this order (any not named keep theirs, after). */
+    orderScenes(ids: readonly string[]) {
+      transaction(() => ids.forEach((id, i) => setScenePosition.run(i + 1, id)));
     },
 
     /** Closed, and its history once that's kept (its thread's last checkpoint with it). */

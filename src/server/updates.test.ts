@@ -179,6 +179,41 @@ describe("updates made together", () => {
     expect(m.transport.map((t) => ("bpm" in t ? t.bpm : t.do))).toEqual(["play", 120, 121]);
   });
 
+  it("make each change to the scenes, in order: each counts", () => {
+    const S = "00000000-0000-4000-8000-000000000001";
+    const a = parseOps([
+      [`scenes/list/${S}`, { name: " Intro " }],
+      [`scenes/list/${S}/name`, "Opening"],
+      [`scenes/list/${S}/shaders/i-1`, { speed: { "1": 5 } }],
+      [`scenes/list/${S}/shaders/i-1/speed/2`, 7],
+      [`scenes/list/${S}/shaders/i-1/speed/1`],
+      ["scenes/order", [S]],
+      [`scenes/list/${S}/shaders/i-1`, null],
+      [`scenes/list/${S}`],
+    ]);
+    expect(a.scenes).toEqual([
+      { op: "create", id: S, name: "Intro" },
+      { op: "name", id: S, name: "Opening" },
+      { op: "sketch", id: S, key: "i-1", knobs: { speed: { "1": 5 } } },
+      { op: "knob", id: S, key: "i-1", param: "speed", light: "2", value: 7 },
+      { op: "knob", id: S, key: "i-1", param: "speed", light: "1", value: null },
+      { op: "order", ids: [S] },
+      { op: "sketch", id: S, key: "i-1", knobs: null },
+      { op: "remove", id: S },
+    ]);
+    expect(mergeBatches(a, parseOps([[`scenes/list/${S}`]])).scenes).toHaveLength(9);
+    for (const op of [
+      ["scenes/list/not-a-uuid", { name: "x" }],
+      [`scenes/list/${S}`, { name: "" }],
+      [`scenes/list/${S}/shaders/i-1/speed/0`, 1],
+      [`scenes/list/${S}/shaders/i-1/speed/1`, "fast"],
+      ["scenes/order", "x"],
+      ["scenes/elsewhere", 1],
+    ] as Op[]) {
+      expect(() => parseOps([op]), JSON.stringify(op)).toThrow(/scenes/);
+    }
+  });
+
   it("have a color's numbers over the color before them, path by path, within an update and across them", () => {
     const tint = (light: number) => `pools/${P}/values/tint/${light}`;
     const c = { a: 0.1, b: 0.2, lm: 500, fidelity: 1 };
