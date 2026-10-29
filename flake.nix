@@ -102,7 +102,7 @@
                 inherit (finalAttrs) pname version src;
                 pnpm = p.pnpm_11;
                 fetcherVersion = 4;
-                hash = "sha256-tWKhp3vtYctZQEvZoCQfN3JKGVJNTXu4gYSjFBcbLsI=";
+                hash = "sha256-Cm+LNHgOvGGnR/BvhrURelKSua9NZiBP9lzZDBLKZp4=";
               };
             }
             // attrs
