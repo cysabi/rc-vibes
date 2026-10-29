@@ -45,7 +45,7 @@ export function parseClockText(text: string): number | null {
 const bpmText = (bpm: number) => (Number.isInteger(bpm) ? String(bpm) : bpm.toFixed(1));
 
 /** A button's press, at its moment: a pointer's as it comes down; a click's only if the keyboard made it (Enter or Space). */
-const press = (act: (e: { timeStamp: number }) => void) => ({
+export const press = (act: (e: { timeStamp: number }) => void) => ({
   onPointerDown: (p: { button: number; timeStamp: number }) => {
     if (p.button === 0) act(p);
   },

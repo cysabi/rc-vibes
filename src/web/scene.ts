@@ -15,7 +15,7 @@ import { useCallback, useState, useSyncExternalStore } from "react";
 import type { RoomTemplate } from "../shared/arclamp.ts";
 import { fanOps, pathOf, unfanOps, withOps, type LiveTree, type Op, type Pool, type RoomMessage, type RoomRequest } from "../shared/live.ts";
 import { NO_SCENES, type Scenes } from "../shared/scenes.ts";
-import { RESTING, type ShowClock, type TransportAction } from "../shared/show.ts";
+import { RESTING, type CueMode, type ShowClock, type ShowState, type TransportAction } from "../shared/show.ts";
 import type { Lights, Placement, RailChange, Shader, ShaderKey, TagChange, TypeChange } from "../shared/vibes.ts";
 import { apiSocket, request } from "./api.ts";
 import { heard as heardTime, pageNow } from "./rtime.ts";
@@ -37,14 +37,16 @@ interface State {
   scene: Scene | undefined;
   layout: Lights | undefined;
   error: Error | null;
-  /** Whether a show's on, and its clock (shared/show.ts). */
+  /** Whether a show's on, its clock, how its scenes come in, and the one waiting for its frame (shared/show.ts). */
   showOn: boolean;
   clock: ShowClock;
+  cue: CueMode;
+  queued: ShowState["queued"];
   /** The room's scenes (shared/scenes.ts). */
   scenes: Scenes;
 }
 
-let state: State = { scene: undefined, layout: undefined, error: null, showOn: RESTING.on, clock: RESTING.clock, scenes: NO_SCENES };
+let state: State = { scene: undefined, layout: undefined, error: null, showOn: RESTING.on, clock: RESTING.clock, cue: RESTING.cue, queued: null, scenes: NO_SCENES };
 let tree: LiveTree | null = null;
 // The last change the copy here has, of which run of vibes.
 let rev: number | null = null;
@@ -87,7 +89,8 @@ function publish() {
         }
       : undefined;
   }
-  state = { scene, layout, error: null, showOn: tree.show?.on ?? RESTING.on, clock: tree.show?.clock ?? RESTING.clock, scenes: tree.scenes ?? NO_SCENES };
+  const show = tree.show ?? RESTING;
+  state = { scene, layout, error: null, showOn: show.on, clock: show.clock ?? RESTING.clock, cue: show.cue ?? RESTING.cue, queued: show.queued ?? null, scenes: tree.scenes ?? NO_SCENES };
   for (const l of listeners) l();
 }
 
@@ -337,6 +340,19 @@ export function useScenes(): Scenes {
 
 /** Changes to the scenes (scenes/…: shared/live.ts), at once whatever the mode: they're the room's, never a pending edit. */
 export const sendScenes = (ops: Op[]) => sendUpdate(ops);
+
+/** How a show's scenes come in (shared/show.ts). */
+export function useShowCue(): CueMode {
+  return useSyncExternalStore(subscribe, () => state.cue);
+}
+
+/** The scene applied in a show that's waiting for its frame, if any. */
+export function useShowQueued(): ShowState["queued"] {
+  return useSyncExternalStore(subscribe, () => state.queued);
+}
+
+/** A scene applied on the show's clock, pressed at `at` (arclamp's time: rtime.ts), whatever the mode: the show's. */
+export const sendApply = (scene: string, at: number) => sendUpdate([[pathOf("show", "apply"), { scene, at }]]);
 
 /** A change to the map: rails drawn or moved, lights moved, turned to another orientation, and/or tagged. */
 export interface LayoutChange {
