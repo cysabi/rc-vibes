@@ -21,14 +21,25 @@
 // puts the piece at 0:00, stopped, for someone to play; ending one rests the
 // clock again, the nudge kept (the room's sound is as late as it was).
 
-import { BEATS_PER_BAR, restingClock, type ShowClock } from "../../packages/vibes/src/wire.ts";
+import { BEATS_PER_BAR, beatAt, restingClock, type ShowClock } from "../../packages/vibes/src/wire.ts";
 
 export { BEATS_PER_BAR, beatAt, RESTING_BPM, restingClock, showClock, timeAt, type ShowClock } from "../../packages/vibes/src/wire.ts";
 
-/** The show: whether one's on, and its clock (resting, while none is). */
+/**
+ * How a scene applied in a show comes in (server/show-apply.ts): at once, or
+ * on the clock's next beat, or its next bar's first. A show's own setting:
+ * outside one, a scene is just an edit, made at once.
+ */
+export type CueMode = "now" | "beat" | "bar";
+export const CUE_MODES: readonly CueMode[] = ["now", "beat", "bar"];
+
+/** The show: whether one's on, its clock (resting, while none is), how scenes come in, and the one waiting for its frame. */
 export interface ShowState {
   on: boolean;
   clock: ShowClock;
+  cue: CueMode;
+  /** A scene applied, waiting for its frame (arclamp's time): gone once that's come. */
+  queued: { scene: string; frame: number } | null;
 }
 
 /** What a page does to the clock, at `at` (arclamp's time). */
@@ -46,17 +57,37 @@ export type TransportAction =
   /** `at` was a bar's first beat (Sync): the beats move to the nearest one, the tempo as it was. */
   | { do: "downbeat"; at: number }
   /** The room's beat moved later by `ms` (earlier, below 0): the sound reaches the room late. */
-  | { do: "nudge"; ms: number };
+  | { do: "nudge"; ms: number }
+  /** How scenes come in from now on (CueMode). */
+  | { do: "cue"; mode: CueMode };
 
 export const MIN_BPM = 20;
 export const MAX_BPM = 300;
 export const MAX_NUDGE_MS = 1000;
 
 /** No show on, as a page has it till vibes says: resting, the piece counted from 1970 (vibes' rests from when it began). */
-export const RESTING: ShowState = { on: false, clock: restingClock(0) };
+export const RESTING: ShowState = { on: false, clock: restingClock(0), cue: "now", queued: null };
+
+// A press this little after a beat (as a fraction of one) is that beat's, not the next's.
+export const LATE_BEATS = 0.04;
+
+/**
+ * When something done at `at` (arclamp's time) lands, as `mode` says: at
+ * once, or on the clock's next beat (or bar's first; one just gone, within
+ * LATE_BEATS, counts); never before `earliest`, the soonest it can be made
+ * (one that can't make its beat lands as soon after as it can). With no
+ * tempo, at once.
+ */
+export function cueAt(mode: CueMode, c: ShowClock, at: number, earliest: number): number {
+  if (mode === "now" || c.bpm === null || c.beat === null) return earliest;
+  const per = mode === "bar" ? BEATS_PER_BAR : 1;
+  const target = Math.ceil((beatAt(c, at) - LATE_BEATS) / per) * per;
+  return Math.max(c.at + c.nudge + ((target - c.beat) * 60_000) / c.bpm, earliest);
+}
 
 /** The clock after an action: anchored where it was at the action's moment (never before its own anchor). */
 export function transported(c: ShowClock, a: TransportAction): ShowClock {
+  if (a.do === "cue") return c;
   if (a.do === "nudge") return { ...c, nudge: a.ms };
   const at = Math.max(a.at - c.nudge, c.at);
   if (a.do === "end") return restingClock(at, c.nudge);

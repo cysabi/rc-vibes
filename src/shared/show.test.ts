@@ -1,5 +1,5 @@
 import { describe, expect, it } from "vitest";
-import { BEATS_PER_BAR, beatAt, RESTING_BPM, restingClock, tappedBpm, timeAt, transported, type ShowClock, type TransportAction } from "./show.ts";
+import { BEATS_PER_BAR, beatAt, cueAt, RESTING_BPM, restingClock, tappedBpm, timeAt, transported, type ShowClock, type TransportAction } from "./show.ts";
 
 const T = 1_800_000_000_000;
 const playing: ShowClock = { playing: true, at: T, t: 10, bpm: 120, beat: 8, nudge: 0 };
@@ -90,6 +90,36 @@ describe("the show clock, acted on", () => {
     const late = run(playing, { do: "stop", at: T - 5000 });
     expect(late.at).toBe(T);
     expect(timeAt(late, T + 9999)).toBe(10);
+  });
+});
+
+describe("when a scene comes in, as a show's cue mode says", () => {
+  // 120 BPM, beat 8 at T: a beat every 500 ms, a bar (4 beats) every 2 s; beat 12 (a bar's first) at T + 2000.
+  const soon = T + 40;
+  it("comes in at once, as soon as it can, with no tempo or cue", () => {
+    expect(cueAt("now", playing, T, soon)).toBe(soon);
+    expect(cueAt("beat", STOPPED, T, soon)).toBe(soon);
+  });
+
+  it("comes in on the next beat, or the next bar's first", () => {
+    // Pressed at beat 8.5: the next beat is 9 (T + 500), the next bar's first 12 (T + 2000).
+    expect(cueAt("beat", playing, T + 250, soon)).toBeCloseTo(T + 500, 6);
+    expect(cueAt("bar", playing, T + 250, soon)).toBeCloseTo(T + 2000, 6);
+  });
+
+  it("counts a press just after a beat as on it: as soon as it can, not a beat late", () => {
+    // Pressed at beat 8.02, just after 8: that's beat 8's, already gone, so as soon as it can.
+    expect(cueAt("beat", playing, T + 10, T + 50)).toBe(T + 50);
+    expect(cueAt("bar", playing, T + 2010, T + 2050)).toBe(T + 2050);
+    // At beat 8.1 it's the next one's.
+    expect(cueAt("beat", playing, T + 50, T + 90)).toBeCloseTo(T + 500, 6);
+  });
+
+  it("is nudged as the room's beat is", () => {
+    // 100 ms later: at T + 250 it's beat 8.3, and beat 9 is at T + 600.
+    const nudged = { ...playing, nudge: 100 };
+    expect(cueAt("beat", nudged, T + 250, soon)).toBeCloseTo(T + 600, 6);
+    expect(beatAt(nudged, T + 600)).toBeCloseTo(9, 6);
   });
 });
 

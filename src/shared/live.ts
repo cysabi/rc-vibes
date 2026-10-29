@@ -30,14 +30,16 @@
 //   layout/lights/<light>/tags        its whole set of tags
 //   layout/rails/<rail>               RailShape, or null: taken away
 //   show/transport                    TransportAction: something done to the show (shared/show.ts)
+//   show/apply                        { scene, at }: a scene applied on the show's clock (server/show-apply.ts)
 //   scenes/list/<id>                  { name }: a scene made (or renamed); null: taken away (shared/scenes.ts)
 //   scenes/list/<id>/name             its name
 //   scenes/list/<id>/shaders/<key>    its sketch, with its knobs (SceneKnobs); null: none
 //   scenes/list/<id>/shaders/<key>/<param>/<light>  one of its knobs; taken away, back to the default
 //   scenes/order                      every scene's id, in order
 //
-// (show/on and show/clock are vibes' own: what each action makes. Scenes are
-// made at once, whatever the mode: they're the room's, never a pending edit.)
+// (show/on, show/clock, show/cue and show/queued are vibes' own: what each
+// action makes. Scenes are made at once, whatever the mode: they're the
+// room's, never a pending edit.)
 //
 // Nothing is an array but a value: paths only go through objects.
 //

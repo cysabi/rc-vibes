@@ -15,7 +15,7 @@ import type { ShaderDescriptor } from "../shared/arclamp.ts";
 import { BASE_COLOR, isBaseColor } from "../shared/base-color.ts";
 import { cleanValue, PARAM_NAME, type Changes } from "../shared/params.ts";
 import type { Me, Person } from "../shared/vibes.ts";
-import type { Arclamp } from "./arclamp.ts";
+import type { Arclamp, Schedule } from "./arclamp.ts";
 import type { AuthEnv } from "./auth.ts";
 import type { Db, InstanceRow } from "./db.ts";
 import type { Config } from "./env.ts";
@@ -62,7 +62,7 @@ const badBody = (r: { success: boolean }, c: Context) => (r.success ? undefined 
 
 export interface ShaderDeps {
   config: Pick<Config, "signingKey">;
-  arclamp: Pick<Arclamp, "scene" | "shader" | "setMuted" | "setMask" | "moveShader" | "deleteShader">;
+  arclamp: Pick<Arclamp, "scene" | "shader" | "setMuted" | "setMutedAt" | "setMask" | "moveShader" | "deleteShader">;
   db: Db;
   /** Sketches in the room (null with sketches off). */
   instances: Instances | null;
@@ -123,6 +123,23 @@ export function createShaders({ config, arclamp, db, instances, pools = null }: 
       await arclamp.setMuted(it.d.id, muted);
       db.log({ user, action: muted ? "shader.mute" : "shader.unmute", shaderId: it.d.id, shaderName: nameOf(it.d, it.instance) });
     },
+
+    /**
+     * Muted or not, put off till a frame (Schedule, arclamp.ts): the frame it
+     * goes in with, or null if it went in at once (its time had passed, or
+     * it isn't in the room yet: kept for when it goes in). Logged by its
+     * caller, as one thing done (a scene applied).
+     */
+    async setMutedAt(key: string, muted: boolean, schedule: Schedule, user: Person): Promise<number | null> {
+      if (await wanted(key, { muted }, user)) return null;
+      const it = resolve(key, user);
+      if (!it) throw new Refused(404, "not_found", "no such shader");
+      if (it.arclampId === null) throw new Refused(409, "not_live", "it isn't in the room yet");
+      return arclamp.setMutedAt(it.arclampId, muted, schedule);
+    },
+
+    /** A key's shader in arclamp, by arclamp's id; null if it isn't in the room (or there's no such shader). */
+    idOf: (key: string, user: Person): number | null => resolve(key, user)?.arclampId ?? null,
 
     /** The lights a shader may not change: its whole mask ([] clears it). */
     async setMask(key: string, mask: number[], user: Person) {

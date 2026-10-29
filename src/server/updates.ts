@@ -31,7 +31,7 @@ import { keysOf, POOL_ID, type AddSpec, type Op, type RoomMessage } from "../sha
 import { COLOR_PARTS, PARAM_NAME, type ColorPart, type ParamSpec, type ParamValue } from "../shared/params.ts";
 import { RAIL_ID, type RailShape } from "../shared/rails.ts";
 import { MAX_SCENE_NAME, MAX_SCENES, type SceneOp } from "../shared/scenes.ts";
-import type { TransportAction } from "../shared/show.ts";
+import { CUE_MODES, type TransportAction } from "../shared/show.ts";
 import { MAX_TAGS, TAG } from "../shared/tags.ts";
 import type { Me, Placement, ShaderKey, Spot } from "../shared/vibes.ts";
 import { ArclampError } from "./arclamp.ts";
@@ -41,6 +41,7 @@ import type { LayoutEdits } from "./layout.ts";
 import { declarationsOf } from "./params.ts";
 import { anyValue, ColorPatch, laterChange, type LightChange, type Pools } from "./pools.ts";
 import type { ScenesSource } from "./scenes.ts";
+import type { ShowApply } from "./show-apply.ts";
 import { Refused, type Shaders } from "./shaders.ts";
 import type { Show } from "./show.ts";
 
@@ -85,6 +86,7 @@ const transportAction: z.ZodType<TransportAction> = z.discriminatedUnion("do", [
   z.object({ do: z.literal("tempo"), at: when, bpm: z.number().finite(), onBeat: z.boolean().optional() }),
   z.object({ do: z.literal("downbeat"), at: when }),
   z.object({ do: z.literal("nudge"), ms: z.number().finite() }),
+  z.object({ do: z.literal("cue"), mode: z.enum(CUE_MODES) }),
 ]);
 
 /** An update, as made: what it changes, by area, each path's latest. */
@@ -104,6 +106,8 @@ export interface Batch {
   transport: TransportAction[];
   /** Done to the scenes, in order, likewise (shared/scenes.ts). */
   scenes: SceneOp[];
+  /** Scenes applied in a show, on its clock, in order (show-apply.ts): pressed at `at`, arclamp's time. */
+  applies: { scene: string; at: number }[];
   note: string | undefined;
   /** Nothing to change: just answered once the tree's up to date (a page that wants to be sure it is). */
   sync: boolean;
@@ -123,6 +127,7 @@ const emptyBatch = (): Batch => ({
   rails: new Map(),
   transport: [],
   scenes: [],
+  applies: [],
   note: undefined,
   sync: false,
 });
@@ -228,6 +233,7 @@ export function parseOps(ops: readonly Op[], note?: string): Batch {
       }
       case "show": {
         if (k.length === 2 && k[1] === "transport" && set) b.transport.push(check(transportAction, v, path));
+        else if (k.length === 2 && k[1] === "apply" && set) b.applies.push(check(z.object({ scene: sceneId, at: when }), v, path));
         else throw bad(path);
         break;
       }
@@ -284,6 +290,7 @@ export function mergeBatches(a: Batch, b: Batch): Batch {
   out.rails = new Map([...a.rails, ...b.rails]);
   out.transport = [...a.transport, ...b.transport];
   out.scenes = [...a.scenes, ...b.scenes];
+  out.applies = [...a.applies, ...b.applies];
   out.note = b.note ?? a.note;
   out.sync = a.sync && b.sync;
   return out;
@@ -343,9 +350,11 @@ export interface UpdateDeps {
   show?: Pick<Show, "act"> | null;
   /** The scenes (scenes.ts); without them, nothing can be done to one. */
   scenes?: Pick<ScenesSource, "act"> | null;
+  /** Scenes applied in a show (show-apply.ts); without it, none can be. */
+  showApply?: Pick<ShowApply, "apply"> | null;
 }
 
-export function createUpdates({ shaders, instances, pools, layout, setRoomtone, shown, logParam = () => {}, show = null, scenes = null }: UpdateDeps) {
+export function createUpdates({ shaders, instances, pools, layout, setRoomtone, shown, logParam = () => {}, show = null, scenes = null, showApply = null }: UpdateDeps) {
   const roomtone = latest<Record<string, Channels>>(
     async (lights, user, note) => void (await setRoomtone(lights, user, note)),
     (a, b) => {
@@ -476,6 +485,10 @@ export function createUpdates({ shaders, instances, pools, layout, setRoomtone, 
     for (const o of b.scenes) {
       if (!scenes) throw new Unmade("no_scenes", "there are no scenes here", made);
       await step(async () => scenes.act(o, user));
+    }
+    for (const a of b.applies) {
+      if (!showApply) throw new Unmade("no_show", "scenes can't go on a show's clock here", made);
+      await step(() => showApply.apply(a.scene, a.at, user));
     }
     return { made, scene: scene || b.sync };
   }

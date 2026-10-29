@@ -27,6 +27,7 @@ import type { RclampTime } from "./rclamp-time.ts";
 import type { SceneFeedSource } from "./scene-feed.ts";
 import { createShaders, Refused, shaderRoutes } from "./shaders.ts";
 import type { ScenesSource } from "./scenes.ts";
+import { createShowApply } from "./show-apply.ts";
 import type { Show } from "./show.ts";
 import type { StreamRelay } from "./stream.ts";
 import { streetviewPublicFiles, streetviewRoutes } from "./streetview.ts";
@@ -231,6 +232,9 @@ export function apiRoutes({ config, arclamp, db, relay, origins, lights, feed, l
     }
     return d;
   }
+  // Scenes applied in a show, on its clock (show-apply.ts).
+  const showApply =
+    show && scenes && rtime ? createShowApply({ show, scenes, room: () => live.tree(), shaders, arclamp, pools, db, rNow: rtime.rNow }) : null;
   // Pages' updates to the live state (over the room socket).
   const updates = createUpdates({
     shaders,
@@ -241,6 +245,7 @@ export function apiRoutes({ config, arclamp, db, relay, origins, lights, feed, l
     shown: (soon) => (soon ? feed.soon() : feed.now()),
     show,
     scenes,
+    showApply,
     logParam(pool, name, lights, user) {
       // A param of a shader in the room (its instance's pool), in the history: a drag's run as one.
       const owner = pools.get(pool)?.owner ?? "";

@@ -33,7 +33,21 @@ describe("the show, as vibes keeps it", () => {
 
   it("starts with no show on, resting", () => {
     expect(make().clock()).toEqual(restingClock(T));
-    expect(make().tree()).toEqual({ on: false, clock: restingClock(T) });
+    expect(make().tree()).toEqual({ on: false, clock: restingClock(T), cue: "now", queued: null });
+  });
+
+  it("keeps how scenes come in as the show says, told to everyone; and, not kept, the one waiting for its frame", () => {
+    const show = make();
+    expect(refused(show, { do: "cue", mode: "bar" })).toBe("no_show");
+    show.act({ do: "start", at: T }, ada);
+    published = [];
+    show.act({ do: "cue", mode: "bar" }, ada);
+    expect(show.tree().cue).toBe("bar");
+    expect(published).toEqual([["show/cue", "bar"]]);
+    show.queue({ scene: "s", frame: T + 2000 });
+    expect(published).toContainEqual(["show/queued", { scene: "s", frame: T + 2000 }]);
+    // vibes starts again: the cue mode as it was, nothing waiting.
+    expect(make().tree()).toMatchObject({ on: true, cue: "bar", queued: null });
   });
 
   it("takes nothing but a start with no show on", () => {
@@ -104,9 +118,10 @@ describe("the show, as vibes keeps it", () => {
   });
 
   it("rests if what's saved isn't a show", () => {
+    const resting = { on: false, clock: restingClock(T), cue: "now", queued: null };
     db.setSetting("show", '{"on":true,"clock":{"playing":"yes"}}');
-    expect(make().tree()).toEqual({ on: false, clock: restingClock(T) });
+    expect(make().tree()).toEqual(resting);
     db.setSetting("show", "not json");
-    expect(make().tree()).toEqual({ on: false, clock: restingClock(T) });
+    expect(make().tree()).toEqual(resting);
   });
 });
